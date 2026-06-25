@@ -10,7 +10,7 @@ const GROUPS = [
     label: '사무 보조',
     color: '#f59e0b',
     items: [
-      { id: 1, label: '프로젝트 List',    href: null },
+      { id: 1, label: '프로젝트 List',    href: '/projects' },
       { id: 2, label: '주간/월간보고',     href: '/weekly' },
       { id: 3, label: '근태관리',          href: null },
       { id: 4, label: '기술인 주소록',     href: null },
