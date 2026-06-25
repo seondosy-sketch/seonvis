@@ -1,0 +1,35 @@
+import { redirect } from 'next/navigation'
+import { createSupabaseServerClient } from '@/lib/supabase-server'
+import Sidebar from '../sidebar'
+
+function getAdminEmails(): string[] {
+  return (process.env.ADMIN_EMAILS ?? '').split(',').map(e => e.trim()).filter(Boolean)
+}
+
+export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
+  const supabase = await createSupabaseServerClient()
+  const { data: { user } } = await supabase.auth.getUser()
+
+  if (!user?.email) redirect('/login')
+
+  const adminEmails = getAdminEmails()
+  const isAdmin = adminEmails.includes(user.email)
+
+  // 관리자는 항상 접근 허용, 일반 사용자는 allowed_users 테이블 확인
+  if (!isAdmin) {
+    const { data } = await supabase
+      .from('allowed_users')
+      .select('email')
+      .eq('email', user.email)
+      .maybeSingle()
+
+    if (!data) redirect('/unauthorized')
+  }
+
+  return (
+    <div style={{ display: 'flex', minHeight: '100vh' }}>
+      <Sidebar isAdmin={isAdmin} userEmail={user.email} />
+      <main style={{ flex: 1, minWidth: 0 }}>{children}</main>
+    </div>
+  )
+}
