@@ -146,29 +146,38 @@ export default function Dashboard() {
       }
     }
 
+    const makeNote = (r: ProjectRef) => [
+      r.staff_arch  ? `-건축 ${r.staff_arch}`  : '',
+      r.staff_civil ? `-토목 ${r.staff_civil}` : '',
+      r.staff_mech  ? `-기계 ${r.staff_mech}`  : '',
+      r.staff_safety? `-안전 ${r.staff_safety}`: '',
+    ].filter(Boolean).join(' ')
+
+    const toPerf = (r: ProjectRef, status: '개찰' | '진행중', i: number): PerformingProject => ({
+      status, week,
+      name: r.name,
+      director: r.director ?? '',
+      submit_date: r.submit_date ?? '',
+      interview_date: r.interview_date ?? '',
+      result_date: r.bid_date ?? '',
+      fee: r.fee ?? null,
+      note: makeNote(r),
+      sort_order: i,
+    })
+
     if (p && p.length > 0) {
-      setPerforming(p as PerformingProject[])
+      // 저장된 데이터 있어도 새로 추가된 진행중 프로젝트 병합
+      const savedNames = new Set((p as PerformingProject[]).map(r => r.name))
+      const newRows: PerformingProject[] = []
+      for (const r of allRefs.filter(r => computeProjectStatus(r) === '진행중')) {
+        const interviewDate = r.interview_date ? new Date(r.interview_date) : null
+        if ((!interviewDate || interviewDate >= weekStart) && !savedNames.has(r.name)) {
+          newRows.push(toPerf(r, '진행중', (p as PerformingProject[]).length + newRows.length))
+        }
+      }
+      setPerforming([...(p as PerformingProject[]), ...newRows])
     } else {
       // 저장된 데이터 없으면 프로젝트 List에서 자동 채우기
-      const makeNote = (r: ProjectRef) => [
-        r.staff_arch  ? `-건축 ${r.staff_arch}`  : '',
-        r.staff_civil ? `-토목 ${r.staff_civil}` : '',
-        r.staff_mech  ? `-기계 ${r.staff_mech}`  : '',
-        r.staff_safety? `-안전 ${r.staff_safety}`: '',
-      ].filter(Boolean).join(' ')
-
-      const toPerf = (r: ProjectRef, status: '개찰' | '진행중', i: number): PerformingProject => ({
-        status, week,
-        name: r.name,
-        director: r.director ?? '',
-        submit_date: r.submit_date ?? '',
-        interview_date: r.interview_date ?? '',
-        result_date: r.bid_date ?? '',
-        fee: r.fee ?? null,
-        note: makeNote(r),
-        sort_order: i,
-      })
-
       const gaechalRows: PerformingProject[] = []
       const jinhaengRows: PerformingProject[] = []
 
