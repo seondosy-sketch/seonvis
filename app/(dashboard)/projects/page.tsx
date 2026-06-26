@@ -34,6 +34,24 @@ interface Project {
   created_at: string
 }
 
+interface TooltipData {
+  project_number?: string
+  location?: string; client?: string; director?: string; duration?: string; staff?: string
+  area?: string; scale?: string; est_cost?: string
+  proposal_p?: string; self_intro_p?: string; ppt_p?: string
+  pq_date?: string; interview_date?: string; notify_date?: string
+  soq_date?: string; interview_time?: string; bid_date?: string
+  fee?: string; designer?: string; builder?: string
+  score_dist?: string; competitors?: string; announcement?: string
+}
+
+const EMPTY_TOOLTIP: TooltipData = {
+  location: '', client: '', director: '', duration: '', staff: '',
+  area: '', scale: '', est_cost: '', proposal_p: '', self_intro_p: '', ppt_p: '',
+  pq_date: '', interview_date: '', notify_date: '', soq_date: '', interview_time: '',
+  bid_date: '', fee: '', designer: '', builder: '', score_dist: '', competitors: '', announcement: '',
+}
+
 function isEmpty(v: string | null | undefined) {
   return !v || v.trim() === '' || v.trim().toLowerCase() === 'nan'
 }
@@ -66,15 +84,31 @@ const EMPTY: Omit<Project, 'id' | 'created_at'> = {
 const TYPES: ProjectType[] = ['면접', 'SOQ', '종심제', 'TP', 'PQ', '기타']
 const STATUSES: ProjectStatus[] = ['진행중', '수주', '탈락', '취소']
 
-interface TooltipData {
-  location?: string; client?: string; director?: string; duration?: string; staff?: string
-  area?: string; scale?: string; est_cost?: string
-  proposal_p?: string; self_intro_p?: string; ppt_p?: string
-  pq_date?: string; interview_date?: string; notify_date?: string
-  soq_date?: string; interview_time?: string; bid_date?: string
-  fee?: string; designer?: string; builder?: string
-  score_dist?: string; competitors?: string; announcement?: string
-}
+const TOOLTIP_FIELDS: { key: keyof TooltipData; label: string; multiline?: boolean }[] = [
+  { key: 'location', label: '현장위치' },
+  { key: 'client', label: '발주청' },
+  { key: 'director', label: '단장(PM)' },
+  { key: 'duration', label: '용역기간' },
+  { key: 'staff', label: '분야기술자' },
+  { key: 'area', label: '연면적' },
+  { key: 'scale', label: '규모' },
+  { key: 'est_cost', label: '추정공사비' },
+  { key: 'fee', label: '용역비' },
+  { key: 'designer', label: '설계사' },
+  { key: 'builder', label: '시공사' },
+  { key: 'score_dist', label: '배점' },
+  { key: 'competitors', label: '참여업체' },
+  { key: 'proposal_p', label: '제안서(P)' },
+  { key: 'self_intro_p', label: '자기소개서(P)' },
+  { key: 'ppt_p', label: '파워포인트(P)' },
+  { key: 'pq_date', label: 'PQ 제출일' },
+  { key: 'soq_date', label: 'SOQ 제출일' },
+  { key: 'interview_date', label: '발표/면접일' },
+  { key: 'interview_time', label: '면접시간' },
+  { key: 'notify_date', label: '평가통보일' },
+  { key: 'bid_date', label: '개찰일' },
+  { key: 'announcement', label: '공고내용', multiline: true },
+]
 
 export default function ProjectsPage() {
   const supabase = createSupabaseBrowserClient()
@@ -89,9 +123,16 @@ export default function ProjectsPage() {
   const [deleting, setDeleting] = useState<string | null>(null)
   const [tooltipAll, setTooltipAll] = useState<Record<string, TooltipData>>({})
   const [tooltipProject, setTooltipProject] = useState<{ project: Project; data: TooltipData } | null>(null)
+  const [tooltipEdit, setTooltipEdit] = useState<{ project: Project; data: TooltipData; isNew: boolean } | null>(null)
+  const [tooltipSaving, setTooltipSaving] = useState(false)
 
-  useEffect(() => {
-    fetch('/tooltip_data.json').then(r => r.json()).then(setTooltipAll).catch(() => {})
+  const loadTooltips = useCallback(async () => {
+    const { data } = await supabase.from('project_tooltips').select('*')
+    if (data) {
+      const map: Record<string, TooltipData> = {}
+      for (const row of data) map[row.project_number] = row as TooltipData
+      setTooltipAll(map)
+    }
   }, [])
 
   const load = useCallback(async () => {
@@ -99,7 +140,7 @@ export default function ProjectsPage() {
     if (data) setProjects(data as Project[])
   }, [])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { load(); loadTooltips() }, [load, loadTooltips])
 
   const filtered = projects.filter(p => {
     const q = search.toLowerCase()
@@ -140,6 +181,34 @@ export default function ProjectsPage() {
     setDeleting(null)
   }
 
+  const openTooltipEdit = (p: Project) => {
+    const existing = tooltipAll[p.project_number]
+    setTooltipEdit({ project: p, data: existing ? { ...existing } : { ...EMPTY_TOOLTIP, project_number: p.project_number }, isNew: !existing })
+    setTooltipProject(null)
+  }
+
+  const saveTooltip = async () => {
+    if (!tooltipEdit) return
+    setTooltipSaving(true)
+    try {
+      const payload = { ...tooltipEdit.data, project_number: tooltipEdit.project.project_number }
+      if (tooltipEdit.isNew) {
+        await supabase.from('project_tooltips').insert(payload)
+      } else {
+        await supabase.from('project_tooltips').update({ ...payload, updated_at: new Date().toISOString() }).eq('project_number', tooltipEdit.project.project_number)
+      }
+      await loadTooltips()
+      setTooltipEdit(null)
+    } finally { setTooltipSaving(false) }
+  }
+
+  const deleteTooltip = async (projectNumber: string) => {
+    if (!confirm('툴팁 정보를 삭제하시겠습니까?')) return
+    await supabase.from('project_tooltips').delete().eq('project_number', projectNumber)
+    await loadTooltips()
+    setTooltipProject(null)
+  }
+
   const exportCsv = () => {
     const headers = ['번호', '유형', '발주처', '용역명', '용역비(억)', '제안서', '점수', '제출일', '발표일', '개찰일', '결과', '낙찰사', '참여사', '단장', '건축', '토목', '기계', '안전', '상태', '비고']
     const rowsData = filtered.map(p => [
@@ -161,6 +230,7 @@ export default function ProjectsPage() {
   }
 
   const set = (field: string, value: unknown) => setModal(m => ({ ...m, data: { ...m.data, [field]: value } }))
+  const setTip = (field: keyof TooltipData, value: string) => setTooltipEdit(e => e ? { ...e, data: { ...e.data, [field]: value } } : e)
   const totalFee = filtered.reduce((s, p) => s + (p.fee ?? 0), 0)
 
   return (
@@ -212,42 +282,48 @@ export default function ProjectsPage() {
             </thead>
             <tbody>
               {filtered.length === 0 ? (
-                <tr><td colSpan={15} style={{ padding: 40, textAlign: 'center', color: '#bbb' }}>데이터가 없습니다</td></tr>
-              ) : filtered.map(p => (
-                <tr key={p.id} style={{ borderBottom: '1px solid #f0f0ee' }}>
-                  <td style={td}>
-                    <div style={{ display: 'flex', gap: 4 }}>
-                      <button onClick={() => openEdit(p)} style={editBtn}>수정</button>
-                      <button onClick={() => remove(p.id)} disabled={deleting === p.id} style={deleteBtn}>삭제</button>
-                    </div>
-                  </td>
-                  <td style={tdnw}><span style={{ color: '#999' }}>{p.project_number}</span></td>
-                  <td style={tdnw}><span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 3, background: '#f0f0ee', color: '#555' }}>{p.type}</span></td>
-                  <td style={{ ...tdnw, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.client}</td>
-                  <td style={{ ...tdnw, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    <span
-                      style={{ fontWeight: 500, color: tooltipAll[p.project_number] ? '#1d4ed8' : '#111', cursor: tooltipAll[p.project_number] ? 'pointer' : 'default', textDecoration: tooltipAll[p.project_number] ? 'underline dotted' : 'none' }}
-                      onClick={() => { const d = tooltipAll[p.project_number]; if (d) setTooltipProject({ project: p, data: d }) }}
-                    >{p.name}</span>
-                  </td>
-                  <td style={{ ...tdnw, textAlign: 'right' }}>{p.fee != null ? p.fee : '-'}</td>
-                  <td style={tdnw}>{p.tp_score}</td>
-                  <td style={tdnw}>{p.duration_days}</td>
-                  <td style={tdnw}>{p.submit_date ?? '-'}</td>
-                  <td style={tdnw}>{p.interview_date ?? '-'}</td>
-                  <td style={tdnw}>{p.bid_date ?? '-'}</td>
-                  <td style={tdnw}><span style={{ fontWeight: 600, color: p.result_score ? '#111' : '#ccc' }}>{p.result_score || '-'}</span></td>
-                  <td style={{ ...tdnw, maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.evaluation}</td>
-                  <td style={{ ...tdnw, textAlign: 'right' }}>{p.award_fee != null ? p.award_fee : '-'}</td>
-                  <td style={tdnw}>{(p.participants.match(/\d+개사/) ?? [''])[0] || p.participants}</td>
-                  <td style={tdnw}>{p.director}</td>
-                  <td style={tdnw}>{p.staff_arch}</td>
-                  <td style={tdnw}>{p.staff_civil}</td>
-                  <td style={tdnw}>{p.staff_mech}</td>
-                  <td style={tdnw}>{p.staff_safety}</td>
-                  <td style={tdnw}><span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 4, ...STATUS_STYLE[computeStatus(p.result_score, p.evaluation, p.participants, p.status_override)] }}>{computeStatus(p.result_score, p.evaluation, p.participants, p.status_override)}</span></td>
-                </tr>
-              ))}
+                <tr><td colSpan={21} style={{ padding: 40, textAlign: 'center', color: '#bbb' }}>데이터가 없습니다</td></tr>
+              ) : filtered.map(p => {
+                const hasTooltip = !!tooltipAll[p.project_number]
+                return (
+                  <tr key={p.id} style={{ borderBottom: '1px solid #f0f0ee' }}>
+                    <td style={td}>
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        <button onClick={() => openEdit(p)} style={editBtn}>수정</button>
+                        <button onClick={() => remove(p.id)} disabled={deleting === p.id} style={deleteBtn}>삭제</button>
+                        <button onClick={() => openTooltipEdit(p)} style={{ ...editBtn, background: hasTooltip ? '#eff6ff' : '#f9f9f9', color: hasTooltip ? '#1d4ed8' : '#999', borderColor: hasTooltip ? '#bfdbfe' : '#e8e8e6' }} title={hasTooltip ? '툴팁 편집' : '툴팁 추가'}>
+                          {hasTooltip ? '툴팁✎' : '툴팁+'}
+                        </button>
+                      </div>
+                    </td>
+                    <td style={tdnw}><span style={{ color: '#999' }}>{p.project_number}</span></td>
+                    <td style={tdnw}><span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 3, background: '#f0f0ee', color: '#555' }}>{p.type}</span></td>
+                    <td style={{ ...tdnw, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.client}</td>
+                    <td style={{ ...tdnw, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      <span
+                        style={{ fontWeight: 500, color: hasTooltip ? '#1d4ed8' : '#111', cursor: hasTooltip ? 'pointer' : 'default', textDecoration: hasTooltip ? 'underline dotted' : 'none' }}
+                        onClick={() => { const d = tooltipAll[p.project_number]; if (d) setTooltipProject({ project: p, data: d }) }}
+                      >{p.name}</span>
+                    </td>
+                    <td style={{ ...tdnw, textAlign: 'right' }}>{p.fee != null ? p.fee : '-'}</td>
+                    <td style={tdnw}>{p.tp_score}</td>
+                    <td style={tdnw}>{p.duration_days}</td>
+                    <td style={tdnw}>{p.submit_date ?? '-'}</td>
+                    <td style={tdnw}>{p.interview_date ?? '-'}</td>
+                    <td style={tdnw}>{p.bid_date ?? '-'}</td>
+                    <td style={tdnw}><span style={{ fontWeight: 600, color: p.result_score ? '#111' : '#ccc' }}>{p.result_score || '-'}</span></td>
+                    <td style={{ ...tdnw, maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.evaluation}</td>
+                    <td style={{ ...tdnw, textAlign: 'right' }}>{p.award_fee != null ? p.award_fee : '-'}</td>
+                    <td style={tdnw}>{(p.participants.match(/\d+개사/) ?? [''])[0] || p.participants}</td>
+                    <td style={tdnw}>{p.director}</td>
+                    <td style={tdnw}>{p.staff_arch}</td>
+                    <td style={tdnw}>{p.staff_civil}</td>
+                    <td style={tdnw}>{p.staff_mech}</td>
+                    <td style={tdnw}>{p.staff_safety}</td>
+                    <td style={tdnw}><span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 4, ...STATUS_STYLE[computeStatus(p.result_score, p.evaluation, p.participants, p.status_override)] }}>{computeStatus(p.result_score, p.evaluation, p.participants, p.status_override)}</span></td>
+                  </tr>
+                )
+              })}
             </tbody>
             <tfoot>
               <tr style={{ background: '#f9f9f8', borderTop: '2px solid #e8e8e6' }}>
@@ -260,47 +336,32 @@ export default function ProjectsPage() {
         </div>
       </div>
 
+      {/* 툴팁 보기 모달 */}
       {tooltipProject && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }} onClick={() => setTooltipProject(null)}>
           <div style={{ background: '#fff', borderRadius: 12, width: 620, maxHeight: '88vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }} onClick={e => e.stopPropagation()}>
-            {/* 헤더 */}
             <div style={{ padding: '16px 20px', borderBottom: '1px solid #e8e8e6', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, background: '#111', borderRadius: '12px 12px 0 0' }}>
               <div>
                 <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>#{tooltipProject.project.project_number} · {tooltipProject.project.type}</div>
                 <div style={{ fontSize: 15, fontWeight: 700, color: '#fff', lineHeight: 1.4 }}>{tooltipProject.project.name}</div>
               </div>
-              <button onClick={() => setTooltipProject(null)} style={{ border: 'none', background: 'rgba(255,255,255,0.15)', color: '#fff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13, flexShrink: 0 }}>✕</button>
+              <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                <button onClick={() => openTooltipEdit(tooltipProject.project)} style={{ border: 'none', background: '#2563eb', color: '#fff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>편집</button>
+                <button onClick={() => deleteTooltip(tooltipProject.project.project_number)} style={{ border: 'none', background: '#dc2626', color: '#fff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>삭제</button>
+                <button onClick={() => setTooltipProject(null)} style={{ border: 'none', background: 'rgba(255,255,255,0.15)', color: '#fff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13 }}>✕</button>
+              </div>
             </div>
             <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 0 }}>
-              {/* 기본 정보 */}
               {(() => {
                 const d = tooltipProject.data
                 const p = tooltipProject.project
                 const rows: { label: string; value: string }[][] = [
-                  [
-                    { label: '발주청', value: d.client || p.client },
-                    { label: '현장위치', value: d.location || '' },
-                  ],
-                  [
-                    { label: '단장(PM)', value: d.director || p.director },
-                    { label: '용역기간', value: d.duration || '' },
-                  ],
-                  [
-                    { label: '분야기술자', value: d.staff || [p.staff_arch && `건축:${p.staff_arch}`, p.staff_civil && `토목:${p.staff_civil}`, p.staff_mech && `기계:${p.staff_mech}`, p.staff_safety && `안전:${p.staff_safety}`].filter(Boolean).join(' / ') || '' },
-                    { label: '용역비', value: d.fee || (p.fee ? `${p.fee}억원` : '') },
-                  ],
-                  [
-                    { label: '연면적', value: d.area || '' },
-                    { label: '규모', value: (d.scale || '').replace('\n', ' ') },
-                  ],
-                  [
-                    { label: '추정공사비', value: d.est_cost || '' },
-                    { label: '참여업체', value: d.competitors || p.participants || '' },
-                  ],
-                  [
-                    { label: '배점', value: d.score_dist || p.duration_days || '' },
-                    { label: '설계사', value: d.designer || '' },
-                  ],
+                  [{ label: '발주청', value: d.client || p.client }, { label: '현장위치', value: d.location || '' }],
+                  [{ label: '단장(PM)', value: d.director || p.director }, { label: '용역기간', value: d.duration || '' }],
+                  [{ label: '분야기술자', value: d.staff || [p.staff_arch && `건축:${p.staff_arch}`, p.staff_civil && `토목:${p.staff_civil}`, p.staff_mech && `기계:${p.staff_mech}`, p.staff_safety && `안전:${p.staff_safety}`].filter(Boolean).join(' / ') || '' }, { label: '용역비', value: d.fee || (p.fee ? `${p.fee}억원` : '') }],
+                  [{ label: '연면적', value: d.area || '' }, { label: '규모', value: (d.scale || '').replace('\n', ' ') }],
+                  [{ label: '추정공사비', value: d.est_cost || '' }, { label: '참여업체', value: d.competitors || p.participants || '' }],
+                  [{ label: '배점', value: d.score_dist || p.duration_days || '' }, { label: '설계사', value: d.designer || '' }],
                 ]
                 return rows.filter(r => r.some(c => c.value)).map((row, ri) => (
                   <div key={ri} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', borderBottom: '1px solid #f5f5f3' }}>
@@ -313,9 +374,8 @@ export default function ProjectsPage() {
                   </div>
                 ))
               })()}
-              {/* 일정 */}
               {(tooltipProject.data.pq_date || tooltipProject.data.soq_date || tooltipProject.data.interview_date || tooltipProject.data.bid_date) && (
-                <div style={{ marginTop: 10, marginBottom: 4 }}>
+                <div style={{ marginTop: 10 }}>
                   <div style={{ fontSize: 11, fontWeight: 600, color: '#555', padding: '6px 10px', background: '#f8f8f7', borderRadius: 6, marginBottom: 4 }}>입찰 일정</div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', borderBottom: '1px solid #f5f5f3' }}>
                     {[
@@ -334,9 +394,8 @@ export default function ProjectsPage() {
                   </div>
                 </div>
               )}
-              {/* 점수 */}
               {(tooltipProject.data.proposal_p || tooltipProject.data.self_intro_p || tooltipProject.data.ppt_p) && (
-                <div style={{ marginTop: 10, marginBottom: 4 }}>
+                <div style={{ marginTop: 10 }}>
                   <div style={{ fontSize: 11, fontWeight: 600, color: '#555', padding: '6px 10px', background: '#f8f8f7', borderRadius: 6, marginBottom: 4 }}>점수 배분</div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', borderBottom: '1px solid #f5f5f3' }}>
                     {[
@@ -352,7 +411,6 @@ export default function ProjectsPage() {
                   </div>
                 </div>
               )}
-              {/* 공고내용 */}
               {tooltipProject.data.announcement && (
                 <div style={{ marginTop: 10 }}>
                   <div style={{ fontSize: 11, fontWeight: 600, color: '#555', padding: '6px 10px', background: '#f8f8f7', borderRadius: 6, marginBottom: 6 }}>공고 내용</div>
@@ -364,6 +422,47 @@ export default function ProjectsPage() {
         </div>
       )}
 
+      {/* 툴팁 편집 모달 */}
+      {tooltipEdit && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300 }}>
+          <div style={{ background: '#fff', borderRadius: 12, width: 640, maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}>
+            <div style={{ padding: '16px 20px', borderBottom: '1px solid #e8e8e6', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#111', borderRadius: '12px 12px 0 0' }}>
+              <div>
+                <div style={{ fontSize: 11, color: '#aaa' }}>#{tooltipEdit.project.project_number} 툴팁 {tooltipEdit.isNew ? '추가' : '편집'}</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: '#fff', marginTop: 2 }}>{tooltipEdit.project.name}</div>
+              </div>
+              <button onClick={() => setTooltipEdit(null)} style={{ border: 'none', background: 'rgba(255,255,255,0.15)', color: '#fff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13 }}>✕</button>
+            </div>
+            <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {TOOLTIP_FIELDS.map(f => (
+                <div key={f.key}>
+                  <div style={{ fontSize: 11, color: '#888', marginBottom: 3 }}>{f.label}</div>
+                  {f.multiline ? (
+                    <textarea
+                      value={(tooltipEdit.data[f.key] as string) || ''}
+                      onChange={e => setTip(f.key, e.target.value)}
+                      rows={6}
+                      style={{ width: '100%', padding: '8px 10px', border: '1px solid #e8e8e6', borderRadius: 6, fontSize: 12, fontFamily: 'inherit', lineHeight: 1.6, resize: 'vertical', boxSizing: 'border-box' }}
+                    />
+                  ) : (
+                    <input
+                      value={(tooltipEdit.data[f.key] as string) || ''}
+                      onChange={e => setTip(f.key, e.target.value)}
+                      style={{ width: '100%', height: 34, padding: '0 10px', border: '1px solid #e8e8e6', borderRadius: 6, fontSize: 13, boxSizing: 'border-box' }}
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+            <div style={{ padding: '0 20px 20px', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setTooltipEdit(null)} style={outlineBtn}>취소</button>
+              <button onClick={saveTooltip} disabled={tooltipSaving} style={{ ...primaryBtn, opacity: tooltipSaving ? 0.6 : 1 }}>{tooltipSaving ? '저장 중...' : '저장'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 프로젝트 편집 모달 */}
       {modal.open && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
           <div style={{ background: '#fff', borderRadius: 12, padding: '28px', width: 560, maxHeight: '90vh', overflowY: 'auto' }}>
