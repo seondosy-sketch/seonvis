@@ -248,10 +248,10 @@ export default function DashboardPage() {
                   </div>
                   <div style={{ fontSize: 12, fontWeight: 500, color: '#111', marginBottom: 4, lineHeight: 1.4 }}>{String(p.name)}</div>
                   <div style={{ fontSize: 11, color: '#777' }}>{String(p.client)}</div>
-                  {p.fee && <div style={{ fontSize: 11, color: '#2563eb', marginTop: 4 }}>용역비 {String(p.fee)}억</div>}
+                  {!!p.fee && <div style={{ fontSize: 11, color: '#2563eb', marginTop: 4 }}>용역비 {String(p.fee)}억</div>}
                   <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
-                    {p.director && <span style={{ fontSize: 10, color: '#888' }}>단장 {String(p.director)}</span>}
-                    {p.evaluation && <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 3, background: p.evaluation === '선' ? '#f0fdf4' : '#fef2f2', color: p.evaluation === '선' ? '#15803d' : '#b91c1c' }}>낙찰사 {String(p.evaluation)}</span>}
+                    {!!p.director && <span style={{ fontSize: 10, color: '#888' }}>단장 {String(p.director)}</span>}
+                    {!!p.evaluation && <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 3, background: String(p.evaluation) === '선' ? '#f0fdf4' : '#fef2f2', color: String(p.evaluation) === '선' ? '#15803d' : '#b91c1c' }}>낙찰사 {String(p.evaluation)}</span>}
                   </div>
                 </div>
               ))}
