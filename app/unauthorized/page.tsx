@@ -12,7 +12,15 @@ export default function UnauthorizedPage() {
   useEffect(() => {
     const supabase = createSupabaseBrowserClient()
     supabase.auth.getUser().then(({ data }) => {
-      if (data.user?.email) setEmail(data.user.email)
+      const userEmail = data.user?.email
+      if (!userEmail) return
+      setEmail(userEmail)
+      // 접속 시도 자동 기록
+      fetch('/api/access-requests', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: userEmail, type: 'attempt' }),
+      }).catch(() => {})
     })
   }, [])
 

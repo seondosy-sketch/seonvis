@@ -16,6 +16,7 @@ interface AccessRequest {
   name: string
   reason: string
   status: 'pending' | 'approved' | 'rejected'
+  type: 'request' | 'attempt'
   created_at: string
   reviewed_at: string | null
   reviewed_by: string | null
@@ -218,8 +219,15 @@ export default function AdminUserManager() {
               {requests.map((r, i) => (
                 <div key={r.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '14px 24px', borderBottom: i < requests.length - 1 ? '1px solid #f4f4f2' : 'none' }}>
                   <div style={{ flex: 1 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
-                      <span style={{ fontSize: 13, color: '#222', fontWeight: 500 }}>{r.name}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3, flexWrap: 'wrap' }}>
+                      <span style={{
+                        fontSize: 10, padding: '1px 7px', borderRadius: 10, fontWeight: 600,
+                        background: r.type === 'attempt' ? '#f3f4f6' : '#eff6ff',
+                        color: r.type === 'attempt' ? '#6b7280' : '#2563eb',
+                      }}>
+                        {r.type === 'attempt' ? '접속 시도' : '승인 요청'}
+                      </span>
+                      {r.name && <span style={{ fontSize: 13, color: '#222', fontWeight: 500 }}>{r.name}</span>}
                       <span style={{ fontSize: 12, color: '#666' }}>{r.email}</span>
                       <span style={{
                         fontSize: 10, padding: '1px 7px', borderRadius: 10, fontWeight: 600,
