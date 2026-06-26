@@ -96,14 +96,21 @@ export default function WeeklyCalendar({
   const lastDay = new Date(viewYear, viewMonth + 1, 0)
   const startPad = firstDay.getDay()
 
-  const weeks: (Date | null)[][] = []
-  let week_: (Date | null)[] = Array(startPad).fill(null)
+  const weeks: Date[][] = []
+  // 앞 패딩: 이전 달 날짜로 채움
+  const prevMonthLast = new Date(viewYear, viewMonth, 0).getDate()
+  let week_: Date[] = []
+  for (let i = startPad - 1; i >= 0; i--) {
+    week_.push(new Date(viewYear, viewMonth - 1, prevMonthLast - i))
+  }
   for (let d = 1; d <= lastDay.getDate(); d++) {
     week_.push(new Date(viewYear, viewMonth, d))
     if (week_.length === 7) { weeks.push(week_); week_ = [] }
   }
+  // 뒤 패딩: 다음 달 날짜로 채움
   if (week_.length) {
-    while (week_.length < 7) week_.push(null)
+    let nextD = 1
+    while (week_.length < 7) week_.push(new Date(viewYear, viewMonth + 1, nextD++))
     weeks.push(week_)
   }
 
@@ -157,7 +164,6 @@ export default function WeeklyCalendar({
         {weeks.map((wk, wi) => (
           <div key={wi} style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2, marginBottom: 2 }}>
             {wk.map((day, di) => {
-              if (!day) return <div key={di} />
               const key = dateKey(day)
               const evs = events[key] || []
               const inWeek = isInWeek(day)
