@@ -201,6 +201,7 @@ export default function Dashboard() {
     const baseMeta: WeeklyMeta = m ? m as WeeklyMeta : { week, education_note: '', edu_chief: '', edu_arch: '', edu_civil: '', edu_safety: '', edu_mech: '', other_note: '' }
     setMeta({
       ...baseMeta,
+      edu_chief:  baseMeta.edu_chief  || uniq('director'),
       edu_arch:   baseMeta.edu_arch   || uniq('staff_arch'),
       edu_civil:  baseMeta.edu_civil  || uniq('staff_civil'),
       edu_mech:   baseMeta.edu_mech   || uniq('staff_mech'),
