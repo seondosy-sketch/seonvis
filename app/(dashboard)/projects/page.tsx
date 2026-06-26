@@ -216,7 +216,7 @@ export default function ProjectsPage() {
                   <td style={tdnw}>{p.interview_date ?? '-'}</td>
                   <td style={tdnw}>{p.bid_date ?? '-'}</td>
                   <td style={tdnw}><span style={{ fontWeight: 600, color: p.result_score ? '#111' : '#ccc' }}>{p.result_score || '-'}</span></td>
-                  <td style={tdnw}>{p.evaluation}</td>
+                  <td style={{ ...tdnw, maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.evaluation}</td>
                   <td style={{ ...tdnw, textAlign: 'right' }}>{p.award_fee != null ? p.award_fee : '-'}</td>
                   <td style={tdnw}>{(p.participants.match(/\d+개사/) ?? [''])[0] || p.participants}</td>
                   <td style={tdnw}>{p.director}</td>
