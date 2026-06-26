@@ -56,6 +56,29 @@ interface ProjectRef {
   staff_safety: string
 }
 
+function categorizeProject(r: ProjectRef, weekStart: Date): '진행중' | '개찰' | '제외' {
+  if (computeProjectStatus(r) === '취소') return '제외'
+  const submit    = parseLocalDate(r.submit_date)
+  const interview = parseLocalDate(r.interview_date)
+  const bid       = parseLocalDate(r.bid_date)
+  // 1. 제출일이 이번주 이전이 아니면 → 진행중
+  if (!submit || submit >= weekStart) return '진행중'
+  // 2. 발표일이 이번주 이전이 아니면 → 진행중
+  if (!interview || interview >= weekStart) return '진행중'
+  // 3. 개찰일이 이번주 이전이면 → 제외, 아니면 → 개찰
+  if (bid && bid < weekStart) return '제외'
+  return '개찰'
+}
+
+function parseLocalDate(d: string | null | undefined): Date | null {
+  if (!d) return null
+  const iso = d.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (iso) return new Date(parseInt(iso[1]), parseInt(iso[2]) - 1, parseInt(iso[3]))
+  const md = d.match(/^(\d{1,2})\/(\d{1,2})$/)
+  if (md) return new Date(new Date().getFullYear(), parseInt(md[1]) - 1, parseInt(md[2]))
+  return null
+}
+
 function isEmpty(v: string | null | undefined) {
   return !v || v.trim() === '' || v.trim().toLowerCase() === 'nan'
 }
@@ -131,20 +154,8 @@ export default function Dashboard() {
     const allRefs = (refs ?? []) as ProjectRef[]
     setProjectRefs(allRefs)
 
-    // 주차 기준 진행중 분류 (항상 실행 — 교육참가자 자동완성에도 사용)
     const { start: weekStart } = getWeekRange(week)
-    const jinhaengRefs: ProjectRef[] = []
-    for (const r of allRefs.filter(r => computeProjectStatus(r) === '진행중')) {
-      const interviewDate = r.interview_date ? new Date(r.interview_date) : null
-      const bidDate = r.bid_date ? new Date(r.bid_date) : null
-      if (!interviewDate || interviewDate >= weekStart) {
-        jinhaengRefs.push(r)
-      } else {
-        if (!bidDate || bidDate >= weekStart) {
-          // 개찰 그룹 (교육참가자에는 포함 안 함)
-        }
-      }
-    }
+    const jinhaengRefs = allRefs.filter(r => categorizeProject(r, weekStart) === '진행중')
 
     const fmtDate = (d: string | null | undefined): string => {
       if (!d) return ''
@@ -174,37 +185,27 @@ export default function Dashboard() {
     })
 
     if (p && p.length > 0) {
-      // 저장된 데이터 있어도 새로 추가된 진행중 프로젝트 병합
+      // 저장된 데이터 있어도 새로 추가된 프로젝트 병합
       const savedNames = new Set((p as PerformingProject[]).map(r => r.name))
       const newRows: PerformingProject[] = []
-      for (const r of allRefs.filter(r => computeProjectStatus(r) === '진행중')) {
-        const interviewDate = r.interview_date ? new Date(r.interview_date) : null
-        if ((!interviewDate || interviewDate >= weekStart) && !savedNames.has(r.name)) {
-          newRows.push(toPerf(r, '진행중', (p as PerformingProject[]).length + newRows.length))
-        }
+      for (const r of allRefs) {
+        if (savedNames.has(r.name)) continue
+        const cat = categorizeProject(r, weekStart)
+        if (cat === '제외') continue
+        newRows.push(toPerf(r, cat, (p as PerformingProject[]).length + newRows.length))
       }
       setPerforming([...(p as PerformingProject[]), ...newRows])
     } else {
       // 저장된 데이터 없으면 프로젝트 List에서 자동 채우기
       const gaechalRows: PerformingProject[] = []
       const jinhaengRows: PerformingProject[] = []
-
-      for (const r of allRefs.filter(r => computeProjectStatus(r) === '진행중')) {
-        const interviewDate = r.interview_date ? new Date(r.interview_date) : null
-        const bidDate = r.bid_date ? new Date(r.bid_date) : null
-
-        if (!interviewDate || interviewDate >= weekStart) {
-          jinhaengRows.push(toPerf(r, '진행중', jinhaengRows.length))
-        } else {
-          if (!bidDate || bidDate >= weekStart) {
-            gaechalRows.push(toPerf(r, '개찰', gaechalRows.length))
-          }
-        }
+      for (const r of allRefs) {
+        const cat = categorizeProject(r, weekStart)
+        if (cat === '개찰') gaechalRows.push(toPerf(r, '개찰', gaechalRows.length))
+        else if (cat === '진행중') jinhaengRows.push(toPerf(r, '진행중', jinhaengRows.length))
       }
-
       gaechalRows.forEach((r, i) => { r.sort_order = i })
       jinhaengRows.forEach((r, i) => { r.sort_order = gaechalRows.length + i })
-
       const autoRows = [...gaechalRows, ...jinhaengRows]
       setPerforming(autoRows.length > 0 ? autoRows : [
         EMPTY_PERFORMING('개찰', 0, week),
