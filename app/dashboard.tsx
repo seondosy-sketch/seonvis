@@ -665,7 +665,7 @@ function NoteTooltipCell({ value, note, placeholder, onChange }: { value: string
   const [tooltip, setTooltip] = useState<{ x: number; y: number } | null>(null)
   return (
     <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 3 }}>
-      <input className="cell-input" value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} style={{ flex: 1 }} />
+      <input className="cell-input" value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} style={{ width: value ? `${Math.max(value.length * 8, 36)}px` : '52px', minWidth: 36 }} />
       {note && (
         <>
           <span
