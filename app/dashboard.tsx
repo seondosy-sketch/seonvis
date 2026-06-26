@@ -487,28 +487,39 @@ export default function Dashboard() {
                 { key: 'edu_civil', label: '토목' },
                 { key: 'edu_safety',label: '안전' },
                 { key: 'edu_mech',  label: '기계' },
-              ] as { key: keyof WeeklyMeta; label: string }[]).map(({ key, label }) => (
-                <div key={key} style={{ display: 'flex', alignItems: 'flex-start', borderBottom: '1px solid #f5f5f3', padding: '6px 16px', gap: 12 }}>
-                  <span style={{ fontSize: 12, fontWeight: 500, color: '#888', minWidth: 30, paddingTop: 1 }}>{label}</span>
-                  <input
-                    className="cell-input"
-                    value={meta[key] as string}
-                    onChange={e => setMeta(m => ({ ...m, [key]: e.target.value }))}
-                    placeholder="이름, 이름 – N명"
-                    style={{ flex: 1 }}
-                  />
-                </div>
-              ))}
+              ] as { key: keyof WeeklyMeta; label: string }[]).map(({ key, label }) => {
+                const names = ((meta[key] as string) ?? '').split(',').map((n: string) => n.trim()).filter(Boolean)
+                return (
+                  <div key={key} style={{ display: 'flex', alignItems: 'flex-start', borderBottom: '1px solid #f5f5f3', padding: '6px 16px', gap: 12 }}>
+                    <span style={{ fontSize: 12, fontWeight: 500, color: '#888', minWidth: 30, paddingTop: 1 }}>{label}</span>
+                    <input
+                      className="cell-input"
+                      value={meta[key] as string}
+                      onChange={e => setMeta(m => ({ ...m, [key]: e.target.value }))}
+                      placeholder="이름, 이름"
+                      style={{ flex: 1 }}
+                    />
+                    {names.length > 0 && (
+                      <span style={{ fontSize: 12, color: '#2563eb', fontWeight: 600, whiteSpace: 'nowrap', paddingTop: 1 }}>– {names.length}명</span>
+                    )}
+                  </div>
+                )
+              })}
               {/* 총 인원 */}
               {(() => {
-                const allNames = (['edu_chief','edu_arch','edu_civil','edu_safety','edu_mech'] as (keyof WeeklyMeta)[])
-                  .flatMap(k => ((meta[k] as string) ?? '').split(',').map((n: string) => n.trim()).filter(Boolean))
+                const eduKeys = ['edu_chief','edu_arch','edu_civil','edu_safety','edu_mech'] as (keyof WeeklyMeta)[]
+                const allNames = eduKeys.flatMap(k => ((meta[k] as string) ?? '').split(',').map((n: string) => n.trim()).filter(Boolean))
                 const uniqNames = [...new Set(allNames)]
                 if (uniqNames.length === 0) return null
-                const last = uniqNames[uniqNames.length - 1]
+                // 마지막으로 값이 있는 필드
+                const lastFilledKey = [...eduKeys].reverse().find(k => ((meta[k] as string) ?? '').trim())
+                const lastFieldNames = lastFilledKey
+                  ? ((meta[lastFilledKey] as string) ?? '').split(',').map((n: string) => n.trim()).filter(Boolean)
+                  : []
+                const lastPerson = lastFieldNames[lastFieldNames.length - 1] ?? uniqNames[uniqNames.length - 1]
                 return (
                   <div style={{ display: 'flex', alignItems: 'center', padding: '6px 16px', borderTop: '1px solid #e8e8e6', background: '#f8f8f7' }}>
-                    <span style={{ fontSize: 12, color: '#555', fontWeight: 600 }}>{last} - {uniqNames.length}명</span>
+                    <span style={{ fontSize: 12, color: '#555', fontWeight: 600 }}>{lastPerson} – {lastFieldNames.length}명 – {uniqNames.length}명</span>
                   </div>
                 )
               })()}
