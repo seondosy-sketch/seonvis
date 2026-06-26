@@ -146,6 +146,14 @@ export default function Dashboard() {
       }
     }
 
+    const fmtDate = (d: string | null | undefined): string => {
+      if (!d) return ''
+      // YYYY-MM-DD → M/D
+      const m = d.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+      if (m) return `${parseInt(m[2])}/${parseInt(m[3])}`
+      return d
+    }
+
     const makeNote = (r: ProjectRef) => [
       r.staff_arch  ? `-건축 ${r.staff_arch}`  : '',
       r.staff_civil ? `-토목 ${r.staff_civil}` : '',
@@ -157,9 +165,9 @@ export default function Dashboard() {
       status, week,
       name: r.name,
       director: r.director ?? '',
-      submit_date: r.submit_date ?? '',
-      interview_date: r.interview_date ?? '',
-      result_date: r.bid_date ?? '',
+      submit_date: fmtDate(r.submit_date),
+      interview_date: fmtDate(r.interview_date),
+      result_date: fmtDate(r.bid_date),
       fee: r.fee ?? null,
       note: makeNote(r),
       sort_order: i,
