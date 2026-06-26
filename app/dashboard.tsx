@@ -37,21 +37,49 @@ const EMPTY_EXPECTED = (order: number, week: string): ExpectedProject => ({
   order_month: '', fee: '', note: '', sort_order: order, week
 })
 
+interface ProjectRef {
+  name: string
+  director: string
+  submit_date: string | null
+  interview_date: string | null
+  bid_date: string | null
+}
+
+function shiftWeek(week: string, delta: number): string {
+  const [year, w] = week.split('-W')
+  const jan4 = new Date(parseInt(year), 0, 4)
+  const startOfW1 = new Date(jan4)
+  startOfW1.setDate(jan4.getDate() - jan4.getDay() + 1)
+  const start = new Date(startOfW1)
+  start.setDate(start.getDate() + (parseInt(w) - 1) * 7 + delta * 7)
+  const newJan4 = new Date(start.getFullYear(), 0, 4)
+  const newW1 = new Date(newJan4)
+  newW1.setDate(newJan4.getDate() - newJan4.getDay() + 1)
+  const diff = Math.round((start.getTime() - newW1.getTime()) / 86400000)
+  const newW = Math.ceil((diff + 1) / 7)
+  return `${start.getFullYear()}-W${String(newW).padStart(2, '0')}`
+}
+
 export default function Dashboard() {
-  const [week] = useState(getCurrentWeek)
+  const currentWeek = getCurrentWeek()
+  const [week, setWeek] = useState(currentWeek)
   const [performing, setPerforming] = useState<PerformingProject[]>([])
   const [expected, setExpected] = useState<ExpectedProject[]>([])
   const [meta, setMeta] = useState<WeeklyMeta>({ week, education_note: '', edu_chief: '', edu_arch: '', edu_civil: '', edu_safety: '', edu_mech: '', other_note: '' })
   const [saving, setSaving] = useState(false)
   const [downloading, setDownloading] = useState<'' | 'weekly' | 'monthly'>('')
   const [saveMsg, setSaveMsg] = useState('')
+  const [projectRefs, setProjectRefs] = useState<ProjectRef[]>([])
+  const [copying, setCopying] = useState(false)
 
   const load = useCallback(async () => {
-    const [{ data: p }, { data: e }, { data: m }] = await Promise.all([
+    const [{ data: p }, { data: e }, { data: m }, { data: refs }] = await Promise.all([
       supabase.from('performing_projects').select('*').eq('week', week).order('sort_order'),
       supabase.from('expected_projects').select('*').eq('week', week).order('sort_order'),
       supabase.from('weekly_meta').select('*').eq('week', week).maybeSingle(),
+      supabase.from('projects').select('name,director,submit_date,interview_date,bid_date').order('project_number', { ascending: false }),
     ])
+    if (refs) setProjectRefs(refs as ProjectRef[])
     if (p && p.length > 0) {
       setPerforming(p as PerformingProject[])
     } else {
@@ -69,8 +97,25 @@ export default function Dashboard() {
     } else {
       setExpected([EMPTY_EXPECTED(0, week), EMPTY_EXPECTED(1, week)])
     }
-    if (m) setMeta(m as WeeklyMeta)
+    setMeta(m ? m as WeeklyMeta : { week, education_note: '', edu_chief: '', edu_arch: '', edu_civil: '', edu_safety: '', edu_mech: '', other_note: '' })
   }, [week])
+
+  const copyFromPrevWeek = async () => {
+    const prevWeek = shiftWeek(week, -1)
+    const [{ data: p }, { data: e }] = await Promise.all([
+      supabase.from('performing_projects').select('*').eq('week', prevWeek).order('sort_order'),
+      supabase.from('expected_projects').select('*').eq('week', prevWeek).order('sort_order'),
+    ])
+    if (p && p.length > 0) {
+      setPerforming((p as PerformingProject[]).map(({ id, ...r }) => ({ ...r, week })))
+    }
+    if (e && e.length > 0) {
+      setExpected((e as ExpectedProject[]).map(({ id, ...r }) => ({ ...r, week })))
+    }
+    setCopying(false)
+    setSaveMsg('지난주 데이터를 불러왔어요. 저장 버튼을 눌러주세요.')
+    setTimeout(() => setSaveMsg(''), 4000)
+  }
 
   useEffect(() => { load() }, [load])
 
@@ -153,11 +198,25 @@ export default function Dashboard() {
       {/* Header */}
       <header style={{ background: '#fff', borderBottom: '1px solid #e8e8e6' }}>
         <div style={{ maxWidth: 1200, margin: '0 auto', padding: '0 24px', height: 56, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <span style={{ fontSize: 14, color: '#555' }}>주간/월간업무보고</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <button onClick={() => setWeek(w => shiftWeek(w, -1))} style={{ height: 28, padding: '0 8px', borderRadius: 5, border: '1px solid #e8e8e6', background: '#fff', fontSize: 13, cursor: 'pointer', color: '#555' }}>‹</button>
+              <span style={{ fontSize: 13, fontWeight: 500, color: '#111', minWidth: 160, textAlign: 'center' }}>{weekLabel(week)} ({week})</span>
+              <button onClick={() => setWeek(w => shiftWeek(w, 1))} style={{ height: 28, padding: '0 8px', borderRadius: 5, border: '1px solid #e8e8e6', background: '#fff', fontSize: 13, cursor: 'pointer', color: '#555' }}>›</button>
+              {week !== currentWeek && (
+                <button onClick={() => setWeek(currentWeek)} style={{ height: 28, padding: '0 10px', borderRadius: 5, border: '1px solid #e8e8e6', background: '#f4f4f2', fontSize: 12, cursor: 'pointer', color: '#555' }}>이번주</button>
+              )}
+            </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             {saveMsg && <span style={{ fontSize: 12, color: '#22c55e' }}>{saveMsg}</span>}
+            {performing.every(r => !r.name) && (
+              <button
+                onClick={copyFromPrevWeek}
+                style={{ height: 32, padding: '0 14px', borderRadius: 6, border: '1px solid #f59e0b', background: '#fffbeb', fontSize: 13, color: '#b45309', cursor: 'pointer' }}
+              >↩ 지난주 불러오기</button>
+            )}
             <button
               onClick={save}
               disabled={saving}
@@ -199,7 +258,7 @@ export default function Dashboard() {
         {/* Week label */}
         <div style={{ marginBottom: 20 }}>
           <h1 style={{ fontSize: 20, fontWeight: 600, color: '#111', marginBottom: 4 }}>주간업무</h1>
-          <p style={{ fontSize: 13, color: '#888' }}>{weekLabel(week)} · {week}</p>
+          <p style={{ fontSize: 13, color: '#888' }}>{weekLabel(week)} · {week}{week !== currentWeek && <span style={{ marginLeft: 8, color: '#f59e0b', fontWeight: 500 }}>· 과거 데이터</span>}</p>
         </div>
 
         {/* Summary cards */}
@@ -223,10 +282,23 @@ export default function Dashboard() {
             rows={gaeching}
             allRows={performing}
             status="개찰"
+            projectRefs={projectRefs}
             onUpdate={(localIdx, field, val) => {
-              const globalIdx = performing.findIndex((r, i) => r.status === '개찰' && performing.filter(x => x.status === '개찰').indexOf(r) === localIdx)
               const actualIdx = performing.map((r, i) => ({ r, i })).filter(({ r }) => r.status === '개찰')[localIdx]?.i
               if (actualIdx !== undefined) updatePerf(actualIdx, field, val)
+            }}
+            onFill={(localIdx, ref) => {
+              const actualIdx = performing.map((r, i) => ({ r, i })).filter(({ r }) => r.status === '개찰')[localIdx]?.i
+              if (actualIdx !== undefined) {
+                setPerforming(prev => prev.map((r, i) => i === actualIdx ? {
+                  ...r,
+                  name: ref.name,
+                  director: ref.director || r.director,
+                  submit_date: ref.submit_date || r.submit_date,
+                  interview_date: ref.interview_date || r.interview_date,
+                  result_date: ref.bid_date || r.result_date,
+                } : r))
+              }
             }}
             onRemove={(localIdx) => {
               const actualIdx = performing.map((r, i) => ({ r, i })).filter(({ r }) => r.status === '개찰')[localIdx]?.i
@@ -239,9 +311,23 @@ export default function Dashboard() {
             rows={jinhaeng}
             allRows={performing}
             status="진행중"
+            projectRefs={projectRefs}
             onUpdate={(localIdx, field, val) => {
               const actualIdx = performing.map((r, i) => ({ r, i })).filter(({ r }) => r.status === '진행중')[localIdx]?.i
               if (actualIdx !== undefined) updatePerf(actualIdx, field, val)
+            }}
+            onFill={(localIdx, ref) => {
+              const actualIdx = performing.map((r, i) => ({ r, i })).filter(({ r }) => r.status === '진행중')[localIdx]?.i
+              if (actualIdx !== undefined) {
+                setPerforming(prev => prev.map((r, i) => i === actualIdx ? {
+                  ...r,
+                  name: ref.name,
+                  director: ref.director || r.director,
+                  submit_date: ref.submit_date || r.submit_date,
+                  interview_date: ref.interview_date || r.interview_date,
+                  result_date: ref.bid_date || r.result_date,
+                } : r))
+              }
             }}
             onRemove={(localIdx) => {
               const actualIdx = performing.map((r, i) => ({ r, i })).filter(({ r }) => r.status === '진행중')[localIdx]?.i
@@ -362,19 +448,21 @@ interface PerformingTableProps {
   rows: PerformingProject[]
   allRows: PerformingProject[]
   status: '개찰' | '진행중'
+  projectRefs: ProjectRef[]
   onUpdate: (localIdx: number, field: keyof PerformingProject, value: string | number | null) => void
+  onFill: (localIdx: number, ref: ProjectRef) => void
   onRemove: (localIdx: number) => void
   onAdd: () => void
 }
 
-function PerformingTable({ rows, status, onUpdate, onRemove, onAdd }: PerformingTableProps) {
+function PerformingTable({ rows, status, projectRefs, onUpdate, onFill, onRemove, onAdd }: PerformingTableProps) {
   const statusColor = status === '개찰'
     ? { bg: '#eff6ff', text: '#1d4ed8', border: '#bfdbfe' }
     : { bg: '#f0fdf4', text: '#15803d', border: '#bbf7d0' }
 
   return (
     <div>
-      <div style={{ padding: '6px 16px', display: 'flex', alignItems: 'center', gap: 8, background: status === '개찰' ? '#fafafa' : '#fafafa', borderBottom: '1px solid #f0f0ee' }}>
+      <div style={{ padding: '6px 16px', display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid #f0f0ee' }}>
         <span style={{
           fontSize: 11, fontWeight: 500, padding: '2px 8px', borderRadius: 4,
           background: statusColor.bg, color: statusColor.text, border: `1px solid ${statusColor.border}`
@@ -383,20 +471,25 @@ function PerformingTable({ rows, status, onUpdate, onRemove, onAdd }: Performing
       </div>
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-          {rows.length === 0 || true ? (
-            <thead>
-              <tr style={{ background: '#f9f9f8' }}>
-                {['연번', '용역명', '단장', '제출일', '발표/면접', '개찰일', '용역비(억)', '내용', ''].map(h => (
-                  <th key={h} style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 500, color: '#888', fontSize: 11, borderBottom: '1px solid #f0f0ee', whiteSpace: 'nowrap' }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-          ) : null}
+          <thead>
+            <tr style={{ background: '#f9f9f8' }}>
+              {['연번', '용역명', '단장', '제출일', '발표/면접', '개찰일', '용역비(억)', '내용', ''].map(h => (
+                <th key={h} style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 500, color: '#888', fontSize: 11, borderBottom: '1px solid #f0f0ee', whiteSpace: 'nowrap' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
           <tbody>
             {rows.map((row, i) => (
               <tr key={i} style={{ borderBottom: '1px solid #f5f5f3' }}>
                 <td style={{ ...tdStyle, color: '#999', width: 36 }}>{i + 1}</td>
-                <td style={{ ...tdStyle, minWidth: 200 }}><input className="cell-input" value={row.name} onChange={e => onUpdate(i, 'name', e.target.value)} placeholder="용역명" /></td>
+                <td style={{ ...tdStyle, minWidth: 200, position: 'relative' }}>
+                  <ProjectNameInput
+                    value={row.name}
+                    projectRefs={projectRefs}
+                    onChange={val => onUpdate(i, 'name', val)}
+                    onSelect={ref => onFill(i, ref)}
+                  />
+                </td>
                 <td style={{ ...tdStyle, minWidth: 80 }}><input className="cell-input" value={row.director} onChange={e => onUpdate(i, 'director', e.target.value)} placeholder="단장" /></td>
                 <td style={{ ...tdStyle, minWidth: 70 }}><input className="cell-input" value={row.submit_date} onChange={e => onUpdate(i, 'submit_date', e.target.value)} placeholder="6/5" /></td>
                 <td style={{ ...tdStyle, minWidth: 70 }}><input className="cell-input" value={row.interview_date} onChange={e => onUpdate(i, 'interview_date', e.target.value)} placeholder="6/10" /></td>
@@ -410,6 +503,61 @@ function PerformingTable({ rows, status, onUpdate, onRemove, onAdd }: Performing
         </table>
       </div>
       <AddRowButton onClick={onAdd} label={`${status} 행 추가`} />
+    </div>
+  )
+}
+
+function ProjectNameInput({
+  value, projectRefs, onChange, onSelect,
+}: {
+  value: string
+  projectRefs: ProjectRef[]
+  onChange: (v: string) => void
+  onSelect: (ref: ProjectRef) => void
+}) {
+  const [open, setOpen] = useState(false)
+
+  const filtered = value.trim().length > 0
+    ? projectRefs.filter(p => p.name.toLowerCase().includes(value.toLowerCase())).slice(0, 8)
+    : []
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <input
+        className="cell-input"
+        value={value}
+        placeholder="용역명 입력 또는 검색"
+        onChange={e => { onChange(e.target.value); setOpen(true) }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+      />
+      {open && filtered.length > 0 && (
+        <div style={{
+          position: 'absolute', top: '100%', left: 0, zIndex: 100,
+          background: '#fff', border: '1px solid #e8e8e6', borderRadius: 6,
+          boxShadow: '0 4px 12px rgba(0,0,0,0.08)', minWidth: 260, maxHeight: 220, overflowY: 'auto',
+        }}>
+          {filtered.map((p, i) => (
+            <div
+              key={i}
+              onMouseDown={() => { onSelect(p); setOpen(false) }}
+              style={{
+                padding: '8px 12px', cursor: 'pointer', fontSize: 12,
+                borderBottom: '1px solid #f5f5f3',
+              }}
+              onMouseEnter={e => (e.currentTarget.style.background = '#f8f8f7')}
+              onMouseLeave={e => (e.currentTarget.style.background = '#fff')}
+            >
+              <div style={{ fontWeight: 500, color: '#111', marginBottom: 2 }}>{p.name}</div>
+              <div style={{ color: '#999', fontSize: 11, display: 'flex', gap: 8 }}>
+                {p.submit_date && <span>제출 {p.submit_date}</span>}
+                {p.interview_date && <span>발표 {p.interview_date}</span>}
+                {p.bid_date && <span>개찰 {p.bid_date}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

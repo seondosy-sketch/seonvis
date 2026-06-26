@@ -113,7 +113,7 @@ export default function WeeklyCalendar({
   }
 
   return (
-    <div style={{ background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8, overflow: 'hidden', marginBottom: 12 }}>
+    <div style={{ background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8, marginBottom: 12 }}>
       {/* Header */}
       <div style={{ padding: '10px 16px', borderBottom: '1px solid #f0f0ee', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <span style={{ fontSize: 13, fontWeight: 500, color: '#333' }}>5) 일정 캘린더</span>
@@ -161,12 +161,12 @@ export default function WeeklyCalendar({
 
               return (
                 <div key={di} style={{
-                  minHeight: 80,
                   borderRadius: 6,
                   border: inWeek ? '1px solid #d1d5db' : '1px solid transparent',
                   background: inWeek ? '#f9fafb' : 'transparent',
                   padding: '4px 5px',
                   opacity: isOtherMonth ? 0.35 : 1,
+                  overflow: 'visible',
                 }}>
                   <div style={{
                     width: 22, height: 22, borderRadius: '50%', display: 'flex',

@@ -67,7 +67,9 @@ export default function Sidebar({ isAdmin, userEmail }: SidebarProps) {
       {/* Logo */}
       <div style={{ padding: '18px 20px 14px', borderBottom: '1px solid #f0f0ee', display: 'flex', alignItems: 'center', gap: 8 }}>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: '#111', letterSpacing: '-0.2px' }}>미래사업팀 Hub</div>
+          <Link href="/" style={{ textDecoration: 'none' }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: '#111', letterSpacing: '-0.2px', cursor: 'pointer' }}>미래사업팀 Hub</div>
+          </Link>
         </div>
         {isAdmin && (
           <Link href={pathname === '/admin' ? '/weekly' : '/admin'} style={{ textDecoration: 'none' }}>

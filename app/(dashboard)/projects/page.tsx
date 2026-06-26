@@ -34,11 +34,15 @@ interface Project {
   created_at: string
 }
 
+function isEmpty(v: string | null | undefined) {
+  return !v || v.trim() === '' || v.trim().toLowerCase() === 'nan'
+}
+
 function computeStatus(result_score: string, evaluation: string, participants = '', override: string | null = null): ProjectStatus {
   if (override) return override as ProjectStatus
   if (participants.includes('드랍') || participants.includes('드롭')) return '취소'
   if (evaluation === '선') return '수주'
-  if (!evaluation || evaluation.trim() === '') return '진행중'
+  if (isEmpty(result_score) || isEmpty(evaluation)) return '진행중'
   return '탈락'
 }
 
@@ -161,7 +165,7 @@ export default function ProjectsPage() {
             <div key={label} style={{ background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8, padding: '12px 16px' }}>
               <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>{label === '전체' ? '전체 프로젝트' : label}</div>
               <div style={{ fontSize: 20, fontWeight: 600, color: '#111' }}>{list.length}건</div>
-              <div style={{ fontSize: 12, color: '#aaa', marginTop: 2 }}>{list.reduce((s, p) => s + (p.fee ?? 0), 0).toFixed(1)}억</div>
+              <div style={{ fontSize: 12, color: '#aaa', marginTop: 2 }}>{label === '수주' ? list.reduce((s, p) => s + (p.award_fee ?? 0), 0).toFixed(1) : list.reduce((s, p) => s + (p.fee ?? 0), 0).toFixed(1)}억</div>
             </div>
           ))}
         </div>
@@ -185,7 +189,7 @@ export default function ProjectsPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr style={{ background: '#f4f4f2' }}>
-                {['번호', '유형', '발주처', '용역명', '용역비(억)', '제안서', '점수', '제출일', '발표일', '개찰일', '결과', '낙찰사', '낙찰액', '참여사', '단장', '건축', '토목', '기계', '안전', '상태', ''].map(h => (
+                {['', '번호', '유형', '발주처', '용역명', '용역비(억)', '제안서', '점수', '제출일', '발표일', '개찰일', '결과', '낙찰사', '낙찰액', '참여사', '단장', '건축', '토목', '기계', '안전', '상태'].map(h => (
                   <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 500, color: '#555', borderBottom: '1px solid #e8e8e6', whiteSpace: 'nowrap' }}>{h}</th>
                 ))}
               </tr>
@@ -195,6 +199,12 @@ export default function ProjectsPage() {
                 <tr><td colSpan={15} style={{ padding: 40, textAlign: 'center', color: '#bbb' }}>데이터가 없습니다</td></tr>
               ) : filtered.map(p => (
                 <tr key={p.id} style={{ borderBottom: '1px solid #f0f0ee' }}>
+                  <td style={td}>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button onClick={() => openEdit(p)} style={editBtn}>수정</button>
+                      <button onClick={() => remove(p.id)} disabled={deleting === p.id} style={deleteBtn}>삭제</button>
+                    </div>
+                  </td>
                   <td style={tdnw}><span style={{ color: '#999' }}>{p.project_number}</span></td>
                   <td style={tdnw}><span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 3, background: '#f0f0ee', color: '#555' }}>{p.type}</span></td>
                   <td style={{ ...tdnw, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.client}</td>
@@ -215,12 +225,6 @@ export default function ProjectsPage() {
                   <td style={tdnw}>{p.staff_mech}</td>
                   <td style={tdnw}>{p.staff_safety}</td>
                   <td style={tdnw}><span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 4, ...STATUS_STYLE[computeStatus(p.result_score, p.evaluation, p.participants, p.status_override)] }}>{computeStatus(p.result_score, p.evaluation, p.participants, p.status_override)}</span></td>
-                  <td style={td}>
-                    <div style={{ display: 'flex', gap: 4 }}>
-                      <button onClick={() => openEdit(p)} style={editBtn}>수정</button>
-                      <button onClick={() => remove(p.id)} disabled={deleting === p.id} style={deleteBtn}>삭제</button>
-                    </div>
-                  </td>
                 </tr>
               ))}
             </tbody>
