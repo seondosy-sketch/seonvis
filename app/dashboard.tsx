@@ -519,7 +519,7 @@ export default function Dashboard() {
                 const lastPerson = lastFieldNames[lastFieldNames.length - 1] ?? uniqNames[uniqNames.length - 1]
                 return (
                   <div style={{ display: 'flex', alignItems: 'center', padding: '6px 16px', borderTop: '1px solid #e8e8e6', background: '#f8f8f7' }}>
-                    <span style={{ fontSize: 12, color: '#555', fontWeight: 600 }}>{lastPerson} – {lastFieldNames.length}명 – {uniqNames.length}명</span>
+                    <span style={{ fontSize: 12, color: '#555', fontWeight: 600 }}>총 {uniqNames.length}명</span>
                   </div>
                 )
               })()}
