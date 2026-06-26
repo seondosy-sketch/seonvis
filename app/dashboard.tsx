@@ -192,10 +192,13 @@ export default function Dashboard() {
       setExpected([EMPTY_EXPECTED(0, week), EMPTY_EXPECTED(1, week)])
     }
 
-    // 교육참가자: 진행중 프로젝트에서 분야별 이름 취합 (빈 경우만 자동 채우기)
-    const active = allRefs.filter(r => computeProjectStatus(r) === '진행중')
+    // 교육참가자: 표에 실제 진행중으로 들어간 프로젝트 기준으로만 취합 (빈 경우만 자동 채우기)
+    // jinhaengRows가 있으면 그걸 기준으로, 없으면(저장된 데이터 불러온 경우) allRefs 기준으로
+    const activeRefs = jinhaengRows.length > 0
+      ? allRefs.filter(r => jinhaengRows.some(j => j.name === r.name))
+      : allRefs.filter(r => computeProjectStatus(r) === '진행중')
     const uniq = (field: keyof ProjectRef) => {
-      const names = active.map(r => (r[field] as string) ?? '').filter(Boolean)
+      const names = activeRefs.map(r => (r[field] as string) ?? '').filter(Boolean)
       return [...new Set(names)].join(', ')
     }
     const baseMeta: WeeklyMeta = m ? m as WeeklyMeta : { week, education_note: '', edu_chief: '', edu_arch: '', edu_civil: '', edu_safety: '', edu_mech: '', other_note: '' }
