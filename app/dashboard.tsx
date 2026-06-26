@@ -131,12 +131,25 @@ export default function Dashboard() {
     const allRefs = (refs ?? []) as ProjectRef[]
     setProjectRefs(allRefs)
 
+    // 주차 기준 진행중 분류 (항상 실행 — 교육참가자 자동완성에도 사용)
+    const { start: weekStart } = getWeekRange(week)
+    const jinhaengRefs: ProjectRef[] = []
+    for (const r of allRefs.filter(r => computeProjectStatus(r) === '진행중')) {
+      const interviewDate = r.interview_date ? new Date(r.interview_date) : null
+      const bidDate = r.bid_date ? new Date(r.bid_date) : null
+      if (!interviewDate || interviewDate >= weekStart) {
+        jinhaengRefs.push(r)
+      } else {
+        if (!bidDate || bidDate >= weekStart) {
+          // 개찰 그룹 (교육참가자에는 포함 안 함)
+        }
+      }
+    }
+
     if (p && p.length > 0) {
       setPerforming(p as PerformingProject[])
     } else {
       // 저장된 데이터 없으면 프로젝트 List에서 자동 채우기
-      const { start: weekStart } = getWeekRange(week)
-
       const makeNote = (r: ProjectRef) => [
         r.staff_arch  ? `-건축 ${r.staff_arch}`  : '',
         r.staff_civil ? `-토목 ${r.staff_civil}` : '',
@@ -164,18 +177,14 @@ export default function Dashboard() {
         const bidDate = r.bid_date ? new Date(r.bid_date) : null
 
         if (!interviewDate || interviewDate >= weekStart) {
-          // 발표/면접일 없거나 이번 주 이후 → 진행중
           jinhaengRows.push(toPerf(r, '진행중', jinhaengRows.length))
         } else {
-          // 발표/면접일이 이번 주 이전 → 개찰 그룹
-          // 단, 개찰일도 이번 주 이전이면 제외 (이미 개찰 완료)
           if (!bidDate || bidDate >= weekStart) {
             gaechalRows.push(toPerf(r, '개찰', gaechalRows.length))
           }
         }
       }
 
-      // sort_order 재정렬
       gaechalRows.forEach((r, i) => { r.sort_order = i })
       jinhaengRows.forEach((r, i) => { r.sort_order = gaechalRows.length + i })
 
@@ -192,11 +201,8 @@ export default function Dashboard() {
       setExpected([EMPTY_EXPECTED(0, week), EMPTY_EXPECTED(1, week)])
     }
 
-    // 교육참가자: 표에 실제 진행중으로 들어간 프로젝트 기준으로만 취합 (빈 경우만 자동 채우기)
-    // jinhaengRows가 있으면 그걸 기준으로, 없으면(저장된 데이터 불러온 경우) allRefs 기준으로
-    const activeRefs = jinhaengRows.length > 0
-      ? allRefs.filter(r => jinhaengRows.some(j => j.name === r.name))
-      : allRefs.filter(r => computeProjectStatus(r) === '진행중')
+    // 교육참가자: 주차 기준 진행중 프로젝트에서만 취합 (빈 경우만 자동 채우기)
+    const activeRefs = jinhaengRefs
     const uniq = (field: keyof ProjectRef) => {
       const names = activeRefs.map(r => (r[field] as string) ?? '').filter(Boolean)
       return [...new Set(names)].join(', ')
