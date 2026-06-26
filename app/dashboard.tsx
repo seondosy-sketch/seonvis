@@ -184,29 +184,28 @@ export default function Dashboard() {
         EMPTY_PERFORMING('개찰', 0, week),
         EMPTY_PERFORMING('진행중', 1, week),
       ])
-
-      // 교육참가자: 진행중 프로젝트 전체에서 분야별 이름 취합 (중복 제거)
-      const active = allRefs.filter(r => computeProjectStatus(r) === '진행중')
-      const uniq = (field: keyof ProjectRef) => {
-        const names = active.map(r => (r[field] as string) ?? '').filter(Boolean)
-        return [...new Set(names)].join(', ')
-      }
-      if (!m) {
-        setMeta(prev => ({
-          ...prev,
-          edu_arch:   uniq('staff_arch'),
-          edu_civil:  uniq('staff_civil'),
-          edu_mech:   uniq('staff_mech'),
-          edu_safety: uniq('staff_safety'),
-        }))
-      }
     }
+
     if (e && e.length > 0) {
       setExpected(e as ExpectedProject[])
     } else {
       setExpected([EMPTY_EXPECTED(0, week), EMPTY_EXPECTED(1, week)])
     }
-    setMeta(m ? m as WeeklyMeta : { week, education_note: '', edu_chief: '', edu_arch: '', edu_civil: '', edu_safety: '', edu_mech: '', other_note: '' })
+
+    // 교육참가자: 진행중 프로젝트에서 분야별 이름 취합 (빈 경우만 자동 채우기)
+    const active = allRefs.filter(r => computeProjectStatus(r) === '진행중')
+    const uniq = (field: keyof ProjectRef) => {
+      const names = active.map(r => (r[field] as string) ?? '').filter(Boolean)
+      return [...new Set(names)].join(', ')
+    }
+    const baseMeta: WeeklyMeta = m ? m as WeeklyMeta : { week, education_note: '', edu_chief: '', edu_arch: '', edu_civil: '', edu_safety: '', edu_mech: '', other_note: '' }
+    setMeta({
+      ...baseMeta,
+      edu_arch:   baseMeta.edu_arch   || uniq('staff_arch'),
+      edu_civil:  baseMeta.edu_civil  || uniq('staff_civil'),
+      edu_mech:   baseMeta.edu_mech   || uniq('staff_mech'),
+      edu_safety: baseMeta.edu_safety || uniq('staff_safety'),
+    })
   }, [week])
 
   const copyFromPrevWeek = async () => {
