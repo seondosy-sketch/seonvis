@@ -321,7 +321,7 @@ export default function ProjectsPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr style={{ background: '#f4f4f2' }}>
-                {['', '번호', '유형', '발주처', '용역명', '제안서', '점수', '제출일', '발표일', '개찰일', '결과', '낙찰사', '참여사', '단장', '건축', '토목', '기계', '안전', '상태'].map(h => (
+                {['', '번호', '유형', '발주처', '용역명', '용역비(억)', '제안서', '점수', '제출일', '발표일', '개찰일', '결과', '낙찰사', '낙찰액', '참여사', '단장', '건축', '토목', '기계', '안전', '상태'].map(h => (
                   <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 500, color: '#555', borderBottom: '1px solid #e8e8e6', whiteSpace: 'nowrap' }}>{h}</th>
                 ))}
               </tr>
@@ -348,6 +348,7 @@ export default function ProjectsPage() {
                         onClick={() => { const d = tooltipAll[p.project_number]; if (d) setTooltipView({ project: p, data: d }) }}
                       >{p.name}</span>
                     </td>
+                    <td style={{ ...tdnw, textAlign: 'right' }}>{p.fee != null ? p.fee : '-'}</td>
                     <td style={tdnw}>{p.tp_score}</td>
                     <td style={tdnw}>{p.duration_days}</td>
                     <td style={tdnw}>{p.submit_date ?? '-'}</td>
@@ -355,6 +356,7 @@ export default function ProjectsPage() {
                     <td style={tdnw}>{p.bid_date ?? '-'}</td>
                     <td style={tdnw}><span style={{ fontWeight: 600, color: p.result_score ? '#111' : '#ccc' }}>{p.result_score || '-'}</span></td>
                     <td style={{ ...tdnw, maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.evaluation}</td>
+                    <td style={{ ...tdnw, textAlign: 'right' }}>{p.award_fee != null ? p.award_fee : '-'}</td>
                     <td style={tdnw}>{(p.participants.match(/\d+개사/) ?? [''])[0] || p.participants}</td>
                     <td style={tdnw}>{p.director}</td>
                     <td style={tdnw}>{p.staff_arch}</td>
@@ -368,7 +370,9 @@ export default function ProjectsPage() {
             </tbody>
             <tfoot>
               <tr style={{ background: '#f9f9f8', borderTop: '2px solid #e8e8e6' }}>
-                <td colSpan={19} style={{ padding: '8px 12px', fontSize: 12, color: '#555', fontWeight: 500 }}>합계 {filtered.length}건</td>
+                <td colSpan={4} style={{ padding: '8px 12px', fontSize: 12, color: '#555', fontWeight: 500 }}>합계 {filtered.length}건</td>
+                <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600, color: '#111' }}>{filtered.reduce((s, p) => s + (p.fee ?? 0), 0).toFixed(1)}</td>
+                <td colSpan={11} />
               </tr>
             </tfoot>
           </table>
