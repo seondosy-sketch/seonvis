@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { PerformingProject } from '@/lib/supabase'
 
 interface CalEvent {
@@ -57,6 +57,13 @@ export default function WeeklyCalendar({
 
   const [viewMonth, setViewMonth] = useState(() => weekStart.getMonth())
   const [viewYear, setViewYear] = useState(() => weekStart.getFullYear())
+
+  // week prop이 바뀌면 달력도 해당 주차 월로 이동
+  useEffect(() => {
+    const [ws] = weekRange(week)
+    setViewMonth(ws.getMonth())
+    setViewYear(ws.getFullYear())
+  }, [week])
 
   const events: DayEvents = useMemo(() => {
     const map: DayEvents = {}
