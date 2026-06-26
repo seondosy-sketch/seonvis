@@ -58,14 +58,20 @@ interface ProjectRef {
 
 function categorizeProject(r: ProjectRef, weekStart: Date): '진행중' | '개찰' | '제외' {
   if (computeProjectStatus(r) === '취소') return '제외'
-  const submit    = parseLocalDate(r.submit_date)
-  const interview = parseLocalDate(r.interview_date)
-  const bid       = parseLocalDate(r.bid_date)
+
   // 1. 제출일이 이번주 이전이 아니면 → 진행중
+  const submit = parseLocalDate(r.submit_date)
   if (!submit || submit >= weekStart) return '진행중'
-  // 2. 발표일이 이번주 이전이 아니면 → 진행중
-  if (!interview || interview >= weekStart) return '진행중'
-  // 3. 개찰일이 이번주 이전이면 → 제외, 아니면 → 개찰
+
+  // 2. 발표/면접일: 공란·추후 → 진행중 / 서면 → 개찰로 / 날짜가 이번주 이후 → 진행중
+  const ivRaw = r.interview_date?.trim() ?? ''
+  if (ivRaw !== '서면') {
+    const interview = parseLocalDate(ivRaw)
+    if (!interview || interview >= weekStart) return '진행중'
+  }
+
+  // 3. 개찰일: 공란·추후 → 개찰 / 이번주 이전 → 제외 / 이번주 이후 → 개찰
+  const bid = parseLocalDate(r.bid_date)
   if (bid && bid < weekStart) return '제외'
   return '개찰'
 }
