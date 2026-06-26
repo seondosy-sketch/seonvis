@@ -198,7 +198,15 @@ export default function Dashboard() {
     if (e && e.length > 0) {
       setExpected(e as ExpectedProject[])
     } else {
-      setExpected([EMPTY_EXPECTED(0, week), EMPTY_EXPECTED(1, week)])
+      // 이전 주차 발주예상 중 이번 주 진행중에 없는 것은 이월
+      const prevWeek = shiftWeek(week, -1)
+      const { data: prevExpected } = await supabase
+        .from('expected_projects').select('*').eq('week', prevWeek).order('sort_order')
+      const jinhaengNames = new Set(jinhaengRefs.map(r => r.name))
+      const carried = ((prevExpected ?? []) as ExpectedProject[])
+        .filter(ep => ep.name && !jinhaengNames.has(ep.name))
+        .map((ep, i) => ({ ...ep, id: undefined, week, sort_order: i }))
+      setExpected(carried.length > 0 ? carried : [EMPTY_EXPECTED(0, week), EMPTY_EXPECTED(1, week)])
     }
 
     // 교육참가자: 주차 기준 진행중 프로젝트에서만 취합 (빈 경우만 자동 채우기)
