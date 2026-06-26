@@ -317,12 +317,13 @@ export default function ProjectsPage() {
           </div>
         </div>
 
-        <div style={{ background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8, overflow: 'auto' }}>
+        <div style={{ background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8, overflow: 'hidden' }}>
+          <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 280px)' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr style={{ background: '#f4f4f2' }}>
                 {['', '번호', '유형', '발주처', '용역명', '용역비(억)', '제안서', '점수', '제출일', '발표일', '개찰일', '결과', '낙찰사', '낙찰액', '참여사', '단장', '건축', '토목', '기계', '안전', '상태'].map(h => (
-                  <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 500, color: '#555', borderBottom: '1px solid #e8e8e6', whiteSpace: 'nowrap' }}>{h}</th>
+                  <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 500, color: '#555', borderBottom: '1px solid #e8e8e6', whiteSpace: 'nowrap', position: 'sticky', top: 0, background: '#f4f4f2', zIndex: 1 }}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -376,6 +377,7 @@ export default function ProjectsPage() {
               </tr>
             </tfoot>
           </table>
+          </div>
         </div>
       </div>
 
