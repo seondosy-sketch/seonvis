@@ -110,17 +110,50 @@ export default function Dashboard() {
       supabase.from('weekly_meta').select('*').eq('week', week).maybeSingle(),
       createSupabaseBrowserClient().from('projects').select('name,director,client,fee,submit_date,interview_date,bid_date,result_score,evaluation,participants,status_override').order('project_number', { ascending: false }),
     ])
-    if (refs) setProjectRefs(refs as ProjectRef[])
+    const allRefs = (refs ?? []) as ProjectRef[]
+    setProjectRefs(allRefs)
+
     if (p && p.length > 0) {
       setPerforming(p as PerformingProject[])
     } else {
-      setPerforming([
+      // 저장된 데이터 없으면 프로젝트 List에서 자동 채우기
+      const { start, end } = getWeekRange(week)
+      const bidRows = allRefs
+        .filter(r => {
+          if (!r.bid_date) return false
+          const d = new Date(r.bid_date)
+          return d >= start && d <= end
+        })
+        .map((r, i): PerformingProject => ({
+          status: '개찰', week,
+          name: r.name,
+          director: r.director ?? '',
+          submit_date: r.submit_date ?? '',
+          interview_date: r.interview_date ?? '',
+          result_date: r.bid_date ?? '',
+          fee: r.fee ?? null,
+          note: '',
+          sort_order: i,
+        }))
+
+      const jinhaengRows = allRefs
+        .filter(r => computeProjectStatus(r) === '진행중')
+        .map((r, i): PerformingProject => ({
+          status: '진행중', week,
+          name: r.name,
+          director: r.director ?? '',
+          submit_date: r.submit_date ?? '',
+          interview_date: r.interview_date ?? '',
+          result_date: r.bid_date ?? '',
+          fee: r.fee ?? null,
+          note: '',
+          sort_order: bidRows.length + i,
+        }))
+
+      const autoRows = [...bidRows, ...jinhaengRows]
+      setPerforming(autoRows.length > 0 ? autoRows : [
         EMPTY_PERFORMING('개찰', 0, week),
-        EMPTY_PERFORMING('개찰', 1, week),
-        EMPTY_PERFORMING('개찰', 2, week),
-        EMPTY_PERFORMING('진행중', 3, week),
-        EMPTY_PERFORMING('진행중', 4, week),
-        EMPTY_PERFORMING('진행중', 5, week),
+        EMPTY_PERFORMING('진행중', 1, week),
       ])
     }
     if (e && e.length > 0) {
@@ -306,9 +339,6 @@ export default function Dashboard() {
             </div>
           ))}
         </div>
-
-        {/* 이번 주 일정 참고 */}
-        <WeeklyProjectSummary week={week} projectRefs={projectRefs} />
 
         {/* 수행 프로젝트 */}
         <Section title="1) 수행 Project (공동수행)">
