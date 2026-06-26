@@ -499,6 +499,19 @@ export default function Dashboard() {
                   />
                 </div>
               ))}
+              {/* 총 인원 */}
+              {(() => {
+                const allNames = (['edu_chief','edu_arch','edu_civil','edu_safety','edu_mech'] as (keyof WeeklyMeta)[])
+                  .flatMap(k => ((meta[k] as string) ?? '').split(',').map((n: string) => n.trim()).filter(Boolean))
+                const uniqNames = [...new Set(allNames)]
+                if (uniqNames.length === 0) return null
+                const last = uniqNames[uniqNames.length - 1]
+                return (
+                  <div style={{ display: 'flex', alignItems: 'center', padding: '6px 16px', borderTop: '1px solid #e8e8e6', background: '#f8f8f7' }}>
+                    <span style={{ fontSize: 12, color: '#555', fontWeight: 600 }}>{last} - {uniqNames.length}명</span>
+                  </div>
+                )
+              })()}
             </div>
           </Section>
           <Section title="4) 기 타">
