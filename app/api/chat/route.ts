@@ -1,6 +1,6 @@
 import { createSupabaseServerClient } from '@/lib/supabase-server'
 
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`
 
 const FUNCTION_DECLARATIONS = [
   {
@@ -168,7 +168,8 @@ export async function POST(request: Request) {
 
   if (!res.ok) {
     const err = await res.text()
-    return Response.json({ error: err }, { status: 500 })
+    console.error('[chat] Gemini error:', res.status, err)
+    return Response.json({ type: 'text', text: `Gemini 오류 (${res.status}): ${err}` }, { status: 500 })
   }
 
   const data = await res.json() as {
