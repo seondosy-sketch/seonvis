@@ -465,6 +465,7 @@ export default function Dashboard() {
             allRows={performing}
             status="개찰"
             projectRefs={projectRefs}
+            calNotes={calNotes}
             onUpdate={(localIdx, field, val) => {
               const actualIdx = performing.map((r, i) => ({ r, i })).filter(({ r }) => r.status === '개찰')[localIdx]?.i
               if (actualIdx !== undefined) updatePerf(actualIdx, field, val)
@@ -494,6 +495,7 @@ export default function Dashboard() {
             allRows={performing}
             status="진행중"
             projectRefs={projectRefs}
+            calNotes={calNotes}
             onUpdate={(localIdx, field, val) => {
               const actualIdx = performing.map((r, i) => ({ r, i })).filter(({ r }) => r.status === '진행중')[localIdx]?.i
               if (actualIdx !== undefined) updatePerf(actualIdx, field, val)
@@ -652,13 +654,42 @@ interface PerformingTableProps {
   allRows: PerformingProject[]
   status: '개찰' | '진행중'
   projectRefs: ProjectRef[]
+  calNotes?: Record<string, Record<string, string>>
   onUpdate: (localIdx: number, field: keyof PerformingProject, value: string | number | null) => void
   onFill: (localIdx: number, ref: ProjectRef) => void
   onRemove: (localIdx: number) => void
   onAdd: () => void
 }
 
-function PerformingTable({ rows, status, projectRefs, onUpdate, onFill, onRemove, onAdd }: PerformingTableProps) {
+function NoteTooltipCell({ value, note, placeholder, onChange }: { value: string; note?: string; placeholder: string; onChange: (v: string) => void }) {
+  const [tooltip, setTooltip] = useState<{ x: number; y: number } | null>(null)
+  return (
+    <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 3 }}>
+      <input className="cell-input" value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} style={{ flex: 1 }} />
+      {note && (
+        <>
+          <span
+            onMouseEnter={e => { const r = e.currentTarget.getBoundingClientRect(); setTooltip({ x: r.left, y: r.bottom + 4 }) }}
+            onMouseLeave={() => setTooltip(null)}
+            style={{ color: '#f97316', fontSize: 10, cursor: 'default', lineHeight: 1, flexShrink: 0 }}
+          >●</span>
+          {tooltip && (
+            <div style={{
+              position: 'fixed', zIndex: 999, left: tooltip.x, top: tooltip.y,
+              background: '#111', color: '#fff', fontSize: 12, borderRadius: 6, padding: '8px 12px',
+              maxWidth: 260, lineHeight: 1.6, boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+              pointerEvents: 'none', whiteSpace: 'pre-wrap',
+            }}>
+              {note}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+function PerformingTable({ rows, status, projectRefs, calNotes, onUpdate, onFill, onRemove, onAdd }: PerformingTableProps) {
   const statusColor = status === '개찰'
     ? { bg: '#eff6ff', text: '#1d4ed8', border: '#bfdbfe' }
     : { bg: '#f0fdf4', text: '#15803d', border: '#bbf7d0' }
@@ -694,9 +725,9 @@ function PerformingTable({ rows, status, projectRefs, onUpdate, onFill, onRemove
                   />
                 </td>
                 <td style={{ ...tdStyle, minWidth: 80 }}><input className="cell-input" value={row.director} onChange={e => onUpdate(i, 'director', e.target.value)} placeholder="단장" /></td>
-                <td style={{ ...tdStyle, minWidth: 70 }}><input className="cell-input" value={row.submit_date} onChange={e => onUpdate(i, 'submit_date', e.target.value)} placeholder="6/5" /></td>
-                <td style={{ ...tdStyle, minWidth: 70 }}><input className="cell-input" value={row.interview_date} onChange={e => onUpdate(i, 'interview_date', e.target.value)} placeholder="6/10" /></td>
-                <td style={{ ...tdStyle, minWidth: 70 }}><input className="cell-input" value={row.result_date} onChange={e => onUpdate(i, 'result_date', e.target.value)} placeholder="추후" /></td>
+                <td style={{ ...tdStyle, minWidth: 70 }}><NoteTooltipCell value={row.submit_date} note={calNotes?.[row.name]?.submit_date} placeholder="6/5" onChange={v => onUpdate(i, 'submit_date', v)} /></td>
+                <td style={{ ...tdStyle, minWidth: 70 }}><NoteTooltipCell value={row.interview_date} note={calNotes?.[row.name]?.interview_date} placeholder="6/10" onChange={v => onUpdate(i, 'interview_date', v)} /></td>
+                <td style={{ ...tdStyle, minWidth: 70 }}><NoteTooltipCell value={row.result_date} note={calNotes?.[row.name]?.bid_date} placeholder="추후" onChange={v => onUpdate(i, 'result_date', v)} /></td>
                 <td style={{ ...tdStyle, minWidth: 80 }}><input className="cell-input" type="number" value={row.fee ?? ''} onChange={e => onUpdate(i, 'fee', e.target.value ? parseFloat(e.target.value) : null)} placeholder="0.0" /></td>
                 <td style={{ ...tdStyle, minWidth: 200 }}><input className="cell-input" value={row.note} onChange={e => onUpdate(i, 'note', e.target.value)} placeholder="내용" /></td>
                 <td style={tdStyle}><button onClick={() => onRemove(i)} style={removeBtn}>✕</button></td>
