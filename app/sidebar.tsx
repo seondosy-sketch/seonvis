@@ -72,7 +72,7 @@ export default function Sidebar({ isAdmin, userEmail }: SidebarProps) {
           </Link>
         </div>
         {isAdmin && (
-          <Link href={pathname === '/admin' ? '/weekly' : '/admin'} style={{ textDecoration: 'none' }}>
+          <Link href={pathname === '/admin' ? '/' : '/admin'} style={{ textDecoration: 'none' }}>
             <div style={{
               fontSize: 11, fontWeight: 600,
               color: pathname === '/admin' ? '#2563eb' : '#888',
