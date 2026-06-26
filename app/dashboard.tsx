@@ -103,6 +103,20 @@ export default function Dashboard() {
   const [projectRefs, setProjectRefs] = useState<ProjectRef[]>([])
   const [copying, setCopying] = useState(false)
 
+  const loadRefs = useCallback(async () => {
+    const { data } = await createSupabaseBrowserClient()
+      .from('projects')
+      .select('name,director,client,fee,submit_date,interview_date,bid_date,result_score,evaluation,participants,status_override')
+      .order('project_number', { ascending: false })
+    if (data) setProjectRefs(data as ProjectRef[])
+  }, [])
+
+  useEffect(() => {
+    const onFocus = () => loadRefs()
+    document.addEventListener('visibilitychange', onFocus)
+    return () => document.removeEventListener('visibilitychange', onFocus)
+  }, [loadRefs])
+
   const load = useCallback(async () => {
     const [{ data: p }, { data: e }, { data: m }, { data: refs }] = await Promise.all([
       supabase.from('performing_projects').select('*').eq('week', week).order('sort_order'),
