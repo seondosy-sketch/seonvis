@@ -36,31 +36,89 @@ interface Project {
 
 interface TooltipData {
   project_number?: string
-  location?: string; client?: string; director?: string; duration?: string; staff?: string
-  area?: string; scale?: string; est_cost?: string
-  proposal_p?: string; self_intro_p?: string; ppt_p?: string
-  pq_date?: string; interview_date?: string; notify_date?: string
-  soq_date?: string; interview_time?: string; bid_date?: string
-  fee?: string; designer?: string; builder?: string
-  score_dist?: string; competitors?: string; announcement?: string
+  location?: string
+  area?: string
+  scale?: string
+  est_cost?: string
+  designer?: string
+  builder?: string
+  score_dist?: string
+  competitors?: string
+  proposal_p?: string
+  self_intro_p?: string
+  ppt_p?: string
+  pq_date?: string
+  soq_date?: string
+  interview_time?: string
+  notify_date?: string
+  announcement?: string
 }
 
-const EMPTY_TOOLTIP: TooltipData = {
-  location: '', client: '', director: '', duration: '', staff: '',
-  area: '', scale: '', est_cost: '', proposal_p: '', self_intro_p: '', ppt_p: '',
-  pq_date: '', interview_date: '', notify_date: '', soq_date: '', interview_time: '',
-  bid_date: '', fee: '', designer: '', builder: '', score_dist: '', competitors: '', announcement: '',
+// 통합 폼 데이터 (프로젝트 + 툴팁)
+interface FormData {
+  // projects 테이블
+  project_number: string
+  type: ProjectType
+  client: string
+  name: string
+  fee: number | null
+  tp_score: string
+  duration_days: string
+  submit_date: string | null
+  interview_date: string | null
+  bid_date: string | null
+  result_score: string
+  evaluation: string
+  award_fee: number | null
+  participants: string
+  participation_ratio: string
+  director: string
+  status_override: string | null
+  staff_arch: string
+  staff_civil: string
+  staff_mech: string
+  staff_safety: string
+  note: string
+  // project_tooltips 테이블 (추가 정보)
+  location: string
+  area: string
+  scale: string
+  est_cost: string
+  designer: string
+  builder: string
+  score_dist: string
+  competitors: string
+  proposal_p: string
+  self_intro_p: string
+  ppt_p: string
+  pq_date: string
+  soq_date: string
+  interview_time: string
+  notify_date: string
+  announcement: string
 }
 
-function isEmpty(v: string | null | undefined) {
-  return !v || v.trim() === '' || v.trim().toLowerCase() === 'nan'
+const EMPTY_FORM: FormData = {
+  project_number: '', type: '면접', client: '', name: '',
+  fee: null, tp_score: '', duration_days: '',
+  submit_date: null, interview_date: null, bid_date: null,
+  result_score: '', evaluation: '', award_fee: null,
+  participants: '', participation_ratio: '',
+  director: '', status_override: null,
+  staff_arch: '', staff_civil: '', staff_mech: '', staff_safety: '',
+  note: '',
+  location: '', area: '', scale: '', est_cost: '',
+  designer: '', builder: '', score_dist: '', competitors: '',
+  proposal_p: '', self_intro_p: '', ppt_p: '',
+  pq_date: '', soq_date: '', interview_time: '', notify_date: '',
+  announcement: '',
 }
 
 function computeStatus(result_score: string, evaluation: string, participants = '', override: string | null = null): ProjectStatus {
   if (override) return override as ProjectStatus
   if (participants.includes('드랍') || participants.includes('드롭')) return '취소'
   if (evaluation === '선') return '수주'
-  if (isEmpty(result_score) || isEmpty(evaluation)) return '진행중'
+  if (!result_score?.trim() || !evaluation?.trim()) return '진행중'
   return '탈락'
 }
 
@@ -71,44 +129,8 @@ const STATUS_STYLE: Record<ProjectStatus, React.CSSProperties> = {
   취소:   { background: '#f4f4f2', color: '#888',    border: '1px solid #ddd' },
 }
 
-const EMPTY: Omit<Project, 'id' | 'created_at'> = {
-  project_number: '', type: '면접', client: '', name: '',
-  fee: null, tp_score: '', duration_days: '',
-  submit_date: null, interview_date: null, bid_date: null,
-  result_score: '', status: '진행중',
-  evaluation: '', award_fee: null, participants: '', participation_ratio: '',
-  director: '', status_override: null, staff_arch: '', staff_civil: '', staff_mech: '', staff_safety: '',
-  note: '',
-}
-
 const TYPES: ProjectType[] = ['면접', 'SOQ', '종심제', 'TP', 'PQ', '기타']
 const STATUSES: ProjectStatus[] = ['진행중', '수주', '탈락', '취소']
-
-const TOOLTIP_FIELDS: { key: keyof TooltipData; label: string; multiline?: boolean }[] = [
-  { key: 'location', label: '현장위치' },
-  { key: 'client', label: '발주청' },
-  { key: 'director', label: '단장(PM)' },
-  { key: 'duration', label: '용역기간' },
-  { key: 'staff', label: '분야기술자' },
-  { key: 'area', label: '연면적' },
-  { key: 'scale', label: '규모' },
-  { key: 'est_cost', label: '추정공사비' },
-  { key: 'fee', label: '용역비' },
-  { key: 'designer', label: '설계사' },
-  { key: 'builder', label: '시공사' },
-  { key: 'score_dist', label: '배점' },
-  { key: 'competitors', label: '참여업체' },
-  { key: 'proposal_p', label: '제안서(P)' },
-  { key: 'self_intro_p', label: '자기소개서(P)' },
-  { key: 'ppt_p', label: '파워포인트(P)' },
-  { key: 'pq_date', label: 'PQ 제출일' },
-  { key: 'soq_date', label: 'SOQ 제출일' },
-  { key: 'interview_date', label: '발표/면접일' },
-  { key: 'interview_time', label: '면접시간' },
-  { key: 'notify_date', label: '평가통보일' },
-  { key: 'bid_date', label: '개찰일' },
-  { key: 'announcement', label: '공고내용', multiline: true },
-]
 
 export default function ProjectsPage() {
   const supabase = createSupabaseBrowserClient()
@@ -116,15 +138,15 @@ export default function ProjectsPage() {
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState<ProjectStatus | '전체'>('전체')
   const [filterType, setFilterType] = useState<ProjectType | '전체'>('전체')
-  const [modal, setModal] = useState<{ open: boolean; data: Omit<Project, 'id' | 'created_at'>; editId: string | null }>({
-    open: false, data: { ...EMPTY }, editId: null,
+  const [tooltipAll, setTooltipAll] = useState<Record<string, TooltipData>>({})
+  const [tooltipView, setTooltipView] = useState<{ project: Project; data: TooltipData } | null>(null)
+
+  // 통합 편집 모달
+  const [modal, setModal] = useState<{ open: boolean; form: FormData; editId: string | null }>({
+    open: false, form: { ...EMPTY_FORM }, editId: null,
   })
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState<string | null>(null)
-  const [tooltipAll, setTooltipAll] = useState<Record<string, TooltipData>>({})
-  const [tooltipProject, setTooltipProject] = useState<{ project: Project; data: TooltipData } | null>(null)
-  const [tooltipEdit, setTooltipEdit] = useState<{ project: Project; data: TooltipData; isNew: boolean } | null>(null)
-  const [tooltipSaving, setTooltipSaving] = useState(false)
 
   const loadTooltips = useCallback(async () => {
     const { data } = await supabase.from('project_tooltips').select('*')
@@ -150,63 +172,92 @@ export default function ProjectsPage() {
     return matchSearch && matchStatus && matchType
   })
 
-  const openAdd = () => setModal({ open: true, data: { ...EMPTY }, editId: null })
-  const openEdit = (p: Project) => setModal({
-    open: true,
-    data: { project_number: p.project_number, type: p.type, client: p.client, name: p.name, fee: p.fee, tp_score: p.tp_score, duration_days: p.duration_days, submit_date: p.submit_date, interview_date: p.interview_date, bid_date: p.bid_date, result_score: p.result_score, status: computeStatus(p.result_score, p.evaluation, p.participants, p.status_override), evaluation: p.evaluation, award_fee: p.award_fee, participants: p.participants, participation_ratio: p.participation_ratio, director: p.director, status_override: p.status_override, staff_arch: p.staff_arch, staff_civil: p.staff_civil, staff_mech: p.staff_mech, staff_safety: p.staff_safety, note: p.note },
-    editId: p.id,
-  })
+  const openAdd = () => setModal({ open: true, form: { ...EMPTY_FORM }, editId: null })
+
+  const openEdit = (p: Project) => {
+    const tip = tooltipAll[p.project_number] ?? {}
+    setModal({
+      open: true,
+      editId: p.id,
+      form: {
+        project_number: p.project_number, type: p.type, client: p.client, name: p.name,
+        fee: p.fee, tp_score: p.tp_score, duration_days: p.duration_days,
+        submit_date: p.submit_date, interview_date: p.interview_date, bid_date: p.bid_date,
+        result_score: p.result_score, evaluation: p.evaluation, award_fee: p.award_fee,
+        participants: p.participants, participation_ratio: p.participation_ratio,
+        director: p.director, status_override: p.status_override,
+        staff_arch: p.staff_arch, staff_civil: p.staff_civil, staff_mech: p.staff_mech, staff_safety: p.staff_safety,
+        note: p.note,
+        location: tip.location ?? '', area: tip.area ?? '', scale: tip.scale ?? '',
+        est_cost: tip.est_cost ?? '', designer: tip.designer ?? '', builder: tip.builder ?? '',
+        score_dist: tip.score_dist ?? '', competitors: tip.competitors ?? '',
+        proposal_p: tip.proposal_p ?? '', self_intro_p: tip.self_intro_p ?? '', ppt_p: tip.ppt_p ?? '',
+        pq_date: tip.pq_date ?? '', soq_date: tip.soq_date ?? '',
+        interview_time: tip.interview_time ?? '', notify_date: tip.notify_date ?? '',
+        announcement: tip.announcement ?? '',
+      },
+    })
+  }
+
   const closeModal = () => setModal(m => ({ ...m, open: false }))
+  const set = (field: keyof FormData, value: unknown) => setModal(m => ({ ...m, form: { ...m.form, [field]: value } }))
 
   const save = async () => {
-    if (!modal.data.name.trim()) return
+    if (!modal.form.name.trim()) return
     setSaving(true)
     try {
-      const payload = { ...modal.data, status: computeStatus(modal.data.result_score, modal.data.evaluation, modal.data.participants, modal.data.status_override) }
-      if (modal.editId) {
-        await supabase.from('projects').update({ ...payload, updated_at: new Date().toISOString() }).eq('id', modal.editId)
-      } else {
-        await supabase.from('projects').insert(payload)
+      const f = modal.form
+      const projectPayload = {
+        project_number: f.project_number, type: f.type, client: f.client, name: f.name,
+        fee: f.fee, tp_score: f.tp_score, duration_days: f.duration_days,
+        submit_date: f.submit_date || null, interview_date: f.interview_date || null, bid_date: f.bid_date || null,
+        result_score: f.result_score, evaluation: f.evaluation, award_fee: f.award_fee,
+        participants: f.participants, participation_ratio: f.participation_ratio,
+        director: f.director, status_override: f.status_override || null,
+        staff_arch: f.staff_arch, staff_civil: f.staff_civil, staff_mech: f.staff_mech, staff_safety: f.staff_safety,
+        note: f.note,
+        status: computeStatus(f.result_score, f.evaluation, f.participants, f.status_override),
       }
-      await load()
+
+      const tooltipPayload = {
+        project_number: f.project_number,
+        location: f.location, area: f.area, scale: f.scale, est_cost: f.est_cost,
+        designer: f.designer, builder: f.builder, score_dist: f.score_dist, competitors: f.competitors,
+        proposal_p: f.proposal_p, self_intro_p: f.self_intro_p, ppt_p: f.ppt_p,
+        pq_date: f.pq_date, soq_date: f.soq_date, interview_time: f.interview_time,
+        notify_date: f.notify_date, announcement: f.announcement,
+      }
+
+      const hasTooltipData = Object.entries(tooltipPayload)
+        .filter(([k]) => k !== 'project_number')
+        .some(([, v]) => v && String(v).trim() !== '')
+
+      if (modal.editId) {
+        await supabase.from('projects').update({ ...projectPayload, updated_at: new Date().toISOString() }).eq('id', modal.editId)
+        if (hasTooltipData) {
+          await supabase.from('project_tooltips').upsert({ ...tooltipPayload, updated_at: new Date().toISOString() }, { onConflict: 'project_number' })
+        }
+      } else {
+        await supabase.from('projects').insert(projectPayload)
+        if (hasTooltipData) {
+          await supabase.from('project_tooltips').insert(tooltipPayload)
+        }
+      }
+
+      await Promise.all([load(), loadTooltips()])
       closeModal()
     } finally { setSaving(false) }
   }
 
-  const remove = async (id: string) => {
+  const remove = async (id: string, projectNumber: string) => {
     if (!confirm('삭제하시겠습니까?')) return
     setDeleting(id)
-    await supabase.from('projects').delete().eq('id', id)
+    await Promise.all([
+      supabase.from('projects').delete().eq('id', id),
+      supabase.from('project_tooltips').delete().eq('project_number', projectNumber),
+    ])
     await load()
     setDeleting(null)
-  }
-
-  const openTooltipEdit = (p: Project) => {
-    const existing = tooltipAll[p.project_number]
-    setTooltipEdit({ project: p, data: existing ? { ...existing } : { ...EMPTY_TOOLTIP, project_number: p.project_number }, isNew: !existing })
-    setTooltipProject(null)
-  }
-
-  const saveTooltip = async () => {
-    if (!tooltipEdit) return
-    setTooltipSaving(true)
-    try {
-      const payload = { ...tooltipEdit.data, project_number: tooltipEdit.project.project_number }
-      if (tooltipEdit.isNew) {
-        await supabase.from('project_tooltips').insert(payload)
-      } else {
-        await supabase.from('project_tooltips').update({ ...payload, updated_at: new Date().toISOString() }).eq('project_number', tooltipEdit.project.project_number)
-      }
-      await loadTooltips()
-      setTooltipEdit(null)
-    } finally { setTooltipSaving(false) }
-  }
-
-  const deleteTooltip = async (projectNumber: string) => {
-    if (!confirm('툴팁 정보를 삭제하시겠습니까?')) return
-    await supabase.from('project_tooltips').delete().eq('project_number', projectNumber)
-    await loadTooltips()
-    setTooltipProject(null)
   }
 
   const exportCsv = () => {
@@ -223,14 +274,10 @@ export default function ProjectsPage() {
     const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
-    a.href = url
-    a.download = `프로젝트List_${new Date().toISOString().slice(0, 10)}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+    a.href = url; a.download = `프로젝트List_${new Date().toISOString().slice(0, 10)}.csv`
+    a.click(); URL.revokeObjectURL(url)
   }
 
-  const set = (field: string, value: unknown) => setModal(m => ({ ...m, data: { ...m.data, [field]: value } }))
-  const setTip = (field: keyof TooltipData, value: string) => setTooltipEdit(e => e ? { ...e, data: { ...e.data, [field]: value } } : e)
   const totalFee = filtered.reduce((s, p) => s + (p.fee ?? 0), 0)
 
   return (
@@ -290,10 +337,7 @@ export default function ProjectsPage() {
                     <td style={td}>
                       <div style={{ display: 'flex', gap: 4 }}>
                         <button onClick={() => openEdit(p)} style={editBtn}>수정</button>
-                        <button onClick={() => remove(p.id)} disabled={deleting === p.id} style={deleteBtn}>삭제</button>
-                        <button onClick={() => openTooltipEdit(p)} style={{ ...editBtn, background: hasTooltip ? '#eff6ff' : '#f9f9f9', color: hasTooltip ? '#1d4ed8' : '#999', borderColor: hasTooltip ? '#bfdbfe' : '#e8e8e6' }} title={hasTooltip ? '툴팁 편집' : '툴팁 추가'}>
-                          {hasTooltip ? '툴팁✎' : '툴팁+'}
-                        </button>
+                        <button onClick={() => remove(p.id, p.project_number)} disabled={deleting === p.id} style={deleteBtn}>삭제</button>
                       </div>
                     </td>
                     <td style={tdnw}><span style={{ color: '#999' }}>{p.project_number}</span></td>
@@ -302,7 +346,7 @@ export default function ProjectsPage() {
                     <td style={{ ...tdnw, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       <span
                         style={{ fontWeight: 500, color: hasTooltip ? '#1d4ed8' : '#111', cursor: hasTooltip ? 'pointer' : 'default', textDecoration: hasTooltip ? 'underline dotted' : 'none' }}
-                        onClick={() => { const d = tooltipAll[p.project_number]; if (d) setTooltipProject({ project: p, data: d }) }}
+                        onClick={() => { const d = tooltipAll[p.project_number]; if (d) setTooltipView({ project: p, data: d }) }}
                       >{p.name}</span>
                     </td>
                     <td style={{ ...tdnw, textAlign: 'right' }}>{p.fee != null ? p.fee : '-'}</td>
@@ -337,54 +381,54 @@ export default function ProjectsPage() {
       </div>
 
       {/* 툴팁 보기 모달 */}
-      {tooltipProject && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }} onClick={() => setTooltipProject(null)}>
+      {tooltipView && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }} onClick={() => setTooltipView(null)}>
           <div style={{ background: '#fff', borderRadius: 12, width: 620, maxHeight: '88vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }} onClick={e => e.stopPropagation()}>
             <div style={{ padding: '16px 20px', borderBottom: '1px solid #e8e8e6', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, background: '#111', borderRadius: '12px 12px 0 0' }}>
               <div>
-                <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>#{tooltipProject.project.project_number} · {tooltipProject.project.type}</div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: '#fff', lineHeight: 1.4 }}>{tooltipProject.project.name}</div>
+                <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>#{tooltipView.project.project_number} · {tooltipView.project.type}</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: '#fff', lineHeight: 1.4 }}>{tooltipView.project.name}</div>
               </div>
               <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                <button onClick={() => openTooltipEdit(tooltipProject.project)} style={{ border: 'none', background: '#2563eb', color: '#fff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>편집</button>
-                <button onClick={() => deleteTooltip(tooltipProject.project.project_number)} style={{ border: 'none', background: '#dc2626', color: '#fff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>삭제</button>
-                <button onClick={() => setTooltipProject(null)} style={{ border: 'none', background: 'rgba(255,255,255,0.15)', color: '#fff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13 }}>✕</button>
+                <button onClick={() => { openEdit(tooltipView.project); setTooltipView(null) }} style={{ border: 'none', background: '#2563eb', color: '#fff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>편집</button>
+                <button onClick={() => setTooltipView(null)} style={{ border: 'none', background: 'rgba(255,255,255,0.15)', color: '#fff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13 }}>✕</button>
               </div>
             </div>
             <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 0 }}>
               {(() => {
-                const d = tooltipProject.data
-                const p = tooltipProject.project
+                const d = tooltipView.data
+                const p = tooltipView.project
                 const rows: { label: string; value: string }[][] = [
-                  [{ label: '발주청', value: d.client || p.client }, { label: '현장위치', value: d.location || '' }],
-                  [{ label: '단장(PM)', value: d.director || p.director }, { label: '용역기간', value: d.duration || '' }],
-                  [{ label: '분야기술자', value: d.staff || [p.staff_arch && `건축:${p.staff_arch}`, p.staff_civil && `토목:${p.staff_civil}`, p.staff_mech && `기계:${p.staff_mech}`, p.staff_safety && `안전:${p.staff_safety}`].filter(Boolean).join(' / ') || '' }, { label: '용역비', value: d.fee || (p.fee ? `${p.fee}억원` : '') }],
-                  [{ label: '연면적', value: d.area || '' }, { label: '규모', value: (d.scale || '').replace('\n', ' ') }],
+                  [{ label: '발주청', value: p.client }, { label: '현장위치', value: d.location || '' }],
+                  [{ label: '단장(PM)', value: p.director }, { label: '용역기간', value: p.duration_days || '' }],
+                  [{ label: '분야기술자', value: [p.staff_arch && `건축:${p.staff_arch}`, p.staff_civil && `토목:${p.staff_civil}`, p.staff_mech && `기계:${p.staff_mech}`, p.staff_safety && `안전:${p.staff_safety}`].filter(Boolean).join(' / ') || '' }, { label: '용역비', value: p.fee ? `${p.fee}억원` : '' }],
+                  [{ label: '연면적', value: d.area || '' }, { label: '규모', value: d.scale || '' }],
                   [{ label: '추정공사비', value: d.est_cost || '' }, { label: '참여업체', value: d.competitors || p.participants || '' }],
-                  [{ label: '배점', value: d.score_dist || p.duration_days || '' }, { label: '설계사', value: d.designer || '' }],
+                  [{ label: '배점', value: d.score_dist || '' }, { label: '설계사', value: d.designer || '' }],
+                  [{ label: '시공사', value: d.builder || '' }, { label: '', value: '' }],
                 ]
                 return rows.filter(r => r.some(c => c.value)).map((row, ri) => (
                   <div key={ri} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', borderBottom: '1px solid #f5f5f3' }}>
                     {row.map((cell, ci) => (
                       <div key={ci} style={{ padding: '8px 10px', display: 'flex', gap: 8, alignItems: 'baseline' }}>
-                        <span style={{ fontSize: 11, color: '#888', minWidth: 60, flexShrink: 0 }}>{cell.label}</span>
-                        <span style={{ fontSize: 13, color: '#111' }}>{cell.value || '-'}</span>
+                        {cell.label && <span style={{ fontSize: 11, color: '#888', minWidth: 60, flexShrink: 0 }}>{cell.label}</span>}
+                        {cell.label && <span style={{ fontSize: 13, color: '#111' }}>{cell.value || '-'}</span>}
                       </div>
                     ))}
                   </div>
                 ))
               })()}
-              {(tooltipProject.data.pq_date || tooltipProject.data.soq_date || tooltipProject.data.interview_date || tooltipProject.data.bid_date) && (
+              {(tooltipView.data.pq_date || tooltipView.data.soq_date || tooltipView.project.interview_date || tooltipView.project.bid_date) && (
                 <div style={{ marginTop: 10 }}>
                   <div style={{ fontSize: 11, fontWeight: 600, color: '#555', padding: '6px 10px', background: '#f8f8f7', borderRadius: 6, marginBottom: 4 }}>입찰 일정</div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', borderBottom: '1px solid #f5f5f3' }}>
                     {[
-                      { label: 'PQ 제출일', value: tooltipProject.data.pq_date || '' },
-                      { label: 'SOQ 제출일', value: tooltipProject.data.soq_date || '' },
-                      { label: '발표/면접일', value: tooltipProject.data.interview_date || '' },
-                      { label: '면접시간', value: tooltipProject.data.interview_time || '' },
-                      { label: '개찰일', value: tooltipProject.data.bid_date || tooltipProject.project.bid_date || '' },
-                      { label: '평가통보일', value: tooltipProject.data.notify_date || '' },
+                      { label: 'PQ 제출일', value: tooltipView.data.pq_date || '' },
+                      { label: 'SOQ 제출일', value: tooltipView.data.soq_date || '' },
+                      { label: '발표/면접일', value: tooltipView.project.interview_date || '' },
+                      { label: '면접시간', value: tooltipView.data.interview_time || '' },
+                      { label: '개찰일', value: tooltipView.project.bid_date || '' },
+                      { label: '평가통보일', value: tooltipView.data.notify_date || '' },
                     ].filter(c => c.value).map((cell, ci) => (
                       <div key={ci} style={{ padding: '7px 10px', display: 'flex', gap: 8, alignItems: 'baseline' }}>
                         <span style={{ fontSize: 11, color: '#888', minWidth: 64, flexShrink: 0 }}>{cell.label}</span>
@@ -394,14 +438,14 @@ export default function ProjectsPage() {
                   </div>
                 </div>
               )}
-              {(tooltipProject.data.proposal_p || tooltipProject.data.self_intro_p || tooltipProject.data.ppt_p) && (
+              {(tooltipView.data.proposal_p || tooltipView.data.self_intro_p || tooltipView.data.ppt_p) && (
                 <div style={{ marginTop: 10 }}>
                   <div style={{ fontSize: 11, fontWeight: 600, color: '#555', padding: '6px 10px', background: '#f8f8f7', borderRadius: 6, marginBottom: 4 }}>점수 배분</div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', borderBottom: '1px solid #f5f5f3' }}>
                     {[
-                      { label: '제안서(P)', value: tooltipProject.data.proposal_p || '' },
-                      { label: '자기소개서(P)', value: tooltipProject.data.self_intro_p || '' },
-                      { label: '파워포인트(P)', value: tooltipProject.data.ppt_p || '' },
+                      { label: '제안서(P)', value: tooltipView.data.proposal_p || '' },
+                      { label: '자기소개서(P)', value: tooltipView.data.self_intro_p || '' },
+                      { label: '파워포인트(P)', value: tooltipView.data.ppt_p || '' },
                     ].map((cell, ci) => (
                       <div key={ci} style={{ padding: '7px 10px', display: 'flex', gap: 8, alignItems: 'baseline' }}>
                         <span style={{ fontSize: 11, color: '#888', minWidth: 60, flexShrink: 0 }}>{cell.label}</span>
@@ -411,10 +455,10 @@ export default function ProjectsPage() {
                   </div>
                 </div>
               )}
-              {tooltipProject.data.announcement && (
+              {tooltipView.data.announcement && (
                 <div style={{ marginTop: 10 }}>
                   <div style={{ fontSize: 11, fontWeight: 600, color: '#555', padding: '6px 10px', background: '#f8f8f7', borderRadius: 6, marginBottom: 6 }}>공고 내용</div>
-                  <pre style={{ fontSize: 12, color: '#333', lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: '#fafafa', border: '1px solid #f0f0ee', borderRadius: 6, padding: '10px 12px', margin: 0 }}>{tooltipProject.data.announcement}</pre>
+                  <pre style={{ fontSize: 12, color: '#333', lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: '#fafafa', border: '1px solid #f0f0ee', borderRadius: 6, padding: '10px 12px', margin: 0 }}>{tooltipView.data.announcement}</pre>
                 </div>
               )}
             </div>
@@ -422,97 +466,131 @@ export default function ProjectsPage() {
         </div>
       )}
 
-      {/* 툴팁 편집 모달 */}
-      {tooltipEdit && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300 }}>
-          <div style={{ background: '#fff', borderRadius: 12, width: 640, maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}>
-            <div style={{ padding: '16px 20px', borderBottom: '1px solid #e8e8e6', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#111', borderRadius: '12px 12px 0 0' }}>
-              <div>
-                <div style={{ fontSize: 11, color: '#aaa' }}>#{tooltipEdit.project.project_number} 툴팁 {tooltipEdit.isNew ? '추가' : '편집'}</div>
-                <div style={{ fontSize: 14, fontWeight: 600, color: '#fff', marginTop: 2 }}>{tooltipEdit.project.name}</div>
-              </div>
-              <button onClick={() => setTooltipEdit(null)} style={{ border: 'none', background: 'rgba(255,255,255,0.15)', color: '#fff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13 }}>✕</button>
-            </div>
-            <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {TOOLTIP_FIELDS.map(f => (
-                <div key={f.key}>
-                  <div style={{ fontSize: 11, color: '#888', marginBottom: 3 }}>{f.label}</div>
-                  {f.multiline ? (
-                    <textarea
-                      value={(tooltipEdit.data[f.key] as string) || ''}
-                      onChange={e => setTip(f.key, e.target.value)}
-                      rows={6}
-                      style={{ width: '100%', padding: '8px 10px', border: '1px solid #e8e8e6', borderRadius: 6, fontSize: 12, fontFamily: 'inherit', lineHeight: 1.6, resize: 'vertical', boxSizing: 'border-box' }}
-                    />
-                  ) : (
-                    <input
-                      value={(tooltipEdit.data[f.key] as string) || ''}
-                      onChange={e => setTip(f.key, e.target.value)}
-                      style={{ width: '100%', height: 34, padding: '0 10px', border: '1px solid #e8e8e6', borderRadius: 6, fontSize: 13, boxSizing: 'border-box' }}
-                    />
-                  )}
-                </div>
-              ))}
-            </div>
-            <div style={{ padding: '0 20px 20px', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button onClick={() => setTooltipEdit(null)} style={outlineBtn}>취소</button>
-              <button onClick={saveTooltip} disabled={tooltipSaving} style={{ ...primaryBtn, opacity: tooltipSaving ? 0.6 : 1 }}>{tooltipSaving ? '저장 중...' : '저장'}</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 프로젝트 편집 모달 */}
+      {/* 통합 추가/수정 모달 */}
       {modal.open && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-          <div style={{ background: '#fff', borderRadius: 12, padding: '28px', width: 560, maxHeight: '90vh', overflowY: 'auto' }}>
-            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 20 }}>{modal.editId ? '프로젝트 수정' : '프로젝트 추가'}</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <Row2>
-                <Field label="공사번호"><input style={inp} value={modal.data.project_number} onChange={e => set('project_number', e.target.value)} placeholder="2641" /></Field>
-                <Field label="유형"><select style={inp} value={modal.data.type} onChange={e => set('type', e.target.value)}>{TYPES.map(t => <option key={t}>{t}</option>)}</select></Field>
-              </Row2>
-              <Field label="발주처"><input style={inp} value={modal.data.client} onChange={e => set('client', e.target.value)} placeholder="발주처" /></Field>
-              <Field label="용역명 *"><input style={inp} value={modal.data.name} onChange={e => set('name', e.target.value)} placeholder="용역명" /></Field>
-              <Row3>
-                <Field label="용역비(억)"><input style={inp} type="number" value={modal.data.fee ?? ''} onChange={e => set('fee', e.target.value ? parseFloat(e.target.value) : null)} placeholder="0.0" /></Field>
-                <Field label="T/P 배점"><input style={inp} value={modal.data.tp_score} onChange={e => set('tp_score', e.target.value)} placeholder="20p" /></Field>
-                <Field label="기간(일)"><input style={inp} value={modal.data.duration_days} onChange={e => set('duration_days', e.target.value)} placeholder="30" /></Field>
-              </Row3>
-              <Row3>
-                <Field label="제출일"><input style={inp} type="date" value={modal.data.submit_date ?? ''} onChange={e => set('submit_date', e.target.value || null)} /></Field>
-                <Field label="발표/면접일"><input style={inp} type="date" value={modal.data.interview_date ?? ''} onChange={e => set('interview_date', e.target.value || null)} /></Field>
-                <Field label="개찰일"><input style={inp} type="date" value={modal.data.bid_date ?? ''} onChange={e => set('bid_date', e.target.value || null)} /></Field>
-              </Row3>
-              <Row3>
-                <Field label="결과(등급)"><input style={inp} value={modal.data.result_score} onChange={e => set('result_score', e.target.value)} placeholder="선/수/우/1등" /></Field>
-                <Field label="낙찰사"><input style={inp} value={modal.data.evaluation} onChange={e => set('evaluation', e.target.value)} placeholder="업체명" /></Field>
-                <Field label="낙찰액(억)"><input style={inp} type="number" value={modal.data.award_fee ?? ''} onChange={e => set('award_fee', e.target.value ? parseFloat(e.target.value) : null)} placeholder="0.0" /></Field>
-              </Row3>
-              <Row2>
-                <Field label="단장"><input style={inp} value={modal.data.director} onChange={e => set('director', e.target.value)} placeholder="단장" /></Field>
-                <Field label="참여사 수"><input style={inp} value={modal.data.participants} onChange={e => set('participants', e.target.value)} placeholder="9개사" /></Field>
-              </Row2>
-              <Field label="상태 강제지정 (자동 계산 무시)">
-                <select style={inp} value={modal.data.status_override ?? ''} onChange={e => set('status_override', e.target.value || null)}>
-                  <option value="">자동 (낙찰사 기준)</option>
-                  {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
-                </select>
-              </Field>
-              <Row2>
-                <Field label="건축"><input style={inp} value={modal.data.staff_arch} onChange={e => set('staff_arch', e.target.value)} placeholder="담당자" /></Field>
-                <Field label="토목"><input style={inp} value={modal.data.staff_civil} onChange={e => set('staff_civil', e.target.value)} placeholder="담당자" /></Field>
-              </Row2>
-              <Row2>
-                <Field label="기계"><input style={inp} value={modal.data.staff_mech} onChange={e => set('staff_mech', e.target.value)} placeholder="담당자" /></Field>
-                <Field label="안전"><input style={inp} value={modal.data.staff_safety} onChange={e => set('staff_safety', e.target.value)} placeholder="담당자" /></Field>
-              </Row2>
-              <Row2>
-                <Field label="참여비율"><input style={inp} value={modal.data.participation_ratio} onChange={e => set('participation_ratio', e.target.value)} placeholder="98.13" /></Field>
-                <Field label="비고"><input style={inp} value={modal.data.note} onChange={e => set('note', e.target.value)} placeholder="메모" /></Field>
-              </Row2>
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+          <div style={{ background: '#fff', borderRadius: 12, width: 680, maxHeight: '92vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.2)', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ padding: '16px 24px', borderBottom: '1px solid #e8e8e6', background: '#111', borderRadius: '12px 12px 0 0', flexShrink: 0 }}>
+              <div style={{ fontSize: 15, fontWeight: 600, color: '#fff' }}>{modal.editId ? '프로젝트 수정' : '프로젝트 추가'}</div>
+              <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>기본 정보와 상세 내용을 함께 입력합니다</div>
             </div>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 20 }}>
+
+            <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 0, overflowY: 'auto' }}>
+
+              {/* 섹션 1: 기본 정보 */}
+              <SectionTitle>기본 정보</SectionTitle>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
+                <Row2>
+                  <Field label="공사번호"><input style={inp} value={modal.form.project_number} onChange={e => set('project_number', e.target.value)} placeholder="2647" /></Field>
+                  <Field label="유형"><select style={inp} value={modal.form.type} onChange={e => set('type', e.target.value)}>{TYPES.map(t => <option key={t}>{t}</option>)}</select></Field>
+                </Row2>
+                <Field label="발주처"><input style={inp} value={modal.form.client} onChange={e => set('client', e.target.value)} placeholder="발주처명" /></Field>
+                <Field label="용역명 *"><input style={inp} value={modal.form.name} onChange={e => set('name', e.target.value)} placeholder="용역명" /></Field>
+                <Row2>
+                  <Field label="현장위치"><input style={inp} value={modal.form.location} onChange={e => set('location', e.target.value)} placeholder="시/도 군/구 동/면" /></Field>
+                  <Field label="단장(PM)"><input style={inp} value={modal.form.director} onChange={e => set('director', e.target.value)} placeholder="담당자명" /></Field>
+                </Row2>
+              </div>
+
+              {/* 섹션 2: 용역 상세 */}
+              <SectionTitle>용역 상세</SectionTitle>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
+                <Row3>
+                  <Field label="용역비(억)"><input style={inp} type="number" value={modal.form.fee ?? ''} onChange={e => set('fee', e.target.value ? parseFloat(e.target.value) : null)} placeholder="0.0" /></Field>
+                  <Field label="용역기간"><input style={inp} value={modal.form.duration_days} onChange={e => set('duration_days', e.target.value)} placeholder="24개월" /></Field>
+                  <Field label="추정공사비"><input style={inp} value={modal.form.est_cost} onChange={e => set('est_cost', e.target.value)} placeholder="500억원" /></Field>
+                </Row3>
+                <Row2>
+                  <Field label="연면적"><input style={inp} value={modal.form.area} onChange={e => set('area', e.target.value)} placeholder="12,000㎡" /></Field>
+                  <Field label="규모"><input style={inp} value={modal.form.scale} onChange={e => set('scale', e.target.value)} placeholder="B2/15F" /></Field>
+                </Row2>
+                <Row2>
+                  <Field label="설계사"><input style={inp} value={modal.form.designer} onChange={e => set('designer', e.target.value)} placeholder="설계사명" /></Field>
+                  <Field label="시공사"><input style={inp} value={modal.form.builder} onChange={e => set('builder', e.target.value)} placeholder="시공사명" /></Field>
+                </Row2>
+              </div>
+
+              {/* 섹션 3: 인력 배치 */}
+              <SectionTitle>인력 배치</SectionTitle>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
+                <Row2>
+                  <Field label="건축"><input style={inp} value={modal.form.staff_arch} onChange={e => set('staff_arch', e.target.value)} placeholder="담당자명" /></Field>
+                  <Field label="토목"><input style={inp} value={modal.form.staff_civil} onChange={e => set('staff_civil', e.target.value)} placeholder="담당자명" /></Field>
+                </Row2>
+                <Row2>
+                  <Field label="기계"><input style={inp} value={modal.form.staff_mech} onChange={e => set('staff_mech', e.target.value)} placeholder="담당자명" /></Field>
+                  <Field label="안전"><input style={inp} value={modal.form.staff_safety} onChange={e => set('staff_safety', e.target.value)} placeholder="담당자명" /></Field>
+                </Row2>
+              </div>
+
+              {/* 섹션 4: 제안/평가 배점 */}
+              <SectionTitle>제안 / 평가 배점</SectionTitle>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
+                <Row3>
+                  <Field label="T/P 배점"><input style={inp} value={modal.form.tp_score} onChange={e => set('tp_score', e.target.value)} placeholder="20p" /></Field>
+                  <Field label="배점 기준"><input style={inp} value={modal.form.score_dist} onChange={e => set('score_dist', e.target.value)} placeholder="4.5(책임3+분야1.5)" /></Field>
+                  <Field label="참여업체 수"><input style={inp} value={modal.form.participants} onChange={e => set('participants', e.target.value)} placeholder="9개사" /></Field>
+                </Row3>
+                <Row3>
+                  <Field label="제안서(P)"><input style={inp} value={modal.form.proposal_p} onChange={e => set('proposal_p', e.target.value)} placeholder="8p" /></Field>
+                  <Field label="자기소개서(P)"><input style={inp} value={modal.form.self_intro_p} onChange={e => set('self_intro_p', e.target.value)} placeholder="각 2p" /></Field>
+                  <Field label="파워포인트(P)"><input style={inp} value={modal.form.ppt_p} onChange={e => set('ppt_p', e.target.value)} placeholder="20p" /></Field>
+                </Row3>
+              </div>
+
+              {/* 섹션 5: 일정 */}
+              <SectionTitle>일정</SectionTitle>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
+                <Row3>
+                  <Field label="제출일"><input style={inp} type="date" value={modal.form.submit_date ?? ''} onChange={e => set('submit_date', e.target.value || null)} /></Field>
+                  <Field label="PQ 제출일"><input style={inp} value={modal.form.pq_date} onChange={e => set('pq_date', e.target.value)} placeholder="2026-07-01" /></Field>
+                  <Field label="SOQ 제출일"><input style={inp} value={modal.form.soq_date} onChange={e => set('soq_date', e.target.value)} placeholder="2026-07-01" /></Field>
+                </Row3>
+                <Row3>
+                  <Field label="발표/면접일"><input style={inp} type="date" value={modal.form.interview_date ?? ''} onChange={e => set('interview_date', e.target.value || null)} /></Field>
+                  <Field label="면접시간"><input style={inp} value={modal.form.interview_time} onChange={e => set('interview_time', e.target.value)} placeholder="5분/4분" /></Field>
+                  <Field label="평가통보일"><input style={inp} value={modal.form.notify_date} onChange={e => set('notify_date', e.target.value)} placeholder="2026-07-10" /></Field>
+                </Row3>
+                <Field label="개찰일"><input style={inp} type="date" value={modal.form.bid_date ?? ''} onChange={e => set('bid_date', e.target.value || null)} /></Field>
+              </div>
+
+              {/* 섹션 6: 결과 */}
+              <SectionTitle>결과</SectionTitle>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
+                <Row3>
+                  <Field label="결과(등급)"><input style={inp} value={modal.form.result_score} onChange={e => set('result_score', e.target.value)} placeholder="선/수/우/1등" /></Field>
+                  <Field label="낙찰사"><input style={inp} value={modal.form.evaluation} onChange={e => set('evaluation', e.target.value)} placeholder="업체명" /></Field>
+                  <Field label="낙찰액(억)"><input style={inp} type="number" value={modal.form.award_fee ?? ''} onChange={e => set('award_fee', e.target.value ? parseFloat(e.target.value) : null)} placeholder="0.0" /></Field>
+                </Row3>
+                <Row2>
+                  <Field label="참여비율"><input style={inp} value={modal.form.participation_ratio} onChange={e => set('participation_ratio', e.target.value)} placeholder="98.13" /></Field>
+                  <Field label="경쟁사"><input style={inp} value={modal.form.competitors} onChange={e => set('competitors', e.target.value)} placeholder="참여 업체명" /></Field>
+                </Row2>
+                <Field label="상태 강제지정">
+                  <select style={inp} value={modal.form.status_override ?? ''} onChange={e => set('status_override', e.target.value || null)}>
+                    <option value="">자동 (낙찰사 기준)</option>
+                    {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </Field>
+              </div>
+
+              {/* 섹션 7: 공고 내용 */}
+              <SectionTitle>공고 내용 / 비고</SectionTitle>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 8 }}>
+                <Field label="공고 내용">
+                  <textarea
+                    value={modal.form.announcement}
+                    onChange={e => set('announcement', e.target.value)}
+                    rows={6}
+                    placeholder="공고문 주요 내용 붙여넣기..."
+                    style={{ width: '100%', padding: '8px 10px', border: '1px solid #e8e8e6', borderRadius: 6, fontSize: 12, fontFamily: 'inherit', lineHeight: 1.6, resize: 'vertical', boxSizing: 'border-box' }}
+                  />
+                </Field>
+                <Field label="비고"><input style={inp} value={modal.form.note} onChange={e => set('note', e.target.value)} placeholder="메모" /></Field>
+              </div>
+            </div>
+
+            <div style={{ padding: '12px 24px 20px', display: 'flex', gap: 8, justifyContent: 'flex-end', borderTop: '1px solid #f0f0ee', flexShrink: 0 }}>
               <button onClick={closeModal} style={outlineBtn}>취소</button>
               <button onClick={save} disabled={saving} style={{ ...primaryBtn, opacity: saving ? 0.6 : 1 }}>{saving ? '저장 중...' : '저장'}</button>
             </div>
@@ -523,6 +601,13 @@ export default function ProjectsPage() {
   )
 }
 
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ fontSize: 11, fontWeight: 600, color: '#555', letterSpacing: '0.05em', textTransform: 'uppercase', padding: '6px 10px', background: '#f4f4f2', borderRadius: 6, marginBottom: 10 }}>
+      {children}
+    </div>
+  )
+}
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return <div><div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>{label}</div>{children}</div>
 }
