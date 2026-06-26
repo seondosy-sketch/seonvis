@@ -8,6 +8,7 @@ interface CalEvent {
   type: 'submit' | 'interview' | 'result'
   color: string
   bg: string
+  note?: string
 }
 
 interface DayEvents {
@@ -48,15 +49,18 @@ function weekRange(week: string): [Date, Date] {
 export default function WeeklyCalendar({
   week,
   performing,
+  notes,
 }: {
   week: string
   performing: PerformingProject[]
+  notes?: Record<string, Record<string, string>>
 }) {
   const [weekStart] = weekRange(week)
   const refYear = weekStart.getFullYear()
 
   const [viewMonth, setViewMonth] = useState(() => weekStart.getMonth())
   const [viewYear, setViewYear] = useState(() => weekStart.getFullYear())
+  const [tooltip, setTooltip] = useState<{ note: string; x: number; y: number } | null>(null)
 
   // week prop이 바뀌면 달력도 해당 주차 월로 이동
   useEffect(() => {
@@ -65,24 +69,30 @@ export default function WeeklyCalendar({
     setViewYear(ws.getFullYear())
   }, [week])
 
+  const FIELD_MAP: Record<keyof typeof TYPE_META, string> = {
+    submit: 'submit_date', interview: 'interview_date', result: 'bid_date',
+  }
+
   const events: DayEvents = useMemo(() => {
     const map: DayEvents = {}
-    const add = (raw: string, type: keyof typeof TYPE_META, name: string) => {
+    const add = (raw: string, type: keyof typeof TYPE_META, name: string, fullName: string) => {
       const d = parseDate(raw, refYear)
       if (!d) return
       const key = dateKey(d)
       if (!map[key]) map[key] = []
-      map[key].push({ ...TYPE_META[type], label: `${TYPE_META[type].label} ${name}`, type })
+      const note = notes?.[fullName]?.[FIELD_MAP[type]]
+      map[key].push({ ...TYPE_META[type], label: `${TYPE_META[type].label} ${name}`, type, note })
     }
     for (const p of performing) {
       if (!p.name) continue
       const short = p.name.length > 14 ? p.name.slice(0, 14) + '…' : p.name
-      add(p.submit_date,    'submit',    short)
-      add(p.interview_date, 'interview', short)
-      add(p.result_date,    'result',    short)
+      add(p.submit_date,    'submit',    short, p.name)
+      add(p.interview_date, 'interview', short, p.name)
+      add(p.result_date,    'result',    short, p.name)
     }
     return map
-  }, [performing, refYear])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [performing, refYear, notes])
 
   const [wStart, wEnd] = weekRange(week)
   const isInWeek = (d: Date) => d >= wStart && d <= wEnd
@@ -127,6 +137,7 @@ export default function WeeklyCalendar({
   }
 
   return (
+    <div style={{ position: 'relative' }}>
     <div style={{ background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8, marginBottom: 12 }}>
       {/* Header */}
       <div style={{ padding: '10px 16px', borderBottom: '1px solid #f0f0ee', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -192,14 +203,24 @@ export default function WeeklyCalendar({
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                     {evs.map((ev, ei) => (
-                      <div key={ei} title={ev.label} style={{
-                        fontSize: 11, lineHeight: 1.4,
-                        background: ev.bg, color: ev.color,
-                        borderRadius: 3, padding: '2px 5px',
-                        overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
-                        maxWidth: '100%', fontWeight: 500,
-                      }}>
-                        {ev.label}
+                      <div
+                        key={ei}
+                        onMouseEnter={ev.note ? (e) => {
+                          const r = e.currentTarget.getBoundingClientRect()
+                          setTooltip({ note: ev.note!, x: r.left, y: r.bottom + 6 })
+                        } : undefined}
+                        onMouseLeave={ev.note ? () => setTooltip(null) : undefined}
+                        style={{
+                          fontSize: 11, lineHeight: 1.4,
+                          background: ev.bg, color: ev.color,
+                          borderRadius: 3, padding: '2px 5px',
+                          overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
+                          maxWidth: '100%', fontWeight: 500,
+                          cursor: ev.note ? 'default' : undefined,
+                          outline: ev.note ? `1px solid ${ev.color}` : undefined,
+                        }}
+                      >
+                        {ev.label}{ev.note ? ' ●' : ''}
                       </div>
                     ))}
                   </div>
@@ -209,6 +230,22 @@ export default function WeeklyCalendar({
           </div>
         ))}
       </div>
+    </div>
+
+    {/* 메모 hover 툴팁 */}
+    {tooltip && (
+      <div style={{
+        position: 'fixed', zIndex: 999,
+        left: tooltip.x, top: tooltip.y,
+        background: '#111', color: '#fff',
+        fontSize: 12, borderRadius: 6, padding: '8px 12px',
+        maxWidth: 260, lineHeight: 1.6,
+        boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+        pointerEvents: 'none', whiteSpace: 'pre-wrap',
+      }}>
+        {tooltip.note}
+      </div>
+    )}
     </div>
   )
 }

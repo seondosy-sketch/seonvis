@@ -77,9 +77,24 @@ export default function DashboardPage() {
 
   // Calendar
   const [performing, setPerforming] = useState<PerformingProject[]>([])
+  const [calNotes, setCalNotes] = useState<Record<string, Record<string, string>>>({})
+
   const loadPerforming = useCallback(async () => {
-    const { data } = await supabase.from('performing_projects').select('*').eq('week', week).order('sort_order')
-    if (data) setPerforming(data as PerformingProject[])
+    const [{ data: perf }, { data: projs }, { data: notesData }] = await Promise.all([
+      supabase.from('performing_projects').select('*').eq('week', week).order('sort_order'),
+      supabase.from('projects').select('project_number, name'),
+      supabase.from('project_notes').select('*'),
+    ])
+    if (perf) setPerforming(perf as PerformingProject[])
+    if (projs && notesData) {
+      const numToName: Record<string, string> = Object.fromEntries(projs.map((p: {project_number: string; name: string}) => [p.project_number, p.name]))
+      const map: Record<string, Record<string, string>> = {}
+      for (const n of notesData) {
+        const name = numToName[n.project_number]
+        if (name) { if (!map[name]) map[name] = {}; map[name][n.field] = n.note }
+      }
+      setCalNotes(map)
+    }
   }, [week])
   useEffect(() => {
     loadPerforming()
@@ -157,7 +172,7 @@ export default function DashboardPage() {
       <div style={{ overflow: 'hidden', padding: '16px 16px 8px 24px', display: 'flex', flexDirection: 'column' }}>
         <div style={{ flex: 1, overflow: 'hidden', borderRadius: 8, border: '1px solid #e8e8e6', background: '#fff' }}>
           <div style={{ height: '100%', overflow: 'auto' }}>
-            <WeeklyCalendar week={week} performing={performing} />
+            <WeeklyCalendar week={week} performing={performing} notes={calNotes} />
           </div>
         </div>
       </div>

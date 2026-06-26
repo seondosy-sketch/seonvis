@@ -135,6 +135,7 @@ export default function Dashboard() {
   const [saveMsg, setSaveMsg] = useState('')
   const [projectRefs, setProjectRefs] = useState<ProjectRef[]>([])
   const [copying, setCopying] = useState(false)
+  const [calNotes, setCalNotes] = useState<Record<string, Record<string, string>>>({})
 
   const loadRefs = useCallback(async () => {
     const { data } = await createSupabaseBrowserClient()
@@ -151,14 +152,24 @@ export default function Dashboard() {
   }, [loadRefs])
 
   const load = useCallback(async () => {
-    const [{ data: p }, { data: e }, { data: m }, { data: refs }] = await Promise.all([
+    const [{ data: p }, { data: e }, { data: m }, { data: refs }, { data: notesData }] = await Promise.all([
       supabase.from('performing_projects').select('*').eq('week', week).order('sort_order'),
       supabase.from('expected_projects').select('*').eq('week', week).order('sort_order'),
       supabase.from('weekly_meta').select('*').eq('week', week).maybeSingle(),
-      createSupabaseBrowserClient().from('projects').select('name,director,client,fee,submit_date,interview_date,bid_date,result_score,evaluation,participants,status_override,staff_arch,staff_civil,staff_mech,staff_safety').order('project_number', { ascending: false }),
+      createSupabaseBrowserClient().from('projects').select('name,project_number,director,client,fee,submit_date,interview_date,bid_date,result_score,evaluation,participants,status_override,staff_arch,staff_civil,staff_mech,staff_safety').order('project_number', { ascending: false }),
+      createSupabaseBrowserClient().from('project_notes').select('*'),
     ])
-    const allRefs = (refs ?? []) as ProjectRef[]
+    const allRefs = (refs ?? []) as (ProjectRef & { project_number: string })[]
     setProjectRefs(allRefs)
+
+    if (notesData) {
+      const map: Record<string, Record<string, string>> = {}
+      for (const n of notesData) {
+        const ref = allRefs.find(r => r.project_number === n.project_number)
+        if (ref) { if (!map[ref.name]) map[ref.name] = {}; map[ref.name][n.field] = n.note }
+      }
+      setCalNotes(map)
+    }
 
     const { start: weekStart } = getWeekRange(week)
     const jinhaengRefs = allRefs.filter(r => categorizeProject(r, weekStart) === '진행중')
