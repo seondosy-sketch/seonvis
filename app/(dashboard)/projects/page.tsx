@@ -140,6 +140,9 @@ export default function ProjectsPage() {
   const [filterType, setFilterType] = useState<ProjectType | '전체'>('전체')
   const [tooltipAll, setTooltipAll] = useState<Record<string, TooltipData>>({})
   const [tooltipView, setTooltipView] = useState<{ project: Project; data: TooltipData } | null>(null)
+  const [notes, setNotes] = useState<Record<string, Record<string, string>>>({})
+  const [notePopup, setNotePopup] = useState<{ projectNumber: string; field: string; draft: string; rect: DOMRect } | null>(null)
+  const [noteSaving, setNoteSaving] = useState(false)
 
   // 통합 편집 모달
   const [modal, setModal] = useState<{ open: boolean; form: FormData; editId: string | null }>({
@@ -147,6 +150,39 @@ export default function ProjectsPage() {
   })
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState<string | null>(null)
+
+  const loadNotes = useCallback(async () => {
+    const { data } = await supabase.from('project_notes').select('*')
+    if (data) {
+      const map: Record<string, Record<string, string>> = {}
+      for (const row of data) {
+        if (!map[row.project_number]) map[row.project_number] = {}
+        map[row.project_number][row.field] = row.note
+      }
+      setNotes(map)
+    }
+  }, [])
+
+  const openNote = (e: React.MouseEvent, projectNumber: string, field: string) => {
+    e.stopPropagation()
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    const draft = notes[projectNumber]?.[field] ?? ''
+    setNotePopup({ projectNumber, field, draft, rect })
+  }
+
+  const saveNote = async () => {
+    if (!notePopup) return
+    setNoteSaving(true)
+    const { projectNumber, field, draft } = notePopup
+    if (draft.trim()) {
+      await supabase.from('project_notes').upsert({ project_number: projectNumber, field, note: draft, updated_at: new Date().toISOString() }, { onConflict: 'project_number,field' })
+    } else {
+      await supabase.from('project_notes').delete().eq('project_number', projectNumber).eq('field', field)
+    }
+    await loadNotes()
+    setNotePopup(null)
+    setNoteSaving(false)
+  }
 
   const loadTooltips = useCallback(async () => {
     const { data } = await supabase.from('project_tooltips').select('*')
@@ -162,7 +198,7 @@ export default function ProjectsPage() {
     if (data) setProjects(data as Project[])
   }, [])
 
-  useEffect(() => { load(); loadTooltips() }, [load, loadTooltips])
+  useEffect(() => { load(); loadTooltips(); loadNotes() }, [load, loadTooltips, loadNotes])
 
   const filtered = projects.filter(p => {
     const q = search.toLowerCase()
@@ -342,7 +378,7 @@ export default function ProjectsPage() {
                     </td>
                     <td style={tdnw}><span style={{ color: '#999' }}>{p.project_number}</span></td>
                     <td style={tdnw}><span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 3, background: '#f0f0ee', color: '#555' }}>{p.type}</span></td>
-                    <td style={{ ...tdnw, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.client}</td>
+                    <td style={{ ...tdnw, maxWidth: 120 }}><NoteCell value={p.client} note={notes[p.project_number]?.['client']} onNote={e => openNote(e, p.project_number, 'client')} /></td>
                     <td style={{ ...tdnw, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       <span
                         style={{ fontWeight: 500, color: hasTooltip ? '#1d4ed8' : '#111', cursor: hasTooltip ? 'pointer' : 'default', textDecoration: hasTooltip ? 'underline dotted' : 'none' }}
@@ -352,13 +388,13 @@ export default function ProjectsPage() {
                     <td style={{ ...tdnw, textAlign: 'right' }}>{p.fee != null ? p.fee : '-'}</td>
                     <td style={tdnw}>{p.tp_score}</td>
                     <td style={tdnw}>{p.duration_days}</td>
-                    <td style={tdnw}>{p.submit_date ?? '-'}</td>
-                    <td style={tdnw}>{p.interview_date ?? '-'}</td>
-                    <td style={tdnw}>{p.bid_date ?? '-'}</td>
+                    <td style={tdnw}><NoteCell value={p.submit_date ?? '-'} note={notes[p.project_number]?.['submit_date']} onNote={e => openNote(e, p.project_number, 'submit_date')} /></td>
+                    <td style={tdnw}><NoteCell value={p.interview_date ?? '-'} note={notes[p.project_number]?.['interview_date']} onNote={e => openNote(e, p.project_number, 'interview_date')} /></td>
+                    <td style={tdnw}><NoteCell value={p.bid_date ?? '-'} note={notes[p.project_number]?.['bid_date']} onNote={e => openNote(e, p.project_number, 'bid_date')} /></td>
                     <td style={tdnw}><span style={{ fontWeight: 600, color: p.result_score ? '#111' : '#ccc' }}>{p.result_score || '-'}</span></td>
                     <td style={{ ...tdnw, maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.evaluation}</td>
                     <td style={{ ...tdnw, textAlign: 'right' }}>{p.award_fee != null ? p.award_fee : '-'}</td>
-                    <td style={tdnw}>{(p.participants.match(/\d+개사/) ?? [''])[0] || p.participants}</td>
+                    <td style={tdnw}><NoteCell value={(p.participants.match(/\d+개사/) ?? [''])[0] || p.participants} note={notes[p.project_number]?.['competitors']} onNote={e => openNote(e, p.project_number, 'competitors')} /></td>
                     <td style={tdnw}>{p.director}</td>
                     <td style={tdnw}>{p.staff_arch}</td>
                     <td style={tdnw}>{p.staff_civil}</td>
@@ -466,6 +502,42 @@ export default function ProjectsPage() {
           </div>
         </div>
       )}
+
+      {/* 메모 팝업 */}
+      {notePopup && (() => {
+        const top = notePopup.rect.bottom + window.scrollY + 4
+        const left = Math.min(notePopup.rect.left + window.scrollX, window.innerWidth - 300)
+        return (
+          <div style={{ position: 'fixed', inset: 0, zIndex: 300 }} onClick={() => setNotePopup(null)}>
+            <div
+              style={{ position: 'absolute', top, left, width: 280, background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.12)', padding: 12 }}
+              onClick={e => e.stopPropagation()}
+            >
+              <div style={{ fontSize: 11, color: '#888', marginBottom: 6 }}>
+                {{ client: '발주처', submit_date: '제출일', interview_date: '발표일', bid_date: '개찰일', competitors: '참여사' }[notePopup.field]} 메모
+              </div>
+              <textarea
+                autoFocus
+                value={notePopup.draft}
+                onChange={e => setNotePopup(p => p ? { ...p, draft: e.target.value } : p)}
+                placeholder="특이사항, 메모를 입력하세요"
+                rows={4}
+                style={{ width: '100%', fontSize: 12, border: '1px solid #e8e8e6', borderRadius: 6, padding: '8px 10px', resize: 'none', outline: 'none', boxSizing: 'border-box', lineHeight: 1.5 }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 8 }}>
+                <button onClick={() => setNotePopup(null)} style={{ padding: '5px 12px', borderRadius: 6, border: '1px solid #e8e8e6', background: '#fff', fontSize: 12, cursor: 'pointer', color: '#555' }}>취소</button>
+                {notes[notePopup.projectNumber]?.[notePopup.field] && (
+                  <button onClick={async () => {
+                    await supabase.from('project_notes').delete().eq('project_number', notePopup.projectNumber).eq('field', notePopup.field)
+                    await loadNotes(); setNotePopup(null)
+                  }} style={{ padding: '5px 12px', borderRadius: 6, border: '1px solid #fecaca', background: '#fef2f2', fontSize: 12, cursor: 'pointer', color: '#b91c1c' }}>삭제</button>
+                )}
+                <button onClick={saveNote} disabled={noteSaving} style={{ padding: '5px 12px', borderRadius: 6, border: 'none', background: '#111', fontSize: 12, cursor: 'pointer', color: '#fff', opacity: noteSaving ? 0.6 : 1 }}>저장</button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* 통합 추가/수정 모달 */}
       {modal.open && (
@@ -617,6 +689,22 @@ function Row2({ children }: { children: React.ReactNode }) {
 }
 function Row3({ children }: { children: React.ReactNode }) {
   return <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>{children}</div>
+}
+
+function NoteCell({ value, note, onNote }: { value: string; note?: string; onNote: (e: React.MouseEvent) => void }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4, overflow: 'hidden' }}>
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</span>
+      <button
+        onClick={onNote}
+        title={note || '메모 추가'}
+        style={{ flexShrink: 0, width: 14, height: 14, borderRadius: '50%', border: 'none', cursor: 'pointer', padding: 0,
+          background: note ? '#f59e0b' : '#e8e8e6',
+          opacity: note ? 1 : 0.5,
+        }}
+      />
+    </div>
+  )
 }
 
 const td: React.CSSProperties = { padding: '8px 12px', verticalAlign: 'middle', color: '#333' }
