@@ -172,7 +172,7 @@ export default function WeeklyCalendar({
                   border: inWeek ? '1px solid #d1d5db' : '1px solid transparent',
                   background: inWeek ? '#f9fafb' : 'transparent',
                   padding: '4px 5px',
-                  opacity: isOtherMonth ? 0.35 : 1,
+                  opacity: isOtherMonth && !inWeek ? 0.35 : 1,
                   overflow: 'visible',
                 }}>
                   <div style={{
