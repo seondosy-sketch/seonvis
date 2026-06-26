@@ -50,6 +50,10 @@ interface ProjectRef {
   evaluation: string
   participants: string
   status_override: string | null
+  staff_arch: string
+  staff_civil: string
+  staff_mech: string
+  staff_safety: string
 }
 
 function isEmpty(v: string | null | undefined) {
@@ -106,7 +110,7 @@ export default function Dashboard() {
   const loadRefs = useCallback(async () => {
     const { data } = await createSupabaseBrowserClient()
       .from('projects')
-      .select('name,director,client,fee,submit_date,interview_date,bid_date,result_score,evaluation,participants,status_override')
+      .select('name,director,client,fee,submit_date,interview_date,bid_date,result_score,evaluation,participants,status_override,staff_arch,staff_civil,staff_mech,staff_safety')
       .order('project_number', { ascending: false })
     if (data) setProjectRefs(data as ProjectRef[])
   }, [])
@@ -122,7 +126,7 @@ export default function Dashboard() {
       supabase.from('performing_projects').select('*').eq('week', week).order('sort_order'),
       supabase.from('expected_projects').select('*').eq('week', week).order('sort_order'),
       supabase.from('weekly_meta').select('*').eq('week', week).maybeSingle(),
-      createSupabaseBrowserClient().from('projects').select('name,director,client,fee,submit_date,interview_date,bid_date,result_score,evaluation,participants,status_override').order('project_number', { ascending: false }),
+      createSupabaseBrowserClient().from('projects').select('name,director,client,fee,submit_date,interview_date,bid_date,result_score,evaluation,participants,status_override,staff_arch,staff_civil,staff_mech,staff_safety').order('project_number', { ascending: false }),
     ])
     const allRefs = (refs ?? []) as ProjectRef[]
     setProjectRefs(allRefs)
@@ -133,6 +137,13 @@ export default function Dashboard() {
       // 저장된 데이터 없으면 프로젝트 List에서 자동 채우기
       const { start: weekStart } = getWeekRange(week)
 
+      const makeNote = (r: ProjectRef) => [
+        r.staff_arch  ? `-건축 ${r.staff_arch}`  : '',
+        r.staff_civil ? `-토목 ${r.staff_civil}` : '',
+        r.staff_mech  ? `-기계 ${r.staff_mech}`  : '',
+        r.staff_safety? `-안전 ${r.staff_safety}`: '',
+      ].filter(Boolean).join(' ')
+
       const toPerf = (r: ProjectRef, status: '개찰' | '진행중', i: number): PerformingProject => ({
         status, week,
         name: r.name,
@@ -141,7 +152,7 @@ export default function Dashboard() {
         interview_date: r.interview_date ?? '',
         result_date: r.bid_date ?? '',
         fee: r.fee ?? null,
-        note: '',
+        note: makeNote(r),
         sort_order: i,
       })
 
@@ -173,6 +184,22 @@ export default function Dashboard() {
         EMPTY_PERFORMING('개찰', 0, week),
         EMPTY_PERFORMING('진행중', 1, week),
       ])
+
+      // 교육참가자: 진행중 프로젝트 전체에서 분야별 이름 취합 (중복 제거)
+      const active = allRefs.filter(r => computeProjectStatus(r) === '진행중')
+      const uniq = (field: keyof ProjectRef) => {
+        const names = active.map(r => (r[field] as string) ?? '').filter(Boolean)
+        return [...new Set(names)].join(', ')
+      }
+      if (!m) {
+        setMeta(prev => ({
+          ...prev,
+          edu_arch:   uniq('staff_arch'),
+          edu_civil:  uniq('staff_civil'),
+          edu_mech:   uniq('staff_mech'),
+          edu_safety: uniq('staff_safety'),
+        }))
+      }
     }
     if (e && e.length > 0) {
       setExpected(e as ExpectedProject[])
