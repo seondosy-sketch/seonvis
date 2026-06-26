@@ -131,40 +131,44 @@ export default function Dashboard() {
       setPerforming(p as PerformingProject[])
     } else {
       // 저장된 데이터 없으면 프로젝트 List에서 자동 채우기
-      const { start, end } = getWeekRange(week)
-      const bidRows = allRefs
-        .filter(r => {
-          if (!r.bid_date) return false
-          const d = new Date(r.bid_date)
-          return d >= start && d <= end
-        })
-        .map((r, i): PerformingProject => ({
-          status: '개찰', week,
-          name: r.name,
-          director: r.director ?? '',
-          submit_date: r.submit_date ?? '',
-          interview_date: r.interview_date ?? '',
-          result_date: r.bid_date ?? '',
-          fee: r.fee ?? null,
-          note: '',
-          sort_order: i,
-        }))
+      const { start: weekStart } = getWeekRange(week)
 
-      const jinhaengRows = allRefs
-        .filter(r => computeProjectStatus(r) === '진행중')
-        .map((r, i): PerformingProject => ({
-          status: '진행중', week,
-          name: r.name,
-          director: r.director ?? '',
-          submit_date: r.submit_date ?? '',
-          interview_date: r.interview_date ?? '',
-          result_date: r.bid_date ?? '',
-          fee: r.fee ?? null,
-          note: '',
-          sort_order: bidRows.length + i,
-        }))
+      const toPerf = (r: ProjectRef, status: '개찰' | '진행중', i: number): PerformingProject => ({
+        status, week,
+        name: r.name,
+        director: r.director ?? '',
+        submit_date: r.submit_date ?? '',
+        interview_date: r.interview_date ?? '',
+        result_date: r.bid_date ?? '',
+        fee: r.fee ?? null,
+        note: '',
+        sort_order: i,
+      })
 
-      const autoRows = [...bidRows, ...jinhaengRows]
+      const gaechalRows: PerformingProject[] = []
+      const jinhaengRows: PerformingProject[] = []
+
+      for (const r of allRefs.filter(r => computeProjectStatus(r) === '진행중')) {
+        const interviewDate = r.interview_date ? new Date(r.interview_date) : null
+        const bidDate = r.bid_date ? new Date(r.bid_date) : null
+
+        if (!interviewDate || interviewDate >= weekStart) {
+          // 발표/면접일 없거나 이번 주 이후 → 진행중
+          jinhaengRows.push(toPerf(r, '진행중', jinhaengRows.length))
+        } else {
+          // 발표/면접일이 이번 주 이전 → 개찰 그룹
+          // 단, 개찰일도 이번 주 이전이면 제외 (이미 개찰 완료)
+          if (!bidDate || bidDate >= weekStart) {
+            gaechalRows.push(toPerf(r, '개찰', gaechalRows.length))
+          }
+        }
+      }
+
+      // sort_order 재정렬
+      gaechalRows.forEach((r, i) => { r.sort_order = i })
+      jinhaengRows.forEach((r, i) => { r.sort_order = gaechalRows.length + i })
+
+      const autoRows = [...gaechalRows, ...jinhaengRows]
       setPerforming(autoRows.length > 0 ? autoRows : [
         EMPTY_PERFORMING('개찰', 0, week),
         EMPTY_PERFORMING('진행중', 1, week),
