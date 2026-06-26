@@ -81,7 +81,12 @@ export default function DashboardPage() {
     const { data } = await supabase.from('performing_projects').select('*').eq('week', week).order('sort_order')
     if (data) setPerforming(data as PerformingProject[])
   }, [week])
-  useEffect(() => { loadPerforming() }, [loadPerforming])
+  useEffect(() => {
+    loadPerforming()
+    const onVisible = () => { if (document.visibilityState === 'visible') loadPerforming() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [loadPerforming])
   const schedule = buildSchedule(performing, weekStart, weekEnd)
 
   // Chat

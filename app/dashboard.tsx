@@ -191,16 +191,37 @@ export default function Dashboard() {
     })
 
     if (p && p.length > 0) {
-      // 저장된 데이터 있어도 새로 추가된 프로젝트 병합
-      const savedNames = new Set((p as PerformingProject[]).map(r => r.name))
+      const refMap = new Map(allRefs.map(r => [r.name, r]))
+
+      // 저장된 행: 분류 재검토 (프로젝트 List 기준 우선, 없으면 저장된 날짜로 판단)
+      const recategorized = (p as PerformingProject[]).flatMap(row => {
+        const ref = refMap.get(row.name)
+        if (ref) {
+          const cat = categorizeProject(ref, weekStart)
+          if (cat === '제외') return []
+          return [{ ...row, status: cat }]
+        }
+        // 수동 추가 행: performing_projects 날짜로 직접 판단
+        const submit    = parseLocalDate(row.submit_date)
+        const ivRaw     = row.interview_date?.trim() ?? ''
+        const interview = parseLocalDate(ivRaw)
+        const bid       = parseLocalDate(row.result_date)
+        if (!submit || submit >= weekStart) return [row]
+        if (ivRaw !== '서면' && (!interview || interview >= weekStart)) return [row]
+        if (bid && bid < weekStart) return [] // 제외
+        return [row]
+      })
+
+      // 새로 추가된 프로젝트 병합
+      const savedNames = new Set(recategorized.map(r => r.name))
       const newRows: PerformingProject[] = []
       for (const r of allRefs) {
         if (savedNames.has(r.name)) continue
         const cat = categorizeProject(r, weekStart)
         if (cat === '제외') continue
-        newRows.push(toPerf(r, cat, (p as PerformingProject[]).length + newRows.length))
+        newRows.push(toPerf(r, cat, recategorized.length + newRows.length))
       }
-      setPerforming([...(p as PerformingProject[]), ...newRows])
+      setPerforming([...recategorized, ...newRows])
     } else {
       // 저장된 데이터 없으면 프로젝트 List에서 자동 채우기
       const gaechalRows: PerformingProject[] = []
@@ -577,9 +598,6 @@ export default function Dashboard() {
             />
           </Section>
         </div>
-
-        {/* Calendar */}
-        <WeeklyCalendar week={week} performing={performing} />
 
       </div>
     </div>

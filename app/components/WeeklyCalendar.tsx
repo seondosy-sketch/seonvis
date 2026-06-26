@@ -130,7 +130,7 @@ export default function WeeklyCalendar({
     <div style={{ background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8, marginBottom: 12 }}>
       {/* Header */}
       <div style={{ padding: '10px 16px', borderBottom: '1px solid #f0f0ee', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <span style={{ fontSize: 13, fontWeight: 500, color: '#333' }}>5) 일정 캘린더</span>
+        <span style={{ fontSize: 13, fontWeight: 600, color: '#111' }}>일정 캘린더</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{ display: 'flex', gap: 12 }}>
             {Object.entries(TYPE_META).map(([k, v]) => (
