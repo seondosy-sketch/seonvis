@@ -27,7 +27,7 @@ export async function proxy(request: NextRequest) {
 
   const { pathname } = request.nextUrl
 
-  if (!user && pathname !== '/login' && pathname !== '/unauthorized' && !pathname.startsWith('/auth')) {
+  if (!user && pathname !== '/login' && pathname !== '/unauthorized' && pathname !== '/request-access' && !pathname.startsWith('/auth') && !pathname.startsWith('/api/access-requests')) {
     return NextResponse.redirect(new URL('/login', request.url))
   }
 
