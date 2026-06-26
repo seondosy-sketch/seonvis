@@ -54,12 +54,12 @@ export default function DashboardPage() {
             .map(m => ({ role: m.role, text: m.text })),
         }),
       })
-      const data = await res.json() as {
-        type: 'text' | 'confirm'
-        text?: string
-        relatedProjects?: Record<string, unknown>[]
-        action?: PendingAction
-        preview?: string
+      let data: { type: 'text' | 'confirm'; text?: string; relatedProjects?: Record<string, unknown>[]; action?: PendingAction; preview?: string }
+      try {
+        data = await res.json()
+      } catch {
+        const raw = await res.text().catch(() => `HTTP ${res.status}`)
+        throw new Error(`응답 파싱 실패 (${res.status}): ${raw.slice(0, 200)}`)
       }
 
       if (data.type === 'confirm' && data.action) {
@@ -80,8 +80,8 @@ export default function DashboardPage() {
         setMessages(prev => [...prev, aiMsg])
         if ((data.relatedProjects ?? []).length > 0) setActiveRef(data.relatedProjects!)
       }
-    } catch {
-      setMessages(prev => [...prev, { id: Date.now() + 1, role: 'assistant', text: '앗, 오류가 발생했어요 😢 잠시 후 다시 시도해 주세요!' }])
+    } catch (err) {
+      setMessages(prev => [...prev, { id: Date.now() + 1, role: 'assistant', text: `앗, 오류가 발생했어요 😢\n${String(err)}` }])
     } finally {
       setLoading(false)
     }
