@@ -208,7 +208,7 @@ export default function ProjectsPage() {
                   <td style={tdnw}><span style={{ color: '#999' }}>{p.project_number}</span></td>
                   <td style={tdnw}><span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 3, background: '#f0f0ee', color: '#555' }}>{p.type}</span></td>
                   <td style={{ ...tdnw, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.client}</td>
-                  <td style={{ ...tdnw, minWidth: 160 }}><span style={{ fontWeight: 500, color: '#111' }}>{p.name}</span></td>
+                  <td style={{ ...tdnw, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}><span style={{ fontWeight: 500, color: '#111' }}>{p.name}</span></td>
                   <td style={{ ...tdnw, textAlign: 'right' }}>{p.fee != null ? p.fee : '-'}</td>
                   <td style={tdnw}>{p.tp_score}</td>
                   <td style={tdnw}>{p.duration_days}</td>
