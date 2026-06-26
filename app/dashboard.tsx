@@ -40,9 +40,39 @@ const EMPTY_EXPECTED = (order: number, week: string): ExpectedProject => ({
 interface ProjectRef {
   name: string
   director: string
+  client: string
+  fee: number | null
   submit_date: string | null
   interview_date: string | null
   bid_date: string | null
+  result_score: string
+  evaluation: string
+  participants: string
+  status_override: string | null
+}
+
+function isEmpty(v: string | null | undefined) {
+  return !v || v.trim() === '' || v.trim().toLowerCase() === 'nan'
+}
+
+function computeProjectStatus(p: ProjectRef): string {
+  if (p.status_override) return p.status_override
+  if (p.participants?.includes('드랍') || p.participants?.includes('드롭')) return '취소'
+  if (p.evaluation === '선') return '수주'
+  if (isEmpty(p.result_score) || isEmpty(p.evaluation)) return '진행중'
+  return '탈락'
+}
+
+function getWeekRange(week: string): { start: Date; end: Date } {
+  const [year, w] = week.split('-W')
+  const jan4 = new Date(parseInt(year), 0, 4)
+  const startOfW1 = new Date(jan4)
+  startOfW1.setDate(jan4.getDate() - jan4.getDay() + 1)
+  const start = new Date(startOfW1)
+  start.setDate(start.getDate() + (parseInt(w) - 1) * 7)
+  const end = new Date(start)
+  end.setDate(end.getDate() + 6)
+  return { start, end }
 }
 
 function shiftWeek(week: string, delta: number): string {
@@ -77,7 +107,7 @@ export default function Dashboard() {
       supabase.from('performing_projects').select('*').eq('week', week).order('sort_order'),
       supabase.from('expected_projects').select('*').eq('week', week).order('sort_order'),
       supabase.from('weekly_meta').select('*').eq('week', week).maybeSingle(),
-      supabase.from('projects').select('name,director,submit_date,interview_date,bid_date').order('project_number', { ascending: false }),
+      supabase.from('projects').select('name,director,client,fee,submit_date,interview_date,bid_date,result_score,evaluation,participants,status_override').order('project_number', { ascending: false }),
     ])
     if (refs) setProjectRefs(refs as ProjectRef[])
     if (p && p.length > 0) {
@@ -275,6 +305,9 @@ export default function Dashboard() {
             </div>
           ))}
         </div>
+
+        {/* 이번 주 일정 참고 */}
+        <WeeklyProjectSummary week={week} projectRefs={projectRefs} />
 
         {/* 수행 프로젝트 */}
         <Section title="1) 수행 Project (공동수행)">
@@ -503,6 +536,83 @@ function PerformingTable({ rows, status, projectRefs, onUpdate, onFill, onRemove
         </table>
       </div>
       <AddRowButton onClick={onAdd} label={`${status} 행 추가`} />
+    </div>
+  )
+}
+
+function WeeklyProjectSummary({ week, projectRefs }: { week: string; projectRefs: ProjectRef[] }) {
+  const { start, end } = getWeekRange(week)
+
+  const bidThisWeek = projectRefs.filter(p => {
+    if (!p.bid_date) return false
+    const parts = p.bid_date.replace(/\./g, '-').split('-').map(Number)
+    if (parts.length < 2) return false
+    const year = parts.length === 3 ? parts[0] : start.getFullYear()
+    const month = parts.length === 3 ? parts[1] - 1 : parts[0] - 1
+    const day = parts.length === 3 ? parts[2] : parts[1]
+    const d = new Date(year, month, day)
+    return d >= start && d <= end
+  })
+
+  const inProgress = projectRefs.filter(p => computeProjectStatus(p) === '진행중')
+
+  if (bidThisWeek.length === 0 && inProgress.length === 0) return null
+
+  const cardStyle: React.CSSProperties = {
+    background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8, marginBottom: 16, overflow: 'hidden',
+  }
+  const tagStyle = (color: string, bg: string): React.CSSProperties => ({
+    fontSize: 10, fontWeight: 600, padding: '1px 7px', borderRadius: 10, background: bg, color,
+  })
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: bidThisWeek.length > 0 && inProgress.length > 0 ? '1fr 1fr' : '1fr', gap: 12, marginBottom: 16 }}>
+      {bidThisWeek.length > 0 && (
+        <div style={cardStyle}>
+          <div style={{ padding: '10px 16px', borderBottom: '1px solid #f0f0ee', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={tagStyle('#1d4ed8', '#eff6ff')}>개찰 예정</span>
+            <span style={{ fontSize: 12, color: '#999' }}>이번 주 개찰일 {bidThisWeek.length}건</span>
+          </div>
+          <div style={{ padding: '8px 0' }}>
+            {bidThisWeek.map((p, i) => (
+              <div key={i} style={{ padding: '6px 16px', borderBottom: '1px solid #f8f8f7', display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 500, color: '#111', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</div>
+                  <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>
+                    {p.client && <span style={{ marginRight: 8 }}>{p.client}</span>}
+                    {p.director && <span style={{ marginRight: 8 }}>단장 {p.director}</span>}
+                    {p.fee != null && <span style={{ color: '#2563eb' }}>{p.fee}억</span>}
+                  </div>
+                </div>
+                <div style={{ fontSize: 11, color: '#1d4ed8', whiteSpace: 'nowrap' }}>개찰 {p.bid_date}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {inProgress.length > 0 && (
+        <div style={cardStyle}>
+          <div style={{ padding: '10px 16px', borderBottom: '1px solid #f0f0ee', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={tagStyle('#15803d', '#f0fdf4')}>진행중</span>
+            <span style={{ fontSize: 12, color: '#999' }}>총 {inProgress.length}건</span>
+          </div>
+          <div style={{ padding: '8px 0', maxHeight: 200, overflowY: 'auto' }}>
+            {inProgress.map((p, i) => (
+              <div key={i} style={{ padding: '6px 16px', borderBottom: '1px solid #f8f8f7', display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 500, color: '#111', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</div>
+                  <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>
+                    {p.client && <span style={{ marginRight: 8 }}>{p.client}</span>}
+                    {p.director && <span style={{ marginRight: 8 }}>단장 {p.director}</span>}
+                    {p.fee != null && <span style={{ color: '#2563eb' }}>{p.fee}억</span>}
+                  </div>
+                </div>
+                {p.bid_date && <div style={{ fontSize: 11, color: '#999', whiteSpace: 'nowrap' }}>개찰 {p.bid_date}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
