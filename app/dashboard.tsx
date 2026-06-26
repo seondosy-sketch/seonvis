@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { supabase, PerformingProject, ExpectedProject, WeeklyMeta } from '@/lib/supabase'
+import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import WeeklyCalendar from './components/WeeklyCalendar'
 
 function getCurrentWeek(): string {
@@ -107,7 +108,7 @@ export default function Dashboard() {
       supabase.from('performing_projects').select('*').eq('week', week).order('sort_order'),
       supabase.from('expected_projects').select('*').eq('week', week).order('sort_order'),
       supabase.from('weekly_meta').select('*').eq('week', week).maybeSingle(),
-      supabase.from('projects').select('name,director,client,fee,submit_date,interview_date,bid_date,result_score,evaluation,participants,status_override').order('project_number', { ascending: false }),
+      createSupabaseBrowserClient().from('projects').select('name,director,client,fee,submit_date,interview_date,bid_date,result_score,evaluation,participants,status_override').order('project_number', { ascending: false }),
     ])
     if (refs) setProjectRefs(refs as ProjectRef[])
     if (p && p.length > 0) {
