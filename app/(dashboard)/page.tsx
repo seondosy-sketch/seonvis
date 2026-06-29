@@ -80,12 +80,13 @@ export default function DashboardPage() {
   const [calNotes, setCalNotes] = useState<Record<string, Record<string, string>>>({})
 
   const loadPerforming = useCallback(async () => {
-    const [{ data: perf }, { data: projs }, { data: notesData }] = await Promise.all([
-      supabase.from('performing_projects').select('*').eq('week', week).order('sort_order'),
+    const { data: perf } = await supabase.from('performing_projects').select('*').eq('week', week).order('sort_order')
+    if (perf) setPerforming(perf as PerformingProject[])
+
+    const [{ data: projs }, { data: notesData }] = await Promise.all([
       supabase.from('projects').select('project_number, name'),
       supabase.from('project_notes').select('*'),
     ])
-    if (perf) setPerforming(perf as PerformingProject[])
     if (projs && notesData) {
       const numToName: Record<string, string> = Object.fromEntries(projs.map((p: {project_number: string; name: string}) => [p.project_number, p.name]))
       const map: Record<string, Record<string, string>> = {}
