@@ -81,14 +81,46 @@ export default function DashboardPage() {
 
   const loadPerforming = useCallback(async () => {
     const { data: perf } = await supabase.from('performing_projects').select('*').eq('week', week).order('sort_order')
-    if (perf) setPerforming(perf as PerformingProject[])
 
-    const [{ data: projs }, { data: notesData }] = await Promise.all([
+    if (perf && perf.length > 0) {
+      setPerforming(perf as PerformingProject[])
+    } else {
+      // 저장된 주간 데이터가 없으면 projects 테이블에서 직접 불러오기
+      const { data: projs } = await supabase
+        .from('projects')
+        .select('name, submit_date, interview_date, bid_date, participants, status_override, evaluation, result_score')
+        .order('project_number', { ascending: false })
+      if (projs) {
+        const { start: weekStart } = getWeekBounds(week)
+        const rows: PerformingProject[] = projs
+          .filter((p: any) => {
+            if (p.status_override === '취소') return false
+            if (p.participants?.includes('드랍') || p.participants?.includes('드롭')) return false
+            if (p.evaluation === '선') return false
+            return true
+          })
+          .map((p: any, i: number) => ({
+            status: '진행중' as const,
+            name: p.name,
+            director: '',
+            submit_date: fmtDate(p.submit_date),
+            interview_date: fmtDate(p.interview_date),
+            result_date: fmtDate(p.bid_date),
+            fee: null,
+            note: '',
+            sort_order: i,
+            week,
+          }))
+        setPerforming(rows)
+      }
+    }
+
+    const [{ data: projsForNotes }, { data: notesData }] = await Promise.all([
       supabase.from('projects').select('project_number, name'),
       supabase.from('project_notes').select('*'),
     ])
-    if (projs && notesData) {
-      const numToName: Record<string, string> = Object.fromEntries(projs.map((p: {project_number: string; name: string}) => [p.project_number, p.name]))
+    if (projsForNotes && notesData) {
+      const numToName: Record<string, string> = Object.fromEntries(projsForNotes.map((p: {project_number: string; name: string}) => [p.project_number, p.name]))
       const map: Record<string, Record<string, string>> = {}
       for (const n of notesData) {
         const name = numToName[n.project_number]
