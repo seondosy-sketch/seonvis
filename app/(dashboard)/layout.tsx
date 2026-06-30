@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation'
 import { createSupabaseServerClient } from '@/lib/supabase-server'
 import { createSupabaseAdminClient } from '@/lib/supabase-admin'
-import Sidebar from '../sidebar'
+import SidebarContainer from '../components/SidebarContainer'
 
 function getAdminEmails(): string[] {
   return (process.env.ADMIN_EMAILS ?? '').split(',').map(e => e.trim()).filter(Boolean)
@@ -29,9 +29,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
   }
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh' }}>
-      <Sidebar isAdmin={isAdmin} userEmail={user.email} />
-      <main style={{ flex: 1, minWidth: 0 }}>{children}</main>
-    </div>
+    <SidebarContainer isAdmin={isAdmin} userEmail={user.email}>
+      {children}
+    </SidebarContainer>
   )
 }

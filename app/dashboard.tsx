@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { supabase, PerformingProject, ExpectedProject, WeeklyMeta } from '@/lib/supabase'
 import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import WeeklyCalendar from './components/WeeklyCalendar'
+import { useIsMobile } from '@/lib/useIsMobile'
 
 function getCurrentWeek(): string {
   const now = new Date()
@@ -125,6 +126,7 @@ function shiftWeek(week: string, delta: number): string {
 }
 
 export default function Dashboard() {
+  const isMobile = useIsMobile()
   const currentWeek = getCurrentWeek()
   const [week, setWeek] = useState(currentWeek)
   const [performing, setPerforming] = useState<PerformingProject[]>([])
@@ -379,64 +381,39 @@ export default function Dashboard() {
     <div className="min-h-screen" style={{ background: '#f8f8f7' }}>
       {/* Header */}
       <header style={{ background: '#fff', borderBottom: '1px solid #e8e8e6' }}>
-        <div style={{ maxWidth: 1200, margin: '0 auto', padding: '0 24px', height: 56, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span style={{ fontSize: 14, color: '#555' }}>주간/월간업무보고</span>
+        <div style={{ maxWidth: 1200, margin: '0 auto', padding: isMobile ? '0 12px' : '0 24px', minHeight: 56, display: 'flex', flexDirection: isMobile ? 'column' : 'row', alignItems: isMobile ? 'stretch' : 'center', justifyContent: 'space-between', gap: isMobile ? 0 : 0 }}>
+          {/* 주차 선택 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 56 }}>
+            {!isMobile && <span style={{ fontSize: 14, color: '#555' }}>주간/월간업무보고</span>}
             <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <button onClick={() => setWeek(w => shiftWeek(w, -1))} style={{ height: 28, padding: '0 8px', borderRadius: 5, border: '1px solid #e8e8e6', background: '#fff', fontSize: 13, cursor: 'pointer', color: '#555' }}>‹</button>
-              <span style={{ fontSize: 13, fontWeight: 500, color: '#111', minWidth: 160, textAlign: 'center' }}>{weekLabel(week)} ({week})</span>
-              <button onClick={() => setWeek(w => shiftWeek(w, 1))} style={{ height: 28, padding: '0 8px', borderRadius: 5, border: '1px solid #e8e8e6', background: '#fff', fontSize: 13, cursor: 'pointer', color: '#555' }}>›</button>
+              <button onClick={() => setWeek(w => shiftWeek(w, -1))} style={{ height: 32, width: 32, borderRadius: 5, border: '1px solid #e8e8e6', background: '#fff', fontSize: 15, cursor: 'pointer', color: '#555' }}>‹</button>
+              <span style={{ fontSize: isMobile ? 12 : 13, fontWeight: 500, color: '#111', minWidth: isMobile ? 120 : 160, textAlign: 'center' }}>{weekLabel(week)}{!isMobile && ` (${week})`}</span>
+              <button onClick={() => setWeek(w => shiftWeek(w, 1))} style={{ height: 32, width: 32, borderRadius: 5, border: '1px solid #e8e8e6', background: '#fff', fontSize: 15, cursor: 'pointer', color: '#555' }}>›</button>
               {week !== currentWeek && (
-                <button onClick={() => setWeek(currentWeek)} style={{ height: 28, padding: '0 10px', borderRadius: 5, border: '1px solid #e8e8e6', background: '#f4f4f2', fontSize: 12, cursor: 'pointer', color: '#555' }}>이번주</button>
+                <button onClick={() => setWeek(currentWeek)} style={{ height: 32, padding: '0 8px', borderRadius: 5, border: '1px solid #e8e8e6', background: '#f4f4f2', fontSize: 12, cursor: 'pointer', color: '#555' }}>이번주</button>
               )}
             </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {/* 액션 버튼 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, ...(isMobile ? { paddingBottom: 10 } : { height: 56 }) }}>
             {saveMsg && <span style={{ fontSize: 12, color: '#22c55e' }}>{saveMsg}</span>}
             {performing.every(r => !r.name) && (
-              <button
-                onClick={copyFromPrevWeek}
-                style={{ height: 32, padding: '0 14px', borderRadius: 6, border: '1px solid #f59e0b', background: '#fffbeb', fontSize: 13, color: '#b45309', cursor: 'pointer' }}
-              >↩ 지난주 불러오기</button>
+              <button onClick={copyFromPrevWeek} style={{ height: 32, padding: '0 10px', borderRadius: 6, border: '1px solid #f59e0b', background: '#fffbeb', fontSize: isMobile ? 11 : 13, color: '#b45309', cursor: 'pointer', whiteSpace: 'nowrap' }}>↩ 지난주</button>
             )}
-            <button
-              onClick={save}
-              disabled={saving}
-              style={{
-                height: 32, padding: '0 14px', borderRadius: 6, border: '1px solid #ddd',
-                background: '#fff', fontSize: 13, color: '#333', cursor: 'pointer',
-                opacity: saving ? 0.6 : 1
-              }}
-            >
+            <button onClick={save} disabled={saving} style={{ height: 32, padding: '0 12px', borderRadius: 6, border: '1px solid #ddd', background: '#fff', fontSize: isMobile ? 12 : 13, color: '#333', cursor: 'pointer', opacity: saving ? 0.6 : 1 }}>
               {saving ? '저장 중...' : '저장'}
             </button>
-            <button
-              onClick={() => download('weekly')}
-              disabled={downloading !== ''}
-              style={{
-                height: 32, padding: '0 14px', borderRadius: 6, border: 'none',
-                background: '#2563eb', color: '#fff', fontSize: 13, cursor: 'pointer',
-                opacity: downloading !== '' ? 0.6 : 1
-              }}
-            >
-              {downloading === 'weekly' ? '생성 중...' : '주간 HWPX'}
+            <button onClick={() => download('weekly')} disabled={downloading !== ''} style={{ height: 32, padding: '0 12px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: isMobile ? 12 : 13, cursor: 'pointer', opacity: downloading !== '' ? 0.6 : 1, whiteSpace: 'nowrap' }}>
+              {downloading === 'weekly' ? '생성 중...' : '주간'}
             </button>
-            <button
-              onClick={() => download('monthly')}
-              disabled={downloading !== ''}
-              style={{
-                height: 32, padding: '0 14px', borderRadius: 6, border: 'none',
-                background: '#111', color: '#fff', fontSize: 13, cursor: 'pointer',
-                opacity: downloading !== '' ? 0.6 : 1
-              }}
-            >
-              {downloading === 'monthly' ? '생성 중...' : '월간 HWPX'}
+            <button onClick={() => download('monthly')} disabled={downloading !== ''} style={{ height: 32, padding: '0 12px', borderRadius: 6, border: 'none', background: '#111', color: '#fff', fontSize: isMobile ? 12 : 13, cursor: 'pointer', opacity: downloading !== '' ? 0.6 : 1, whiteSpace: 'nowrap' }}>
+              {downloading === 'monthly' ? '생성 중...' : '월간'}
             </button>
           </div>
         </div>
       </header>
 
-      <div style={{ maxWidth: 1200, margin: '0 auto', padding: '24px 24px 80px' }}>
+      <div style={{ maxWidth: 1200, margin: '0 auto', padding: isMobile ? '16px 12px 80px' : '24px 24px 80px' }}>
         {/* Week label */}
         <div style={{ marginBottom: 20 }}>
           <h1 style={{ fontSize: 20, fontWeight: 600, color: '#111', marginBottom: 4 }}>주간업무</h1>
@@ -444,7 +421,7 @@ export default function Dashboard() {
         </div>
 
         {/* Summary cards */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 24 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)', gap: 10, marginBottom: 24 }}>
           {[
             { label: '수행 프로젝트', value: performing.filter(r => r.name).length + '건' },
             { label: '총 용역비', value: totalFee.toFixed(1) + '억' },
@@ -553,7 +530,7 @@ export default function Dashboard() {
         </Section>
 
         {/* 교육참가자 & 기타 */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 12 }}>
           <Section title="3) 교육참가자 (OSG팀)">
             <div style={{ padding: '4px 0' }}>
               {([

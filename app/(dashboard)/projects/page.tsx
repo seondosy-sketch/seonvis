@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
+import { useIsMobile } from '@/lib/useIsMobile'
 
 type ProjectStatus = '진행중' | '수주' | '탈락' | '취소'
 type ProjectType = '면접' | 'SOQ' | '종심제' | 'TP' | 'PQ' | '기타' | ''
@@ -133,6 +134,7 @@ const TYPES: ProjectType[] = ['면접', 'SOQ', '종심제', 'TP', 'PQ', '기타'
 const STATUSES: ProjectStatus[] = ['진행중', '수주', '탈락', '취소']
 
 export default function ProjectsPage() {
+  const isMobile = useIsMobile()
   const supabase = createSupabaseBrowserClient()
   const [projects, setProjects] = useState<Project[]>([])
   const [search, setSearch] = useState('')
@@ -319,7 +321,7 @@ export default function ProjectsPage() {
   return (
     <div style={{ minHeight: '100vh', background: '#f8f8f7' }}>
       <header style={{ background: '#fff', borderBottom: '1px solid #e8e8e6' }}>
-        <div style={{ maxWidth: 1400, margin: '0 auto', padding: '0 24px', height: 56, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ maxWidth: 1400, margin: '0 auto', padding: isMobile ? '0 12px' : '0 24px', height: 56, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span style={{ fontSize: 14, color: '#555' }}>프로젝트 List</span>
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={exportCsv} style={outlineBtn}>CSV 내보내기</button>
@@ -328,8 +330,8 @@ export default function ProjectsPage() {
         </div>
       </header>
 
-      <div style={{ maxWidth: 1400, margin: '0 auto', padding: '20px 24px 60px' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
+      <div style={{ maxWidth: 1400, margin: '0 auto', padding: isMobile ? '12px 12px 60px' : '20px 24px 60px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
           {([['전체', projects], ['진행중', projects.filter(p => computeStatus(p.result_score, p.evaluation, p.participants, p.status_override) === '진행중')], ['수주', projects.filter(p => computeStatus(p.result_score, p.evaluation, p.participants, p.status_override) === '수주')], ['탈락', projects.filter(p => computeStatus(p.result_score, p.evaluation, p.participants, p.status_override) === '탈락')]] as [string, Project[]][]).map(([label, list]) => (
             <div key={label} style={{ background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8, padding: '12px 16px' }}>
               <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>{label === '전체' ? '전체 프로젝트' : label}</div>

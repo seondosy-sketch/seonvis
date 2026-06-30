@@ -42,9 +42,10 @@ const GROUPS = [
 interface SidebarProps {
   isAdmin?: boolean
   userEmail?: string
+  onClose?: () => void
 }
 
-export default function Sidebar({ isAdmin, userEmail }: SidebarProps) {
+export default function Sidebar({ isAdmin, userEmail, onClose }: SidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
 
@@ -67,10 +68,13 @@ export default function Sidebar({ isAdmin, userEmail }: SidebarProps) {
       {/* Logo */}
       <div style={{ padding: '18px 20px 14px', borderBottom: '1px solid #f0f0ee', display: 'flex', alignItems: 'center', gap: 8 }}>
         <div style={{ flex: 1 }}>
-          <Link href="/" style={{ textDecoration: 'none' }}>
+          <Link href="/" onClick={onClose} style={{ textDecoration: 'none' }}>
             <div style={{ fontSize: 14, fontWeight: 700, color: '#111', letterSpacing: '-0.2px', cursor: 'pointer' }}>미래사업팀 Hub</div>
           </Link>
         </div>
+        {onClose && (
+          <button onClick={onClose} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 18, color: '#aaa', padding: '2px 4px', lineHeight: 1 }}>✕</button>
+        )}
         {isAdmin && (
           <Link href={pathname === '/admin' ? '/' : '/admin'} style={{ textDecoration: 'none' }}>
             <div style={{
@@ -124,7 +128,7 @@ export default function Sidebar({ isAdmin, userEmail }: SidebarProps) {
                 }
 
                 return (
-                  <Link key={item.id} href={item.href!} style={{ textDecoration: 'none' }}>
+                  <Link key={item.id} href={item.href!} onClick={onClose} style={{ textDecoration: 'none' }}>
                     <div style={{
                       display: 'flex', alignItems: 'center', gap: 8,
                       padding: '6px 10px', cursor: 'pointer',
