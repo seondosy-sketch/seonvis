@@ -507,12 +507,16 @@ export default function ProjectsPage() {
 
       {/* 메모 팝업 */}
       {notePopup && (() => {
-        const top = notePopup.rect.bottom + window.scrollY + 4
-        const left = Math.min(notePopup.rect.left + window.scrollX, window.innerWidth - 300)
+        const popupH = 200
+        const spaceBelow = window.innerHeight - notePopup.rect.bottom
+        const top = spaceBelow >= popupH + 8
+          ? notePopup.rect.bottom + 4
+          : notePopup.rect.top - popupH - 4
+        const left = Math.min(Math.max(notePopup.rect.left, 8), window.innerWidth - 296)
         return (
           <div style={{ position: 'fixed', inset: 0, zIndex: 300 }} onClick={() => setNotePopup(null)}>
             <div
-              style={{ position: 'absolute', top, left, width: 280, background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.12)', padding: 12 }}
+              style={{ position: 'fixed', top, left, width: 280, background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.12)', padding: 12 }}
               onClick={e => e.stopPropagation()}
             >
               <div style={{ fontSize: 11, color: '#888', marginBottom: 6 }}>

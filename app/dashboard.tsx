@@ -640,6 +640,18 @@ interface PerformingTableProps {
 
 function NoteTooltipCell({ value, note, placeholder, onChange }: { value: string; note?: string; placeholder: string; onChange: (v: string) => void }) {
   const [tooltip, setTooltip] = useState<{ x: number; y: number } | null>(null)
+
+  useEffect(() => {
+    if (!tooltip) return
+    const dismiss = () => setTooltip(null)
+    document.addEventListener('touchstart', dismiss)
+    document.addEventListener('click', dismiss)
+    return () => {
+      document.removeEventListener('touchstart', dismiss)
+      document.removeEventListener('click', dismiss)
+    }
+  }, [tooltip])
+
   return (
     <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 3 }}>
       <input className="cell-input" value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} style={{ width: value ? `${Math.max(value.length * 8, 36)}px` : '52px', minWidth: 36 }} />
@@ -648,6 +660,12 @@ function NoteTooltipCell({ value, note, placeholder, onChange }: { value: string
           <span
             onMouseEnter={e => { const r = e.currentTarget.getBoundingClientRect(); setTooltip({ x: r.left, y: r.bottom + 4 }) }}
             onMouseLeave={() => setTooltip(null)}
+            onTouchStart={e => {
+              e.preventDefault()
+              e.stopPropagation()
+              const r = e.currentTarget.getBoundingClientRect()
+              setTooltip(prev => prev ? null : { x: Math.min(r.left, window.innerWidth - 280), y: r.bottom + 4 })
+            }}
             style={{ color: '#f97316', fontSize: 10, cursor: 'default', lineHeight: 1, flexShrink: 0 }}
           >●</span>
           {tooltip && (

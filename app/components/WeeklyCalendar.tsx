@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { PerformingProject } from '@/lib/supabase'
+import { useIsMobile } from '@/lib/useIsMobile'
 
 interface CalEvent {
   label: string
@@ -60,7 +61,19 @@ export default function WeeklyCalendar({
 
   const [viewMonth, setViewMonth] = useState(() => weekStart.getMonth())
   const [viewYear, setViewYear] = useState(() => weekStart.getFullYear())
+  const isMobile = useIsMobile()
   const [tooltip, setTooltip] = useState<{ note: string; x: number; y: number } | null>(null)
+
+  useEffect(() => {
+    if (!tooltip) return
+    const dismiss = () => setTooltip(null)
+    document.addEventListener('touchstart', dismiss)
+    document.addEventListener('click', dismiss)
+    return () => {
+      document.removeEventListener('touchstart', dismiss)
+      document.removeEventListener('click', dismiss)
+    }
+  }, [tooltip])
 
   // week prop이 바뀌면 달력도 해당 주차 월로 이동
   useEffect(() => {
@@ -140,20 +153,22 @@ export default function WeeklyCalendar({
     <div style={{ position: 'relative' }}>
     <div style={{ background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8, marginBottom: 12 }}>
       {/* Header */}
-      <div style={{ padding: '10px 16px', borderBottom: '1px solid #f0f0ee', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div style={{ padding: isMobile ? '8px 12px' : '10px 16px', borderBottom: '1px solid #f0f0ee', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 6 }}>
         <span style={{ fontSize: 13, fontWeight: 600, color: '#111' }}>일정 캘린더</span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ display: 'flex', gap: 12 }}>
-            {Object.entries(TYPE_META).map(([k, v]) => (
-              <span key={k} style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
-                <span style={{ width: 8, height: 8, borderRadius: '50%', background: v.color, display: 'inline-block' }} />
-                <span style={{ color: '#888' }}>{v.label}</span>
-              </span>
-            ))}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          {!isMobile && (
+            <div style={{ display: 'flex', gap: 10 }}>
+              {Object.entries(TYPE_META).map(([k, v]) => (
+                <span key={k} style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: v.color, display: 'inline-block' }} />
+                  <span style={{ color: '#888' }}>{v.label}</span>
+                </span>
+              ))}
+            </div>
+          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <button onClick={prevMonth} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#888', fontSize: 14, padding: '2px 6px', borderRadius: 4 }}>‹</button>
-            <span style={{ fontSize: 13, fontWeight: 500, minWidth: 72, textAlign: 'center', color: '#111' }}>{viewYear}년 {MONTH_NAMES[viewMonth]}</span>
+            <span style={{ fontSize: 13, fontWeight: 500, minWidth: isMobile ? 60 : 72, textAlign: 'center', color: '#111' }}>{viewYear}년 {MONTH_NAMES[viewMonth]}</span>
             <button onClick={nextMonth} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#888', fontSize: 14, padding: '2px 6px', borderRadius: 4 }}>›</button>
           </div>
         </div>
@@ -202,7 +217,7 @@ export default function WeeklyCalendar({
                     {day.getDate()}
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    {evs.map((ev, ei) => (
+                    {(isMobile && evs.length > 2 ? evs.slice(0, 2) : evs).map((ev, ei) => (
                       <div
                         key={ei}
                         onMouseEnter={ev.note ? (e) => {
@@ -210,19 +225,28 @@ export default function WeeklyCalendar({
                           setTooltip({ note: ev.note!, x: r.left, y: r.bottom + 6 })
                         } : undefined}
                         onMouseLeave={ev.note ? () => setTooltip(null) : undefined}
+                        onTouchStart={ev.note ? (e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          const r = e.currentTarget.getBoundingClientRect()
+                          setTooltip(prev => prev?.note === ev.note ? null : { note: ev.note!, x: Math.min(r.left, window.innerWidth - 280), y: r.bottom + 6 })
+                        } : undefined}
                         style={{
-                          fontSize: 11, lineHeight: 1.4,
+                          fontSize: isMobile ? 10 : 11, lineHeight: 1.4,
                           background: ev.bg, color: ev.color,
-                          borderRadius: 3, padding: '2px 5px',
+                          borderRadius: 3, padding: isMobile ? '1px 3px' : '2px 5px',
                           overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
                           maxWidth: '100%', fontWeight: 500,
                           cursor: ev.note ? 'default' : undefined,
                           outline: ev.note ? `1px solid ${ev.color}` : undefined,
                         }}
                       >
-                        {ev.label}{ev.note ? ' ●' : ''}
+                        {isMobile ? `${ev.type === 'submit' ? '제' : ev.type === 'interview' ? '발' : '개'}` : ev.label}{ev.note ? '●' : ''}
                       </div>
                     ))}
+                    {isMobile && evs.length > 2 && (
+                      <div style={{ fontSize: 9, color: '#888', lineHeight: 1.2 }}>+{evs.length - 2}</div>
+                    )}
                   </div>
                 </div>
               )
