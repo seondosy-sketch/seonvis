@@ -6,6 +6,28 @@
 
 ## 2026-07
 
+### 미래봇 날짜 인식 수정 (`8ee0054`)
+- 시스템 프롬프트에 오늘 날짜(`Asia/Seoul` 기준) 명시 → 학습 컷오프 날짜 오답 해결
+- projects 쿼리에 `submit_date`, `interview_date`, `bid_date` 추가
+- "오늘 개찰", "이번 주 발표" 등 날짜 기반 질문 정확 응답 가능
+
+### 모바일 달력 및 툴팁 개선 (`b59a31e`)
+- WeeklyCalendar: 헤더 범례 숨김, 칩 글자 축약(제/발/개), 최대 2개 + `+N` 뱃지
+- WeeklyCalendar/NoteTooltipCell: `onTouchStart` 탭 토글 + 글로벌 dismiss
+- projects/page.tsx 메모 팝업: `position: fixed`로 전환, `scrollY` 제거, 화면 밖 넘침 방지 (flip)
+
+### 프로젝트 문서화 (`7a99473`)
+- `docs/` 폴더 신규 생성
+- AI(Claude Code 등)가 프로젝트를 이어서 작업할 수 있도록 8개 Markdown 파일 작성
+  - `README.md`: 문서 목록 + 빠른 컨텍스트 요약
+  - `overview.md`: 서비스 목적, 기술 스택, 페이지 구조
+  - `architecture.md`: 디렉토리 구조, 인증 흐름, 데이터 흐름
+  - `database.md`: 전체 테이블 스키마 + 컬럼 설명
+  - `features.md`: 기능별 동작 방식, 분류 로직, 컴포넌트 props
+  - `conventions.md`: 스타일 규칙, 날짜 파싱 주의사항, Supabase 클라이언트 선택 가이드
+  - `deployment.md`: 환경 변수, 실행 방법, Supabase OAuth/RLS 설정
+  - `changelog.md`: 기능 변경 이력 + 기록 템플릿
+
 ### 모바일 반응형 레이아웃 (`17903e8`)
 - `useIsMobile` 훅 추가 (768px 기준)
 - `SidebarContainer`: 모바일에서 햄버거 메뉴 + 슬라이드 오버레이 사이드바

@@ -109,3 +109,20 @@ await supabase.from('project_notes').upsert(
 3. **날짜 형식 혼재**: DB에는 `YYYY-MM-DD`, 화면 표시는 `M/D` 형식. 변환 시 `fmtDate()` 함수 사용.
 4. **ISO 주차**: `2026-W26` 형식. `getCurrentWeek()`와 `getWeekRange()` 함수로 일관 처리.
 5. **메모 필드명**: `project_notes.field` 값은 반드시 `client`, `submit_date`, `interview_date`, `bid_date`, `competitors` 중 하나.
+6. **모바일 팝업 위치**: `position: fixed` 팝업은 `window.scrollY`를 더하지 말 것 — fixed는 이미 viewport 기준. `getBoundingClientRect()`의 `bottom` 값을 그대로 `top`에 사용하고, 화면 하단 넘침 여부는 `window.innerHeight - rect.bottom`으로 판단.
+7. **터치 툴팁**: hover 전용 툴팁(`onMouseEnter`/`onMouseLeave`)은 모바일에서 동작 안 함. `onTouchStart`로 탭 토글 + 글로벌 `touchstart`/`click` 리스너로 dismiss 처리.
+
+### 미래봇 시스템 프롬프트에 오늘 날짜 주입
+
+```typescript
+// app/api/chat/route.ts — POST 핸들러 내부
+const today = new Date().toLocaleDateString('ko-KR', {
+  timeZone: 'Asia/Seoul',
+  year: 'numeric', month: '2-digit', day: '2-digit',
+}).replace(/\. /g, '-').replace('.', '')
+// → "2026-07-02" 형태
+const systemPrompt = buildSystemPrompt(projects, today)
+```
+
+- AI 모델 학습 컷오프 날짜가 아닌 실제 오늘 날짜를 사용하게 됨
+- `buildSystemPrompt`에 `today` 파라미터를 추가하여 프롬프트 상단에 명시
