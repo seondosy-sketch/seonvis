@@ -76,7 +76,7 @@ const FIELD_LABELS: Record<string, string> = {
   status_override: '상태',
 }
 
-function buildSystemPrompt(projects: Record<string, unknown>[]) {
+function buildSystemPrompt(projects: Record<string, unknown>[], today: string) {
   const summary = projects.map(p => {
     const fields = [
       `번호:${p.project_number}`,
@@ -85,6 +85,9 @@ function buildSystemPrompt(projects: Record<string, unknown>[]) {
       `용역명:${p.name}`,
       p.fee ? `용역비:${p.fee}억` : null,
       `단장:${p.director}`,
+      p.submit_date ? `제출일:${p.submit_date}` : null,
+      p.interview_date ? `발표일:${p.interview_date}` : null,
+      p.bid_date ? `개찰일:${p.bid_date}` : null,
       `낙찰사:${p.evaluation || '미정'}`,
       `결과:${p.result_score || '-'}`,
     ].filter(Boolean).join(', ')
@@ -92,6 +95,9 @@ function buildSystemPrompt(projects: Record<string, unknown>[]) {
   }).join('\n')
 
   return `당신은 (주)선 미래사업팀 전용 AI 어시스턴트 "미래봇"입니다. 🌟
+
+【오늘 날짜: ${today}】
+- 날짜 관련 질문(오늘, 이번 주, 이번 달 등)은 반드시 이 날짜를 기준으로 답변하세요.
 
 【중요: 대화의 주체는 항상 "(주)선"】
 - 모든 대화에서 주어가 생략되거나 불명확하면 기본 주체는 "(주)선" 회사입니다
@@ -142,10 +148,11 @@ export async function POST(request: Request) {
   const supabase = await createSupabaseServerClient()
   const { data: projects } = await supabase
     .from('projects')
-    .select('project_number,type,client,name,fee,director,evaluation,result_score,participants,status')
+    .select('project_number,type,client,name,fee,director,evaluation,result_score,participants,status,submit_date,interview_date,bid_date')
     .order('project_number', { ascending: false })
 
-  const systemPrompt = buildSystemPrompt((projects ?? []) as Record<string, unknown>[])
+  const today = new Date().toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\. /g, '-').replace('.', '')
+  const systemPrompt = buildSystemPrompt((projects ?? []) as Record<string, unknown>[], today)
 
   const contents: GeminiMessage[] = messages.map(m => ({
     role: m.role === 'user' ? 'user' : 'model',
