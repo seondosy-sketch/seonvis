@@ -80,6 +80,8 @@ export default function DashboardPage() {
   // Calendar
   const [performing, setPerforming] = useState<PerformingProject[]>([])
   const [calNotes, setCalNotes] = useState<Record<string, Record<string, string>>>({})
+  const [cmakNews, setCmakNews] = useState<{ idx: string; title: string; date: string }[]>([])
+  const [cmakLoading, setCmakLoading] = useState(true)
 
   const loadPerforming = useCallback(async () => {
     const { data: perf } = await supabase.from('performing_projects').select('*').eq('week', week).order('sort_order')
@@ -137,6 +139,14 @@ export default function DashboardPage() {
     document.addEventListener('visibilitychange', onVisible)
     return () => document.removeEventListener('visibilitychange', onVisible)
   }, [loadPerforming])
+
+  useEffect(() => {
+    fetch('/api/cmak-news')
+      .then(r => r.json())
+      .then(d => setCmakNews(d.items ?? []))
+      .catch(() => {})
+      .finally(() => setCmakLoading(false))
+  }, [])
   const schedule = buildSchedule(performing, weekStart, weekEnd)
 
   // Chat
@@ -307,6 +317,28 @@ export default function DashboardPage() {
           </div>
         </div>
 
+        {/* CM업계소식 (모바일) */}
+        <div style={{ margin: '10px 12px 0', background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8 }}>
+          <div style={{ padding: '10px 14px', borderBottom: '1px solid #f0f0ee', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#111' }}>📰 CM업계소식</div>
+            <a href="https://www.cmak.or.kr/html/notice/news.asp" target="_blank" rel="noreferrer"
+              style={{ fontSize: 11, color: '#aaa', textDecoration: 'none' }}>CMAK →</a>
+          </div>
+          <div style={{ padding: '4px 0' }}>
+            {cmakLoading ? (
+              <div style={{ padding: '16px', textAlign: 'center', color: '#ccc', fontSize: 12 }}>불러오는 중...</div>
+            ) : cmakNews.length === 0 ? (
+              <div style={{ padding: '16px', textAlign: 'center', color: '#ccc', fontSize: 12 }}>소식을 불러오지 못했습니다</div>
+            ) : cmakNews.map((item, i) => (
+              <a key={item.idx} href="https://www.cmak.or.kr/html/notice/news.asp" target="_blank" rel="noreferrer"
+                style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '6px 14px', textDecoration: 'none', borderBottom: i < cmakNews.length - 1 ? '1px solid #f8f8f7' : 'none' }}>
+                <span style={{ fontSize: 11, color: '#999', flexShrink: 0, minWidth: 44 }}>{item.date.slice(5)}</span>
+                <span style={{ fontSize: 12, color: '#222', lineHeight: 1.4, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical' as const }}>{item.title}</span>
+              </a>
+            ))}
+          </div>
+        </div>
+
         <div style={{ height: 16 }} />
         <style>{`@keyframes bounce { 0%,80%,100%{transform:scale(0.7);opacity:0.5} 40%{transform:scale(1);opacity:1} }`}</style>
       </div>
@@ -434,10 +466,34 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* 하단 우 — 참고자료 */}
-      <div style={{ padding: '8px 24px 16px 8px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {/* 하단 우 — CM업계소식 + 참고자료 */}
+      <div style={{ padding: '8px 24px 16px 8px', display: 'flex', flexDirection: 'column', gap: 8, overflow: 'hidden' }}>
+
+        {/* CM업계소식 */}
+        <div style={{ flex: '0 0 56%', background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <div style={{ padding: '10px 14px', borderBottom: '1px solid #e8e8e6', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#111' }}>📰 CM업계소식</div>
+            <a href="https://www.cmak.or.kr/html/notice/news.asp" target="_blank" rel="noreferrer"
+              style={{ fontSize: 11, color: '#aaa', textDecoration: 'none' }}>CMAK →</a>
+          </div>
+          <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
+            {cmakLoading ? (
+              <div style={{ padding: '20px 16px', textAlign: 'center', color: '#ccc', fontSize: 12 }}>불러오는 중...</div>
+            ) : cmakNews.length === 0 ? (
+              <div style={{ padding: '20px 16px', textAlign: 'center', color: '#ccc', fontSize: 12 }}>소식을 불러오지 못했습니다</div>
+            ) : cmakNews.map((item, i) => (
+              <a key={item.idx} href="https://www.cmak.or.kr/html/notice/news.asp" target="_blank" rel="noreferrer"
+                style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '5px 14px', textDecoration: 'none', borderBottom: i < cmakNews.length - 1 ? '1px solid #f8f8f7' : 'none' }}>
+                <span style={{ fontSize: 11, color: '#999', flexShrink: 0, minWidth: 44 }}>{item.date.slice(5)}</span>
+                <span style={{ fontSize: 12, color: '#222', lineHeight: 1.4, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical' as const }}>{item.title}</span>
+              </a>
+            ))}
+          </div>
+        </div>
+
+        {/* 참고자료 */}
         <div style={{ flex: 1, background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          <div style={{ padding: '12px 16px', borderBottom: '1px solid #e8e8e6', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+          <div style={{ padding: '10px 14px', borderBottom: '1px solid #e8e8e6', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: '#111' }}>📋 참고 자료</div>
             {uniqueRefs.length > 0 && (
               <button onClick={() => setActiveRef(null)} style={{ fontSize: 11, color: '#aaa', border: 'none', background: 'none', cursor: 'pointer' }}>초기화</button>
@@ -445,9 +501,8 @@ export default function DashboardPage() {
           </div>
           <div style={{ flex: 1, overflowY: 'auto', padding: '10px 12px' }}>
             {uniqueRefs.length === 0 ? (
-              <div style={{ padding: '30px 16px', textAlign: 'center', color: '#bbb' }}>
-                <div style={{ fontSize: 24, marginBottom: 8 }}>📂</div>
-                <div style={{ fontSize: 11 }}>대화하면 관련 프로젝트나<br />참고 자료가 여기 표시됩니다</div>
+              <div style={{ padding: '16px', textAlign: 'center', color: '#bbb' }}>
+                <div style={{ fontSize: 11 }}>대화하면 관련 프로젝트가<br />여기 표시됩니다</div>
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
