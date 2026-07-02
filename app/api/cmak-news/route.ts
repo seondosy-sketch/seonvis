@@ -19,7 +19,8 @@ export async function GET() {
 
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
 
-    const html = await res.text()
+    const buffer = await res.arrayBuffer()
+    const html = new TextDecoder('euc-kr').decode(buffer)
 
     // go_Edit('idx') 패턴으로 각 행 파싱
     const items: NewsItem[] = []
