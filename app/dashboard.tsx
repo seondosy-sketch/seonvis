@@ -256,10 +256,12 @@ export default function Dashboard() {
     if (e && e.length > 0) {
       setExpected(e as ExpectedProject[])
     } else {
-      // 이전 주차 발주예상 중 이번 주 진행중에 없는 것은 이월
-      const prevWeek = shiftWeek(week, -1)
-      const { data: prevExpected } = await supabase
-        .from('expected_projects').select('*').eq('week', prevWeek).order('sort_order')
+      // 현재 주보다 이전 중 가장 최근 주차 데이터를 가져옴 (주수 제한 없음)
+      const { data: latestRow } = await supabase
+        .from('expected_projects').select('week').lt('week', week).order('week', { ascending: false }).limit(1).maybeSingle()
+      const { data: prevExpected } = latestRow
+        ? await supabase.from('expected_projects').select('*').eq('week', latestRow.week).order('sort_order')
+        : { data: null }
       const jinhaengNames = new Set(jinhaengRefs.map(r => r.name))
       const carried = ((prevExpected ?? []) as ExpectedProject[])
         .filter(ep => ep.name && !jinhaengNames.has(ep.name))
@@ -267,8 +269,9 @@ export default function Dashboard() {
       setExpected(carried.length > 0 ? carried : [EMPTY_EXPECTED(0, week), EMPTY_EXPECTED(1, week)])
     }
 
-    // 교육참가자: 주차 기준 진행중 프로젝트에서만 취합 (빈 경우만 자동 채우기)
-    const activeRefs = jinhaengRefs
+    // 교육참가자: 진행중 + 개찰 프로젝트에서 취합
+    const gaechingRefs = allRefs.filter(r => categorizeProject(r, weekStart) === '개찰')
+    const activeRefs = [...jinhaengRefs, ...gaechingRefs]
     const uniq = (field: keyof ProjectRef) => {
       const names = activeRefs.map(r => (r[field] as string) ?? '').filter(Boolean)
       return [...new Set(names)].join(', ')

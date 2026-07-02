@@ -8,7 +8,7 @@
 | **Task** | 웹 브라우저에서 데이터를 입력·저장하고, 버튼 하나로 원본 서식이 유지된 한글 보고서를 자동 생성·다운로드할 수 있는 내부 대시보드를 만든다. |
 | **Intent** | 주간 보고서 작성 시간을 단축하고, 프로젝트 일정을 캘린더로 시각화하여 팀 내 현황 공유를 원활하게 한다. 향후 팀 업무 전반을 통합 관리하는 허브로 확장할 수 있는 구조를 갖춘다. |
 | **Concerns** | ① HWPX 재생성 시 표 서식이 깨지는 문제 → 템플릿 XML 직접 조작 방식으로 해결 / ② 날짜 값이 "6/5", "추후" 등 비정형 문자열로 관리됨 → DB 컬럼을 text 타입으로 유지 / ③ 초기 MVP는 현재 주차 데이터만 관리 (히스토리 기능은 차후 추가) |
-| **Calibrate** | MVP 범위: 주간업무보고 단일 화면 완성. 나머지 8개 메뉴(근태관리, Calendar 등)는 준비중 상태로 노출. |
+| **Calibrate** | MVP+: 주간보고 + 프로젝트 List + 미래봇(AI) + 방문자 접근 신청 완성. 나머지 메뉴(근태관리, Calendar 등)는 준비중 상태로 노출. |
 
 ---
 
@@ -91,7 +91,7 @@
 |------|----------|
 | 배포 환경 | Vercel (서버리스, 별도 인프라 불필요) |
 | DB | Supabase (PostgreSQL, 무료 티어) |
-| 인증 | MVP 단계에서는 인증 없음 (내부망 사용 가정) |
+| 인증 | Google OAuth (Supabase Auth) — 허용 이메일 화이트리스트 기반, 방문자 접근 신청 기능 포함 |
 | 브라우저 | Chrome 최신 버전 기준 |
 | HWPX 서식 | 한글 2014 이상에서 정상 열림 보장 |
 
@@ -101,9 +101,11 @@
 
 | 영역 | 기술 |
 |------|------|
-| 프론트엔드 | Next.js 16 (App Router), TypeScript, Tailwind CSS |
+| 프론트엔드 | Next.js 16 (App Router, Turbopack), TypeScript, Tailwind CSS |
 | 백엔드 | Next.js API Routes (서버리스) |
 | DB | Supabase (PostgreSQL) |
+| 인증 | Google OAuth (Supabase Auth, @supabase/ssr) |
+| AI | Google Gemini API (`gemini-3.1-flash-lite`) — 미래봇 챗봇 |
 | HWPX 생성 | adm-zip (ZIP 파싱), @xmldom/xmldom (XML 조작) |
 | 배포 | Vercel |
 
@@ -153,17 +155,29 @@
 
 ---
 
-## 8. MVP 범위 외 (향후 추가)
+## 8. 구현 완료 현황 (2026-07-02 기준)
 
+### 완료
+- [x] 주간/월간보고 핵심 기능 (테이블 편집, HWPX 다운로드)
+- [x] Google OAuth 인증 + 방문자 접근 신청 시스템
+- [x] 프로젝트 List 페이지 (CRUD + 용역명 클릭 시 툴팁 모달)
+- [x] 미래봇 AI 챗봇 (Gemini — 프로젝트 조회·추가·수정)
+- [x] 교육참가자 자동완성 (진행중 프로젝트 기준)
+- [x] 교육참가자 행별 인원수 + 총계 표시
+- [x] 발주예상 이전 주차 미진입 항목 자동 이월 (주수 제한 없이 가장 최근 저장 주차 기준, 진행중 전환 항목 자동 제외)
+- [x] 주간 달력 — 주차 변경 시 자동 이동, 두 달 걸치는 주차 정상 표시
+- [x] 로그인 후 기본 랜딩 → 미래봇(/)
+
+### 향후 추가
 - 주차별 히스토리 조회 및 비교
-- 팀원 인증 / 접근 권한 관리
-- 프로젝트 List 페이지 (참여 프로젝트 전체 현황)
 - 근태관리 / Calendar / Maps / 환경영향평가 / DB Bank 메뉴
 - 모바일 반응형 레이아웃
+- tooltip_data.json 신규 프로젝트 자동 연동 (현재 46개 수동 등록)
 
 ---
 
 ## 9. 프로토타입 링크
 
-- **배포 URL**: https://dashboard-five-taupe-34.vercel.app
-- **소스 경로**: `C:\claude\homework1\dashboard`
+- **배포 URL**: https://seonvis.vercel.app
+- **소스 경로**: `C:\claude\seonvis`
+- **GitHub**: https://github.com/seondosy-sketch/seonvis

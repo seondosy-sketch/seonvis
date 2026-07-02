@@ -78,10 +78,18 @@ export default function Dashboard() {
     if (e && e.length > 0) {
       setExpected(e as ExpectedProject[])
     } else {
-      const { data: prev } = await supabase
-        .from('expected_projects').select('*').eq('week', prevWeek(week)).order('sort_order')
+      // 현재 주보다 이전 중 가장 최근 주차의 데이터를 가져옴 (주수 제한 없음)
+      const { data: latestWeekRow } = await supabase
+        .from('expected_projects').select('week').lt('week', week).order('week', { ascending: false }).limit(1).maybeSingle()
+      const prev = latestWeekRow ? (await supabase
+        .from('expected_projects').select('*').eq('week', latestWeekRow.week).order('sort_order')).data : null
       if (prev && prev.length > 0) {
-        setExpected(prev.map(({ id, ...r }: ExpectedProject) => ({ ...r, week })))
+        // 이번 주 진행중에 올라온 용역명은 발주예상에서 제외
+        const performingNames = new Set((p ?? []).map((r: PerformingProject) => r.name).filter(Boolean))
+        const carried = (prev as ExpectedProject[])
+          .filter((ep: ExpectedProject) => ep.name && !performingNames.has(ep.name))
+          .map(({ id, ...r }: ExpectedProject) => ({ ...r, week }))
+        setExpected(carried.length > 0 ? carried : [EMPTY_EXPECTED(0, week), EMPTY_EXPECTED(1, week)])
       } else {
         setExpected([EMPTY_EXPECTED(0, week), EMPTY_EXPECTED(1, week)])
       }
@@ -167,7 +175,14 @@ export default function Dashboard() {
 
   // 교육참가자: 개찰+진행중 전체에서 매 렌더마다 직접 계산
   const computedEdu = (() => {
+    console.log('[EDU DEBUG] performing:', performing.length,
+      '개찰:', performing.filter(r => r.status === '개찰').length,
+      '진행중:', performing.filter(r => r.status === '진행중').length,
+      'statuses:', performing.map(r => r.status))
     const allRows = performing.filter(r => r.name?.trim())
+    console.log('[EDU DEBUG] allRows:', allRows.length,
+      'directors:', allRows.map(r => r.director),
+      'notes:', allRows.map(r => r.note))
     const chiefs = [...new Set(allRows.map(r => r.director).filter((d): d is string => !!d?.trim()))]
     const byField: Record<string, string[]> = { 건축: [], 토목: [], 안전: [], 기계: [] }
     const seen: Record<string, Set<string>> = { 건축: new Set(), 토목: new Set(), 안전: new Set(), 기계: new Set() }
@@ -324,6 +339,14 @@ export default function Dashboard() {
           </div>
           <AddRowButton onClick={addExp} label="행 추가" />
         </Section>
+
+        {/* DEBUG: performing 상태 확인용 임시 출력 */}
+        <div style={{ background: '#fef3c7', border: '1px solid #f59e0b', borderRadius: 6, padding: '8px 14px', marginBottom: 12, fontSize: 11, color: '#92400e', fontFamily: 'monospace' }}>
+          [DEBUG] performing 전체: {performing.length}개
+          {' | '}개찰: {performing.filter(r => r.status === '개찰').length}개
+          {' | '}진행중: {performing.filter(r => r.status === '진행중').length}개
+          {' | '}status 목록: [{performing.map(r => `"${r.status}"`).join(', ')}]
+        </div>
 
         {/* 교육참가자 & 기타 */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
