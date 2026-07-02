@@ -136,6 +136,41 @@ async function generateWeekly(
   fillSection(gaeyalRows,   gaeyalProjects)
   fillSection(jinhaengRows, jinhaengProjects)
 
+  // 교육참가자 단락 업데이트
+  const allParas: any[] = Array.from(doc.getElementsByTagNameNS(HP_NS, 'p') as any[])
+  const paraText = (p: any): string =>
+    Array.from(p.getElementsByTagNameNS(HP_NS, 't') as any[]).map((t: any) => t.textContent ?? '').join('')
+  const setParaText = (p: any, text: string) => {
+    const runs: any[] = Array.from(p.getElementsByTagNameNS(HP_NS, 'run') as any[])
+    // 두 번째 이후 run 제거 (책임기술자 단락의 " - N명" run 등)
+    for (let i = 1; i < runs.length; i++) runs[i].parentNode?.removeChild(runs[i])
+    if (runs.length === 0) return
+    let t = runs[0].getElementsByTagNameNS(HP_NS, 't')[0]
+    if (!t) { t = doc.createElementNS(HP_NS, 'hp:t'); runs[0].appendChild(t) }
+    t.textContent = text
+  }
+  const eduHeaderIdx = allParas.findIndex(p => paraText(p).includes('교육참가자'))
+  const nextSecIdx   = allParas.findIndex((p, i) => i > eduHeaderIdx && /4\)/.test(paraText(p)))
+  if (eduHeaderIdx >= 0 && nextSecIdx > eduHeaderIdx) {
+    const eduParas = allParas.slice(eduHeaderIdx + 1, nextSecIdx)
+    // eduParas[0]: 책임기술자 줄
+    if (eduParas[0] && data.meta?.edu_chief) {
+      setParaText(eduParas[0], `   - 책  임 기술자 : ${data.meta.edu_chief}`)
+    }
+    // eduParas[1..]: 분야별 기술자 줄 (건축/토목/안전/기계)
+    const fieldLines = [data.meta?.edu_arch, data.meta?.edu_civil, data.meta?.edu_safety, data.meta?.edu_mech].filter(Boolean)
+    for (let i = 0; i < eduParas.length - 1 && i < fieldLines.length; i++) {
+      const lineText = i === 0
+        ? `   - 분야별 기술자 : ${fieldLines[0]}`
+        : `                     ${fieldLines[i]}`
+      setParaText(eduParas[i + 1], lineText)
+    }
+    // 남은 단락 비우기
+    for (let i = fieldLines.length; i < eduParas.length - 1; i++) {
+      setParaText(eduParas[i + 1], '')
+    }
+  }
+
   // 헤더 날짜 → 해당 주 월~금
   const [yearStr, wStr] = data.week.split('-W')
   const year = parseInt(yearStr), w = parseInt(wStr)
