@@ -153,19 +153,44 @@ async function generateWeekly(
   const nextSecIdx   = allParas.findIndex((p, i) => i > eduHeaderIdx && /4\)/.test(paraText(p)))
   if (eduHeaderIdx >= 0 && nextSecIdx > eduHeaderIdx) {
     const eduParas = allParas.slice(eduHeaderIdx + 1, nextSecIdx)
-    // eduParas[0]: 책임기술자 줄
-    if (eduParas[0] && data.meta?.edu_chief) {
-      setParaText(eduParas[0], `   - 책  임 기술자 : ${data.meta.edu_chief}`)
+
+    // meta에 값이 있으면 그대로 사용, 없으면 performing에서 직접 계산
+    let chiefStr = data.meta?.edu_chief || ''
+    let archStr  = data.meta?.edu_arch  || ''
+    let civilStr = data.meta?.edu_civil || ''
+    let safetyStr= data.meta?.edu_safety|| ''
+    let mechStr  = data.meta?.edu_mech  || ''
+
+    if (!chiefStr && !archStr) {
+      const allRows = (data.performing as any[]).filter((r: any) => r.name?.trim())
+      const chiefs = [...new Set(allRows.map((r: any) => r.director).filter(Boolean))] as string[]
+      const byField: Record<string, string[]> = { 건축: [], 토목: [], 안전: [], 기계: [] }
+      const seen: Record<string, Set<string>> = { 건축: new Set(), 토목: new Set(), 안전: new Set(), 기계: new Set() }
+      for (const row of allRows) {
+        if (!row.note) continue
+        for (const m of [...(row.note as string).matchAll(/-([가-힣]+)\s+([가-힣]+)/g)]) {
+          const field = m[1], name = m[2]
+          if (field in byField && !seen[field].has(name)) { byField[field].push(name); seen[field].add(name) }
+        }
+      }
+      const fmt = (names: string[], label: string) => names.length ? `${names.join(', ')} – ${label} ${names.length}명` : ''
+      chiefStr  = chiefs.length ? `${chiefs.join(', ')} - ${chiefs.length}명` : ''
+      archStr   = fmt(byField.건축, '건축')
+      civilStr  = fmt(byField.토목, '토목')
+      safetyStr = fmt(byField.안전, '안전')
+      mechStr   = fmt(byField.기계, '기계')
     }
-    // eduParas[1..]: 분야별 기술자 줄 (건축/토목/안전/기계)
-    const fieldLines = [data.meta?.edu_arch, data.meta?.edu_civil, data.meta?.edu_safety, data.meta?.edu_mech].filter(Boolean)
+
+    if (eduParas[0] && chiefStr)
+      setParaText(eduParas[0], `   - 책  임 기술자 : ${chiefStr}`)
+
+    const fieldLines = [archStr, civilStr, safetyStr, mechStr].filter(Boolean)
     for (let i = 0; i < eduParas.length - 1 && i < fieldLines.length; i++) {
       const lineText = i === 0
         ? `   - 분야별 기술자 : ${fieldLines[0]}`
         : `                     ${fieldLines[i]}`
       setParaText(eduParas[i + 1], lineText)
     }
-    // 남은 단락 비우기
     for (let i = fieldLines.length; i < eduParas.length - 1; i++) {
       setParaText(eduParas[i + 1], '')
     }
