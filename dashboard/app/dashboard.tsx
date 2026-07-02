@@ -46,6 +46,17 @@ export default function Dashboard() {
   const [downloading, setDownloading] = useState<'' | 'weekly' | 'monthly'>('')
   const [saveMsg, setSaveMsg] = useState('')
 
+  const prevWeek = (w: string) => {
+    const [y, wn] = w.split('-W').map(Number)
+    if (wn > 1) return `${y}-W${String(wn - 1).padStart(2, '0')}`
+    const dec28 = new Date(y - 1, 11, 28)
+    const jan4 = new Date(y - 1, 0, 4)
+    const startOfW1 = new Date(jan4)
+    startOfW1.setDate(jan4.getDate() - jan4.getDay() + 1)
+    const lastWeek = Math.ceil(((dec28.getTime() - startOfW1.getTime()) / 86400000 + 1) / 7)
+    return `${y - 1}-W${String(lastWeek).padStart(2, '0')}`
+  }
+
   const load = useCallback(async () => {
     const [{ data: p }, { data: e }, { data: m }] = await Promise.all([
       supabase.from('performing_projects').select('*').eq('week', week).order('sort_order'),
@@ -67,7 +78,13 @@ export default function Dashboard() {
     if (e && e.length > 0) {
       setExpected(e as ExpectedProject[])
     } else {
-      setExpected([EMPTY_EXPECTED(0, week), EMPTY_EXPECTED(1, week)])
+      const { data: prev } = await supabase
+        .from('expected_projects').select('*').eq('week', prevWeek(week)).order('sort_order')
+      if (prev && prev.length > 0) {
+        setExpected(prev.map(({ id, ...r }: ExpectedProject) => ({ ...r, week })))
+      } else {
+        setExpected([EMPTY_EXPECTED(0, week), EMPTY_EXPECTED(1, week)])
+      }
     }
     if (m) setMeta(m as WeeklyMeta)
   }, [week])
