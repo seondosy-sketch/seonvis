@@ -114,7 +114,7 @@ export default function Dashboard() {
       const res = await fetch('/api/hwpx', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type, week, performing, expected, meta }),
+        body: JSON.stringify({ type, week, performing, expected, meta: { ...meta, ...computedEdu } }),
       })
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
@@ -165,8 +165,9 @@ export default function Dashboard() {
   const jinhaeng = performing.filter(r => r.status === '진행중')
   const totalFee = performing.reduce((s, r) => s + (r.fee ?? 0), 0)
 
-  useEffect(() => {
-    const allRows = performing.filter(r => r.name.trim())
+  // 교육참가자: 개찰+진행중 전체에서 매 렌더마다 직접 계산
+  const computedEdu = (() => {
+    const allRows = performing.filter(r => r.name?.trim())
     const chiefs = [...new Set(allRows.map(r => r.director).filter((d): d is string => !!d?.trim()))]
     const byField: Record<string, string[]> = { 건축: [], 토목: [], 안전: [], 기계: [] }
     const seen: Record<string, Set<string>> = { 건축: new Set(), 토목: new Set(), 안전: new Set(), 기계: new Set() }
@@ -174,23 +175,21 @@ export default function Dashboard() {
       if (!row.note) continue
       for (const m of [...row.note.matchAll(/-([가-힣]+)\s+([가-힣]+)/g)]) {
         const field = m[1], name = m[2]
-        if (field in byField && !seen[field].has(name)) {
-          byField[field].push(name)
-          seen[field].add(name)
-        }
+        if (field in byField && !seen[field].has(name)) { byField[field].push(name); seen[field].add(name) }
       }
     }
     const fmt = (names: string[], label: string) =>
       names.length ? `${names.join(', ')} – ${label} ${names.length}명` : ''
-    setMeta(m => ({
-      ...m,
+    const total = chiefs.length + Object.values(byField).reduce((s, v) => s + v.length, 0)
+    return {
       edu_chief:  chiefs.length ? `${chiefs.join(', ')} - ${chiefs.length}명` : '',
       edu_arch:   fmt(byField.건축, '건축'),
       edu_civil:  fmt(byField.토목, '토목'),
       edu_safety: fmt(byField.안전, '안전'),
       edu_mech:   fmt(byField.기계, '기계'),
-    }))
-  }, [performing])
+      total,
+    }
+  })()
 
   return (
     <div className="min-h-screen" style={{ background: '#f8f8f7' }}>
@@ -331,23 +330,25 @@ export default function Dashboard() {
           <Section title="3) 교육참가자 (OSG팀)">
             <div style={{ padding: '4px 0' }}>
               {([
-                { key: 'edu_chief', label: '책임' },
-                { key: 'edu_arch',  label: '건축' },
-                { key: 'edu_civil', label: '토목' },
-                { key: 'edu_safety',label: '안전' },
-                { key: 'edu_mech',  label: '기계' },
-              ] as { key: keyof WeeklyMeta; label: string }[]).map(({ key, label }) => (
+                { key: 'edu_chief',  label: '책임' },
+                { key: 'edu_arch',   label: '건축' },
+                { key: 'edu_civil',  label: '토목' },
+                { key: 'edu_safety', label: '안전' },
+                { key: 'edu_mech',   label: '기계' },
+              ] as { key: keyof typeof computedEdu; label: string }[]).map(({ key, label }) => (
+                key === 'total' ? null :
                 <div key={key} style={{ display: 'flex', alignItems: 'flex-start', borderBottom: '1px solid #f5f5f3', padding: '6px 16px', gap: 12 }}>
                   <span style={{ fontSize: 12, fontWeight: 500, color: '#888', minWidth: 30, paddingTop: 1 }}>{label}</span>
-                  <input
-                    className="cell-input"
-                    value={meta[key] as string}
-                    onChange={e => setMeta(m => ({ ...m, [key]: e.target.value }))}
-                    placeholder="이름, 이름 – N명"
-                    style={{ flex: 1 }}
-                  />
+                  <span style={{ flex: 1, fontSize: 13, color: computedEdu[key] ? '#111' : '#bbb', paddingTop: 1 }}>
+                    {computedEdu[key] || '–'}
+                  </span>
                 </div>
               ))}
+              {computedEdu.total > 0 && (
+                <div style={{ padding: '6px 16px', fontSize: 12, color: '#888', textAlign: 'right' }}>
+                  총 {computedEdu.total}명
+                </div>
+              )}
             </div>
           </Section>
           <Section title="4) 기 타">
