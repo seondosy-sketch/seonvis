@@ -165,7 +165,7 @@ export default function Dashboard() {
   const jinhaeng = performing.filter(r => r.status === '진행중')
   const totalFee = performing.reduce((s, r) => s + (r.fee ?? 0), 0)
 
-  const deriveEdu = () => {
+  useEffect(() => {
     const allRows = performing.filter(r => r.name.trim())
     const chiefs = [...new Set(allRows.map(r => r.director).filter((d): d is string => !!d?.trim()))]
     const byField: Record<string, string[]> = { 건축: [], 토목: [], 안전: [], 기계: [] }
@@ -190,7 +190,7 @@ export default function Dashboard() {
       edu_safety: fmt(byField.안전, '안전'),
       edu_mech:   fmt(byField.기계, '기계'),
     }))
-  }
+  }, [performing])
 
   return (
     <div className="min-h-screen" style={{ background: '#f8f8f7' }}>
@@ -328,9 +328,7 @@ export default function Dashboard() {
 
         {/* 교육참가자 & 기타 */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <Section title="3) 교육참가자 (OSG팀)" titleRight={
-            <button onClick={deriveEdu} style={{ fontSize: 11, padding: '3px 10px', borderRadius: 4, border: '1px solid #d1d5db', background: '#f9fafb', color: '#555', cursor: 'pointer' }}>자동 취합</button>
-          }>
+          <Section title="3) 교육참가자 (OSG팀)">
             <div style={{ padding: '4px 0' }}>
               {([
                 { key: 'edu_chief', label: '책임' },
