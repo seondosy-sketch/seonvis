@@ -174,22 +174,20 @@ export default function WeeklyCalendar({
         </div>
       </div>
 
-      {/* Calendar grid */}
+      {/* Calendar grid — 헤더 + 날짜 셀을 단일 그리드로 통합해 열 정렬 보장 */}
       <div style={{ padding: '0 8px 8px' }}>
-        {/* Day headers */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', marginBottom: 2 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2 }}>
+          {/* Day headers */}
           {DAY_NAMES.map((d, i) => (
             <div key={d} style={{
               textAlign: 'center', fontSize: 11, fontWeight: 500, padding: '6px 0',
               color: i === 0 ? '#ef4444' : i === 6 ? '#3b82f6' : '#888'
             }}>{d}</div>
           ))}
-        </div>
 
-        {/* Weeks */}
-        {weeks.map((wk, wi) => (
-          <div key={wi} style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2, marginBottom: 2 }}>
-            {wk.map((day, di) => {
+          {/* 날짜 셀 전체 */}
+          {weeks.flat().map((day, idx) => {
+            const di = idx % 7
               const key = dateKey(day)
               const evs = events[key] || []
               const inWeek = isInWeek(day)
@@ -199,7 +197,7 @@ export default function WeeklyCalendar({
               const isOtherMonth = day.getMonth() !== viewMonth
 
               return (
-                <div key={di} style={{
+                <div key={idx} style={{
                   borderRadius: 6,
                   border: inWeek ? '1px solid #d1d5db' : '1px solid transparent',
                   background: inWeek ? '#f9fafb' : 'transparent',
@@ -207,14 +205,16 @@ export default function WeeklyCalendar({
                   opacity: isOtherMonth && !inWeek ? 0.35 : 1,
                   overflow: 'visible',
                 }}>
-                  <div style={{
-                    width: 22, height: 22, borderRadius: '50%', display: 'flex',
-                    alignItems: 'center', justifyContent: 'center', marginBottom: 3,
-                    background: tod ? '#111' : 'transparent',
-                    fontSize: 12, fontWeight: tod ? 600 : 400,
-                    color: tod ? '#fff' : isSun ? '#ef4444' : isSat ? '#3b82f6' : '#333',
-                  }}>
-                    {day.getDate()}
+                  <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 3 }}>
+                    <div style={{
+                      width: 22, height: 22, borderRadius: '50%', display: 'flex',
+                      alignItems: 'center', justifyContent: 'center',
+                      background: tod ? '#111' : 'transparent',
+                      fontSize: 12, fontWeight: tod ? 600 : 400,
+                      color: tod ? '#fff' : isSun ? '#ef4444' : isSat ? '#3b82f6' : '#333',
+                    }}>
+                      {day.getDate()}
+                    </div>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                     {(isMobile && evs.length > 2 ? evs.slice(0, 2) : evs).map((ev, ei) => (
@@ -251,8 +251,7 @@ export default function WeeklyCalendar({
                 </div>
               )
             })}
-          </div>
-        ))}
+        </div>
       </div>
     </div>
 
