@@ -30,6 +30,7 @@ export async function GET() {
     while ((match = rowRegex.exec(html)) !== null && items.length < 10) {
       const idx = match[1]
       const rawTitle = match[2].replace(/<[^>]+>/g, '').trim()
+        .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
       const date = `20${match[3].replace(/\./g, '-')}`
       if (rawTitle) items.push({ idx, title: rawTitle, date })
     }
