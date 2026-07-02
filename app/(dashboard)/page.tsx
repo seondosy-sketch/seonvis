@@ -330,7 +330,7 @@ export default function DashboardPage() {
             ) : cmakNews.length === 0 ? (
               <div style={{ padding: '16px', textAlign: 'center', color: '#ccc', fontSize: 12 }}>소식을 불러오지 못했습니다</div>
             ) : cmakNews.map((item, i) => (
-              <a key={item.idx} href="https://www.cmak.or.kr/html/notice/news.asp" target="_blank" rel="noreferrer"
+              <a key={item.idx} href={`https://www.cmak.or.kr/html/notice/news_r.asp?code=0&search=&searchString=&no=${item.idx}`} target="_blank" rel="noreferrer"
                 style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '6px 14px', textDecoration: 'none', borderBottom: i < cmakNews.length - 1 ? '1px solid #f8f8f7' : 'none' }}>
                 <span style={{ fontSize: 11, color: '#999', flexShrink: 0, minWidth: 44 }}>{item.date.slice(5)}</span>
                 <span style={{ fontSize: 12, color: '#222', lineHeight: 1.4, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical' as const }}>{item.title}</span>
@@ -482,7 +482,7 @@ export default function DashboardPage() {
             ) : cmakNews.length === 0 ? (
               <div style={{ padding: '20px 16px', textAlign: 'center', color: '#ccc', fontSize: 12 }}>소식을 불러오지 못했습니다</div>
             ) : cmakNews.map((item, i) => (
-              <a key={item.idx} href="https://www.cmak.or.kr/html/notice/news.asp" target="_blank" rel="noreferrer"
+              <a key={item.idx} href={`https://www.cmak.or.kr/html/notice/news_r.asp?code=0&search=&searchString=&no=${item.idx}`} target="_blank" rel="noreferrer"
                 style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '5px 14px', textDecoration: 'none', borderBottom: i < cmakNews.length - 1 ? '1px solid #f8f8f7' : 'none' }}>
                 <span style={{ fontSize: 11, color: '#999', flexShrink: 0, minWidth: 44 }}>{item.date.slice(5)}</span>
                 <span style={{ fontSize: 12, color: '#222', lineHeight: 1.4, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical' as const }}>{item.title}</span>
