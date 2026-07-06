@@ -302,7 +302,7 @@ export default function ProjectsPage() {
     const headers = ['번호', '유형', '발주처', '용역명', '용역비(억)', '제안서', '점수', '제출일', '발표일', '개찰일', '결과', '낙찰사', '참여사', '단장', '건축', '토목', '기계', '안전', '상태', '비고']
     const rowsData = filtered.map(p => [
       p.project_number, p.type, p.client, p.name,
-      p.fee ?? '', p.tp_score, p.duration_days,
+      p.fee ?? '', p.tp_score, (tooltipAll[p.project_number]?.score_dist ?? '').match(/^[\d.]+/)?.[0] ?? '',
       p.submit_date ?? '', p.interview_date ?? '', p.bid_date ?? '',
       p.result_score, p.evaluation, p.participants, p.director,
       p.staff_arch, p.staff_civil, p.staff_mech, p.staff_safety,
@@ -370,6 +370,7 @@ export default function ProjectsPage() {
                 <tr><td colSpan={21} style={{ padding: 40, textAlign: 'center', color: '#bbb' }}>데이터가 없습니다</td></tr>
               ) : filtered.map(p => {
                 const hasTooltip = !!tooltipAll[p.project_number]
+                const scoreDist = tooltipAll[p.project_number]?.score_dist ?? ''
                 return (
                   <tr key={p.id} style={{ borderBottom: '1px solid #f0f0ee' }}>
                     <td style={td}>
@@ -389,7 +390,7 @@ export default function ProjectsPage() {
                     </td>
                     <td style={{ ...tdnw, textAlign: 'right' }}>{p.fee != null ? p.fee : '-'}</td>
                     <td style={tdnw}>{p.tp_score}</td>
-                    <td style={tdnw}>{p.duration_days}</td>
+                    <td style={tdnw}>{scoreDist.match(/^[\d.]+/)?.[0] ?? ''}</td>
                     <td style={tdnw}><NoteCell value={p.submit_date ?? '-'} note={notes[p.project_number]?.['submit_date']} onNote={e => openNote(e, p.project_number, 'submit_date')} /></td>
                     <td style={tdnw}><NoteCell value={p.interview_date ?? '-'} note={notes[p.project_number]?.['interview_date']} onNote={e => openNote(e, p.project_number, 'interview_date')} /></td>
                     <td style={tdnw}><NoteCell value={p.bid_date ?? '-'} note={notes[p.project_number]?.['bid_date']} onNote={e => openNote(e, p.project_number, 'bid_date')} /></td>

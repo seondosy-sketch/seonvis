@@ -269,9 +269,8 @@ export default function Dashboard() {
       setExpected(carried.length > 0 ? carried : [EMPTY_EXPECTED(0, week), EMPTY_EXPECTED(1, week)])
     }
 
-    // 교육참가자: 진행중 + 개찰 프로젝트에서 취합
-    const gaechingRefs = allRefs.filter(r => categorizeProject(r, weekStart) === '개찰')
-    const activeRefs = [...jinhaengRefs, ...gaechingRefs]
+    // 교육참가자: 진행중 프로젝트에서만 취합
+    const activeRefs = jinhaengRefs
     const uniq = (field: keyof ProjectRef) => {
       const names = activeRefs.map(r => (r[field] as string) ?? '').filter(Boolean)
       return [...new Set(names)].join(', ')
