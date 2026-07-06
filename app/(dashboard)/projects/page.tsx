@@ -151,6 +151,7 @@ export default function ProjectsPage() {
     open: false, form: { ...EMPTY_FORM }, editId: null,
   })
   const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
 
   const loadNotes = useCallback(async () => {
@@ -243,6 +244,7 @@ export default function ProjectsPage() {
   const save = async () => {
     if (!modal.form.name.trim()) return
     setSaving(true)
+    setSaveError(null)
     try {
       const f = modal.form
       const projectPayload = {
@@ -271,14 +273,18 @@ export default function ProjectsPage() {
         .some(([, v]) => v && String(v).trim() !== '')
 
       if (modal.editId) {
-        await supabase.from('projects').update({ ...projectPayload, updated_at: new Date().toISOString() }).eq('id', modal.editId)
+        const { error: projErr } = await supabase.from('projects').update({ ...projectPayload, updated_at: new Date().toISOString() }).eq('id', modal.editId)
+        if (projErr) { setSaveError(`저장 실패: ${projErr.message}`); return }
         if (hasTooltipData) {
-          await supabase.from('project_tooltips').upsert({ ...tooltipPayload, updated_at: new Date().toISOString() }, { onConflict: 'project_number' })
+          const { error: tipErr } = await supabase.from('project_tooltips').upsert({ ...tooltipPayload, updated_at: new Date().toISOString() }, { onConflict: 'project_number' })
+          if (tipErr) { setSaveError(`상세정보 저장 실패: ${tipErr.message}`); return }
         }
       } else {
-        await supabase.from('projects').insert(projectPayload)
+        const { error: projErr } = await supabase.from('projects').insert(projectPayload)
+        if (projErr) { setSaveError(`저장 실패: ${projErr.message}`); return }
         if (hasTooltipData) {
-          await supabase.from('project_tooltips').insert(tooltipPayload)
+          const { error: tipErr } = await supabase.from('project_tooltips').insert(tooltipPayload)
+          if (tipErr) { setSaveError(`상세정보 저장 실패: ${tipErr.message}`); return }
         }
       }
 
@@ -670,9 +676,12 @@ export default function ProjectsPage() {
               </div>
             </div>
 
-            <div style={{ padding: '12px 24px 20px', display: 'flex', gap: 8, justifyContent: 'flex-end', borderTop: '1px solid #f0f0ee', flexShrink: 0 }}>
-              <button onClick={closeModal} style={outlineBtn}>취소</button>
-              <button onClick={save} disabled={saving} style={{ ...primaryBtn, opacity: saving ? 0.6 : 1 }}>{saving ? '저장 중...' : '저장'}</button>
+            <div style={{ padding: '12px 24px 20px', borderTop: '1px solid #f0f0ee', flexShrink: 0 }}>
+              {saveError && <div style={{ marginBottom: 8, padding: '8px 12px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, fontSize: 12, color: '#b91c1c' }}>{saveError}</div>}
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <button onClick={closeModal} style={outlineBtn}>취소</button>
+                <button onClick={save} disabled={saving} style={{ ...primaryBtn, opacity: saving ? 0.6 : 1 }}>{saving ? '저장 중...' : '저장'}</button>
+              </div>
             </div>
           </div>
         </div>
