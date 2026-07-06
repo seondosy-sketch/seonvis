@@ -86,14 +86,25 @@ export default function DashboardPage() {
   const loadPerforming = useCallback(async () => {
     const { data: perf } = await supabase.from('performing_projects').select('*').eq('week', week).order('sort_order')
 
+    // projects 테이블에서 bid_date 등 날짜 정보 항상 로드
+    const { data: projs } = await supabase
+      .from('projects')
+      .select('name, submit_date, interview_date, bid_date, participants, status_override, evaluation, result_score')
+      .order('project_number', { ascending: false })
+    const projByName: Record<string, any> = {}
+    if (projs) for (const p of projs) projByName[p.name] = p
+
     if (perf && perf.length > 0) {
-      setPerforming(perf as PerformingProject[])
+      // performing_projects 날짜가 비어 있으면 projects.bid_date로 보완
+      const merged = (perf as PerformingProject[]).map(p => ({
+        ...p,
+        result_date: p.result_date?.trim() ? p.result_date : fmtDate(projByName[p.name]?.bid_date ?? null),
+        submit_date: p.submit_date?.trim() ? p.submit_date : fmtDate(projByName[p.name]?.submit_date ?? null),
+        interview_date: p.interview_date?.trim() ? p.interview_date : fmtDate(projByName[p.name]?.interview_date ?? null),
+      }))
+      setPerforming(merged)
     } else {
       // 저장된 주간 데이터가 없으면 projects 테이블에서 직접 불러오기
-      const { data: projs } = await supabase
-        .from('projects')
-        .select('name, submit_date, interview_date, bid_date, participants, status_override, evaluation, result_score')
-        .order('project_number', { ascending: false })
       if (projs) {
         const { start: weekStart } = getWeekBounds(week)
         const rows: PerformingProject[] = projs
