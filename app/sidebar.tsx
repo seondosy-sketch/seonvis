@@ -34,7 +34,7 @@ const GROUPS = [
     color: '#0ea5e9',
     items: [
       { id: 10, label: '기술인 경력 DB',   href: null },
-      { id: 11, label: '제안서 DB',        href: null },
+      { id: 11, label: '제안서 DB',        href: 'https://proposal-db-mvp.vercel.app/' },
     ],
   },
 ]
@@ -127,21 +127,25 @@ export default function Sidebar({ isAdmin, userEmail, onClose }: SidebarProps) {
                   )
                 }
 
-                return (
-                  <Link key={item.id} href={item.href!} onClick={onClose} style={{ textDecoration: 'none' }}>
-                    <div style={{
-                      display: 'flex', alignItems: 'center', gap: 8,
-                      padding: '6px 10px', cursor: 'pointer',
-                      background: isActive ? '#fef9f0' : 'transparent',
-                      borderRight: isActive ? `2px solid ${group.color}` : '2px solid transparent',
-                    }}>
-                      <span style={{
-                        fontSize: 13, flex: 1,
-                        color: isActive ? '#111' : '#444',
-                        fontWeight: isActive ? 600 : 400,
-                      }}>{item.label}</span>
-                    </div>
-                  </Link>
+                const isExternal = item.href!.startsWith('http')
+                const inner = (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    padding: '6px 10px', cursor: 'pointer',
+                    background: isActive ? '#fef9f0' : 'transparent',
+                    borderRight: isActive ? `2px solid ${group.color}` : '2px solid transparent',
+                  }}>
+                    <span style={{
+                      fontSize: 13, flex: 1,
+                      color: isActive ? '#111' : '#444',
+                      fontWeight: isActive ? 600 : 400,
+                    }}>{item.label}</span>
+                  </div>
+                )
+                return isExternal ? (
+                  <a key={item.id} href={item.href!} target="_blank" rel="noopener noreferrer" onClick={onClose} style={{ textDecoration: 'none' }}>{inner}</a>
+                ) : (
+                  <Link key={item.id} href={item.href!} onClick={onClose} style={{ textDecoration: 'none' }}>{inner}</Link>
                 )
               })}
             </div>
