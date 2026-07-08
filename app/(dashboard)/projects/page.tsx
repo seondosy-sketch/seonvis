@@ -613,25 +613,22 @@ export default function ProjectsPage() {
               <SectionTitle>제안 / 평가 배점</SectionTitle>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
                 <Row3>
-                  <Field label="T/P 배점"><input style={inp} value={modal.form.tp_score} onChange={e => set('tp_score', e.target.value)} placeholder="20p" /></Field>
+                  <Field label="제안서(P)"><input style={inp} value={modal.form.tp_score} onChange={e => set('tp_score', e.target.value)} placeholder="20p" /></Field>
                   <Field label="배점 기준"><input style={inp} value={modal.form.score_dist} onChange={e => set('score_dist', e.target.value)} placeholder="4.5(책임3+분야1.5)" /></Field>
                   <Field label="참여업체 수"><input style={inp} value={modal.form.participants} onChange={e => set('participants', e.target.value)} placeholder="9개사" /></Field>
                 </Row3>
-                <Row3>
-                  <Field label="제안서(P)"><input style={inp} value={modal.form.proposal_p} onChange={e => set('proposal_p', e.target.value)} placeholder="8p" /></Field>
+                <Row2>
                   <Field label="자기소개서(P)"><input style={inp} value={modal.form.self_intro_p} onChange={e => set('self_intro_p', e.target.value)} placeholder="각 2p" /></Field>
-                  <Field label="파워포인트(P)"><input style={inp} value={modal.form.ppt_p} onChange={e => set('ppt_p', e.target.value)} placeholder="20p" /></Field>
-                </Row3>
+                </Row2>
               </div>
 
               {/* 섹션 5: 일정 */}
               <SectionTitle>일정</SectionTitle>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
-                <Row3>
+                <Row2>
                   <Field label="제출일"><input style={inp} type="date" value={modal.form.submit_date ?? ''} onChange={e => set('submit_date', e.target.value || null)} /></Field>
                   <Field label="PQ 제출일"><input style={inp} value={modal.form.pq_date} onChange={e => set('pq_date', e.target.value)} placeholder="2026-07-01" /></Field>
-                  <Field label="SOQ 제출일"><input style={inp} value={modal.form.soq_date} onChange={e => set('soq_date', e.target.value)} placeholder="2026-07-01" /></Field>
-                </Row3>
+                </Row2>
                 <Row3>
                   <Field label="발표/면접일"><input style={inp} type="date" value={modal.form.interview_date ?? ''} onChange={e => set('interview_date', e.target.value || null)} /></Field>
                   <Field label="면접시간"><input style={inp} value={modal.form.interview_time} onChange={e => set('interview_time', e.target.value)} placeholder="5분/4분" /></Field>
