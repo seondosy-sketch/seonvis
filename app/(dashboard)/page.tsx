@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
-import WeeklyCalendar from '../components/WeeklyCalendar'
+import WeeklyCalendar, { Holiday, TeamEvent } from '../components/WeeklyCalendar'
 import { PerformingProject } from '@/lib/supabase'
 import { useIsMobile } from '@/lib/useIsMobile'
 
@@ -80,6 +80,12 @@ export default function DashboardPage() {
   // Calendar
   const [performing, setPerforming] = useState<PerformingProject[]>([])
   const [calNotes, setCalNotes] = useState<Record<string, Record<string, string>>>({})
+  const [holidays, setHolidays] = useState<Holiday[]>([])
+  const [teamEvents, setTeamEvents] = useState<TeamEvent[]>([])
+  const [addEventPopup, setAddEventPopup] = useState<{ date: string } | null>(null)
+  const [newEventTitle, setNewEventTitle] = useState('')
+  const [newEventColor, setNewEventColor] = useState('#7c3aed')
+  const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; title: string } | null>(null)
   const [cmakNews, setCmakNews] = useState<{ idx: string; title: string; date: string }[]>([])
   const [cmakLoading, setCmakLoading] = useState(true)
 
@@ -150,6 +156,40 @@ export default function DashboardPage() {
     document.addEventListener('visibilitychange', onVisible)
     return () => document.removeEventListener('visibilitychange', onVisible)
   }, [loadPerforming])
+
+  // 공휴일 로드 (현재 연도 + 다음 연도)
+  useEffect(() => {
+    const year = new Date().getFullYear()
+    Promise.all([
+      fetch(`/api/holidays?year=${year}`).then(r => r.json()).catch(() => []),
+      fetch(`/api/holidays?year=${year + 1}`).then(r => r.json()).catch(() => []),
+    ]).then(([cur, next]) => {
+      setHolidays([...(cur as Holiday[]), ...(next as Holiday[])])
+    })
+  }, [])
+
+  // 팀일정 로드
+  const loadTeamEvents = useCallback(async () => {
+    const { data } = await supabase.from('team_events').select('*').order('date')
+    if (data) setTeamEvents(data as TeamEvent[])
+  }, [])
+
+  useEffect(() => { loadTeamEvents() }, [loadTeamEvents])
+
+  const addTeamEvent = async () => {
+    if (!addEventPopup || !newEventTitle.trim()) return
+    await supabase.from('team_events').insert({ title: newEventTitle.trim(), date: addEventPopup.date, color: newEventColor })
+    await loadTeamEvents()
+    setAddEventPopup(null)
+    setNewEventTitle('')
+    setNewEventColor('#7c3aed')
+  }
+
+  const deleteTeamEvent = async (id: string) => {
+    await supabase.from('team_events').delete().eq('id', id)
+    await loadTeamEvents()
+    setDeleteConfirm(null)
+  }
 
   useEffect(() => {
     fetch('/api/cmak-news')
@@ -256,7 +296,7 @@ export default function DashboardPage() {
 
         {/* 달력 */}
         <div style={{ margin: '10px 12px 0', border: '1px solid #e8e8e6', borderRadius: 8, overflow: 'hidden', background: '#fff' }}>
-          <WeeklyCalendar week={week} performing={performing} notes={calNotes} />
+          <WeeklyCalendar week={week} performing={performing} notes={calNotes} holidays={holidays} teamEvents={teamEvents} onDateClick={d => { setAddEventPopup({ date: d }); setNewEventTitle(''); setNewEventColor('#7c3aed') }} onTeamEventClick={(id, title) => setDeleteConfirm({ id, title })} />
         </div>
 
         {/* 미래봇 */}
@@ -352,6 +392,37 @@ export default function DashboardPage() {
 
         <div style={{ height: 16 }} />
         <style>{`@keyframes bounce { 0%,80%,100%{transform:scale(0.7);opacity:0.5} 40%{transform:scale(1);opacity:1} }`}</style>
+
+        {addEventPopup && (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300 }} onClick={() => setAddEventPopup(null)}>
+            <div style={{ background: '#fff', borderRadius: 12, width: 320, padding: 20, boxShadow: '0 20px 60px rgba(0,0,0,0.2)', margin: '0 16px' }} onClick={e => e.stopPropagation()}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: '#111', marginBottom: 4 }}>팀일정 추가</div>
+              <div style={{ fontSize: 12, color: '#888', marginBottom: 14 }}>{addEventPopup.date}</div>
+              <input autoFocus value={newEventTitle} onChange={e => setNewEventTitle(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addTeamEvent() }} placeholder="일정 제목" style={{ width: '100%', height: 36, padding: '0 10px', border: '1px solid #e8e8e6', borderRadius: 6, fontSize: 13, boxSizing: 'border-box', marginBottom: 12, outline: 'none' }} />
+              <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+                {['#7c3aed','#2563eb','#16a34a','#ea580c','#db2777','#0891b2'].map(c => (
+                  <div key={c} onClick={() => setNewEventColor(c)} style={{ width: 24, height: 24, borderRadius: '50%', background: c, cursor: 'pointer', outline: newEventColor === c ? `3px solid ${c}` : 'none', outlineOffset: 2 }} />
+                ))}
+              </div>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <button onClick={() => setAddEventPopup(null)} style={{ padding: '6px 14px', borderRadius: 6, border: '1px solid #e8e8e6', background: '#fff', fontSize: 13, cursor: 'pointer', color: '#555' }}>취소</button>
+                <button onClick={addTeamEvent} disabled={!newEventTitle.trim()} style={{ padding: '6px 14px', borderRadius: 6, border: 'none', background: '#111', fontSize: 13, cursor: 'pointer', color: '#fff', opacity: newEventTitle.trim() ? 1 : 0.4 }}>추가</button>
+              </div>
+            </div>
+          </div>
+        )}
+        {deleteConfirm && (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300 }} onClick={() => setDeleteConfirm(null)}>
+            <div style={{ background: '#fff', borderRadius: 12, width: 280, padding: 20, boxShadow: '0 20px 60px rgba(0,0,0,0.2)', margin: '0 16px' }} onClick={e => e.stopPropagation()}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: '#111', marginBottom: 6 }}>일정 삭제</div>
+              <div style={{ fontSize: 13, color: '#555', marginBottom: 16 }}>"{deleteConfirm.title}" 일정을 삭제할까요?</div>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <button onClick={() => setDeleteConfirm(null)} style={{ padding: '6px 14px', borderRadius: 6, border: '1px solid #e8e8e6', background: '#fff', fontSize: 13, cursor: 'pointer', color: '#555' }}>취소</button>
+                <button onClick={() => deleteTeamEvent(deleteConfirm.id)} style={{ padding: '6px 14px', borderRadius: 6, border: 'none', background: '#b91c1c', fontSize: 13, cursor: 'pointer', color: '#fff' }}>삭제</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     )
   }
@@ -363,7 +434,7 @@ export default function DashboardPage() {
       <div style={{ overflow: 'hidden', padding: '16px 16px 8px 24px', display: 'flex', flexDirection: 'column' }}>
         <div style={{ flex: 1, overflow: 'hidden', borderRadius: 8, border: '1px solid #e8e8e6', background: '#fff' }}>
           <div style={{ height: '100%', overflow: 'auto' }}>
-            <WeeklyCalendar week={week} performing={performing} notes={calNotes} />
+            <WeeklyCalendar week={week} performing={performing} notes={calNotes} holidays={holidays} teamEvents={teamEvents} onDateClick={d => { setAddEventPopup({ date: d }); setNewEventTitle(''); setNewEventColor('#7c3aed') }} onTeamEventClick={(id, title) => setDeleteConfirm({ id, title })} />
           </div>
         </div>
       </div>
@@ -543,6 +614,47 @@ export default function DashboardPage() {
           40% { transform: scale(1); opacity: 1; }
         }
       `}</style>
+
+      {/* 팀일정 추가 팝업 */}
+      {addEventPopup && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300 }} onClick={() => setAddEventPopup(null)}>
+          <div style={{ background: '#fff', borderRadius: 12, width: 320, padding: 20, boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: '#111', marginBottom: 4 }}>팀일정 추가</div>
+            <div style={{ fontSize: 12, color: '#888', marginBottom: 14 }}>{addEventPopup.date}</div>
+            <input
+              autoFocus
+              value={newEventTitle}
+              onChange={e => setNewEventTitle(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') addTeamEvent() }}
+              placeholder="일정 제목"
+              style={{ width: '100%', height: 36, padding: '0 10px', border: '1px solid #e8e8e6', borderRadius: 6, fontSize: 13, boxSizing: 'border-box', marginBottom: 12, outline: 'none' }}
+            />
+            <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+              {['#7c3aed','#2563eb','#16a34a','#ea580c','#db2777','#0891b2'].map(c => (
+                <div key={c} onClick={() => setNewEventColor(c)} style={{ width: 24, height: 24, borderRadius: '50%', background: c, cursor: 'pointer', outline: newEventColor === c ? `3px solid ${c}` : 'none', outlineOffset: 2 }} />
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setAddEventPopup(null)} style={{ padding: '6px 14px', borderRadius: 6, border: '1px solid #e8e8e6', background: '#fff', fontSize: 13, cursor: 'pointer', color: '#555' }}>취소</button>
+              <button onClick={addTeamEvent} disabled={!newEventTitle.trim()} style={{ padding: '6px 14px', borderRadius: 6, border: 'none', background: '#111', fontSize: 13, cursor: 'pointer', color: '#fff', opacity: newEventTitle.trim() ? 1 : 0.4 }}>추가</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 팀일정 삭제 확인 팝업 */}
+      {deleteConfirm && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300 }} onClick={() => setDeleteConfirm(null)}>
+          <div style={{ background: '#fff', borderRadius: 12, width: 280, padding: 20, boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: '#111', marginBottom: 6 }}>일정 삭제</div>
+            <div style={{ fontSize: 13, color: '#555', marginBottom: 16 }}>"{deleteConfirm.title}" 일정을 삭제할까요?</div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setDeleteConfirm(null)} style={{ padding: '6px 14px', borderRadius: 6, border: '1px solid #e8e8e6', background: '#fff', fontSize: 13, cursor: 'pointer', color: '#555' }}>취소</button>
+              <button onClick={() => deleteTeamEvent(deleteConfirm.id)} style={{ padding: '6px 14px', borderRadius: 6, border: 'none', background: '#b91c1c', fontSize: 13, cursor: 'pointer', color: '#fff' }}>삭제</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
