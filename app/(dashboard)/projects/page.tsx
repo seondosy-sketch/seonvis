@@ -279,6 +279,11 @@ export default function ProjectsPage() {
           const { error: tipErr } = await supabase.from('project_tooltips').upsert({ ...tooltipPayload, updated_at: new Date().toISOString() }, { onConflict: 'project_number' })
           if (tipErr) { setSaveError(`상세정보 저장 실패: ${tipErr.message}`); return }
         }
+        // 사업명이 변경된 경우 performing_projects의 이름도 동기화
+        const oldProject = projects.find(p => p.id === modal.editId)
+        if (oldProject && oldProject.name !== f.name) {
+          await supabase.from('performing_projects').update({ name: f.name }).eq('name', oldProject.name)
+        }
       } else {
         const { error: projErr } = await supabase.from('projects').insert(projectPayload)
         if (projErr) { setSaveError(`저장 실패: ${projErr.message}`); return }
