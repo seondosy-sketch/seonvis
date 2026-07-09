@@ -24,7 +24,7 @@ const GROUPS = [
     items: [
       { id: 6, label: 'Calendar',         href: null },
       { id: 7, label: '공고/개찰',         href: null },
-      { id: 8, label: 'Maps',             href: null },
+      { id: 8, label: 'WEB 검색',           href: '/web' },
       { id: 9, label: '환경영향평가',       href: null },
     ],
   },
