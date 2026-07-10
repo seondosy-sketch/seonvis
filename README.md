@@ -40,30 +40,55 @@
 
 ---
 
-## 로컬 개발
+## 로컬 개발 — 새 컴퓨터에서 10분 안에 시작하기
 
 ```bash
-# 의존성 설치
+# 1. 클론
+git clone https://github.com/seondosy-sketch/seonvis.git
+cd seonvis
+
+# 2. 의존성 설치
 npm install
 
-# 개발 서버 실행
+# 3. 환경변수 가져오기 — 아래 두 방법 중 하나
+```
+
+**방법 A. Vercel CLI로 가져오기 (권장, 별도 복사 불필요)**
+
+```bash
+npm i -g vercel        # 최초 1회
+vercel login           # 계정 로그인 (브라우저 인증)
+vercel link             # 이 프로젝트를 Vercel의 seonvis 프로젝트와 연결
+vercel env pull .env.local
+```
+
+Vercel 프로젝트에 설정된 환경변수를 그대로 받아오므로, **Vercel 쪽에 새 환경변수(예: `NEXT_PUBLIC_KAKAO_MAP_KEY`)를 추가했다면 반드시 Vercel 대시보드에도 동일하게 등록**해둬야 이 방법으로 최신 값을 받을 수 있습니다.
+
+**방법 B. 수동 복사**
+
+`.env.example`을 `.env.local`로 복사한 뒤, 값은 팀 비밀번호 관리자(1Password 등)에 저장해둔 값을 채워 넣습니다.
+
+```bash
+cp .env.example .env.local
+```
+
+```
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+ADMIN_EMAILS=
+GEMINI_API_KEY=
+NEXT_PUBLIC_KAKAO_MAP_KEY=   # Kakao Developers JavaScript 키 (지도/주소검색/길찾기)
+```
+
+`NEXT_PUBLIC_KAKAO_MAP_KEY`는 [Kakao Developers](https://developers.kakao.com)에서 앱 등록 후 발급받는 JavaScript 키이며, 사용하는 도메인(localhost, Vercel 배포 도메인)을 등록하고 **카카오맵 제품(서비스)을 활성화**해야 동작합니다.
+
+```bash
+# 4. 개발 서버 실행
 npm run dev
 ```
 
 브라우저에서 http://localhost:3000 접속.
-
-### 필수 환경변수 (`.env.local`)
-
-```
-NEXT_PUBLIC_SUPABASE_URL=...
-NEXT_PUBLIC_SUPABASE_ANON_KEY=...
-GEMINI_API_KEY=...
-NEXT_PUBLIC_KAKAO_MAP_KEY=...   # Kakao Developers JavaScript 키 (지도/주소검색/길찾기)
-```
-
-Vercel 환경변수에도 동일하게 설정 필요.
-
-`NEXT_PUBLIC_KAKAO_MAP_KEY`는 [Kakao Developers](https://developers.kakao.com)에서 앱 등록 후 발급받는 JavaScript 키이며, 사용하는 도메인(localhost, Vercel 배포 도메인)을 플랫폼 설정에 등록해야 동작합니다.
 
 ---
 
