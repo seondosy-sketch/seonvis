@@ -3,6 +3,8 @@
 import { useEffect, useState, useCallback } from 'react'
 import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import { useIsMobile } from '@/lib/useIsMobile'
+import AddressMapPreview from '@/app/components/AddressMapPreview'
+import { openDirectionsFromOffice } from '@/lib/kakaoMap'
 
 type ProjectStatus = '진행중' | '수주' | '탈락' | '취소'
 type ProjectType = '면접' | 'SOQ' | '종심제' | 'TP' | 'PQ' | '기타' | ''
@@ -38,6 +40,7 @@ interface Project {
 interface TooltipData {
   project_number?: string
   location?: string
+  interview_location?: string
   area?: string
   scale?: string
   est_cost?: string
@@ -82,6 +85,7 @@ interface FormData {
   note: string
   // project_tooltips 테이블 (추가 정보)
   location: string
+  interview_location: string
   area: string
   scale: string
   est_cost: string
@@ -108,7 +112,7 @@ const EMPTY_FORM: FormData = {
   director: '', status_override: null,
   staff_arch: '', staff_civil: '', staff_mech: '', staff_safety: '',
   note: '',
-  location: '', area: '', scale: '', est_cost: '',
+  location: '', interview_location: '', area: '', scale: '', est_cost: '',
   designer: '', builder: '', score_dist: '', competitors: '',
   proposal_p: '', self_intro_p: '', ppt_p: '',
   pq_date: '', soq_date: '', interview_time: '', notify_date: '',
@@ -142,6 +146,8 @@ export default function ProjectsPage() {
   const [filterType, setFilterType] = useState<ProjectType | '전체'>('전체')
   const [tooltipAll, setTooltipAll] = useState<Record<string, TooltipData>>({})
   const [tooltipView, setTooltipView] = useState<{ project: Project; data: TooltipData } | null>(null)
+  const [dirMsg, setDirMsg] = useState<string | null>(null)
+  const [dirLoading, setDirLoading] = useState<string | null>(null)
   const [notes, setNotes] = useState<Record<string, Record<string, string>>>({})
   const [notePopup, setNotePopup] = useState<{ projectNumber: string; field: string; draft: string; rect: DOMRect } | null>(null)
   const [noteSaving, setNoteSaving] = useState(false)
@@ -227,7 +233,7 @@ export default function ProjectsPage() {
         director: p.director, status_override: p.status_override,
         staff_arch: p.staff_arch, staff_civil: p.staff_civil, staff_mech: p.staff_mech, staff_safety: p.staff_safety,
         note: p.note,
-        location: tip.location ?? '', area: tip.area ?? '', scale: tip.scale ?? '',
+        location: tip.location ?? '', interview_location: tip.interview_location ?? '', area: tip.area ?? '', scale: tip.scale ?? '',
         est_cost: tip.est_cost ?? '', designer: tip.designer ?? '', builder: tip.builder ?? '',
         score_dist: tip.score_dist ?? '', competitors: tip.competitors ?? '',
         proposal_p: tip.proposal_p ?? '', self_intro_p: tip.self_intro_p ?? '', ppt_p: tip.ppt_p ?? '',
@@ -236,6 +242,16 @@ export default function ProjectsPage() {
         announcement: tip.announcement ?? '',
       },
     })
+  }
+
+  const closeTooltipView = () => { setTooltipView(null); setDirMsg(null) }
+
+  const openDirections = async (label: string, address: string) => {
+    setDirMsg(null)
+    setDirLoading(label)
+    const res = await openDirectionsFromOffice(label, address)
+    if (!res.ok) setDirMsg(res.message ?? '길찾기를 열 수 없습니다.')
+    setDirLoading(null)
   }
 
   const closeModal = () => setModal(m => ({ ...m, open: false }))
@@ -261,7 +277,7 @@ export default function ProjectsPage() {
 
       const tooltipPayload = {
         project_number: f.project_number,
-        location: f.location, area: f.area, scale: f.scale, est_cost: f.est_cost,
+        location: f.location, interview_location: f.interview_location, area: f.area, scale: f.scale, est_cost: f.est_cost,
         designer: f.designer, builder: f.builder, score_dist: f.score_dist, competitors: f.competitors,
         proposal_p: f.proposal_p, self_intro_p: f.self_intro_p, ppt_p: f.ppt_p,
         pq_date: f.pq_date, soq_date: f.soq_date, interview_time: f.interview_time,
@@ -433,7 +449,7 @@ export default function ProjectsPage() {
 
       {/* 툴팁 보기 모달 */}
       {tooltipView && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }} onClick={() => setTooltipView(null)}>
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }} onClick={closeTooltipView}>
           <div style={{ background: '#fff', borderRadius: 12, width: 620, maxHeight: '88vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }} onClick={e => e.stopPropagation()}>
             <div style={{ padding: '16px 20px', borderBottom: '1px solid #e8e8e6', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, background: '#111', borderRadius: '12px 12px 0 0' }}>
               <div>
@@ -441,8 +457,8 @@ export default function ProjectsPage() {
                 <div style={{ fontSize: 15, fontWeight: 700, color: '#fff', lineHeight: 1.4 }}>{tooltipView.project.name}</div>
               </div>
               <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                <button onClick={() => { openEdit(tooltipView.project); setTooltipView(null) }} style={{ border: 'none', background: '#2563eb', color: '#fff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>편집</button>
-                <button onClick={() => setTooltipView(null)} style={{ border: 'none', background: 'rgba(255,255,255,0.15)', color: '#fff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13 }}>✕</button>
+                <button onClick={() => { openEdit(tooltipView.project); closeTooltipView() }} style={{ border: 'none', background: '#2563eb', color: '#fff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>편집</button>
+                <button onClick={closeTooltipView} style={{ border: 'none', background: 'rgba(255,255,255,0.15)', color: '#fff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13 }}>✕</button>
               </div>
             </div>
             <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 0 }}>
@@ -469,6 +485,40 @@ export default function ProjectsPage() {
                   </div>
                 ))
               })()}
+              {(tooltipView.data.location || tooltipView.data.interview_location) && (
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: '#555', padding: '6px 10px', background: '#f8f8f7', borderRadius: 6, marginBottom: 4 }}>위치 정보</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    {tooltipView.data.location && (
+                      <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                          <span style={{ fontSize: 12, color: '#333' }}><b>현장위치</b> · {tooltipView.data.location}</span>
+                          <button
+                            onClick={() => openDirections('현장', tooltipView.data.location!)}
+                            disabled={dirLoading === '현장'}
+                            style={{ ...outlineBtn, height: 26, padding: '0 10px', fontSize: 11, opacity: dirLoading === '현장' ? 0.6 : 1 }}
+                          >{dirLoading === '현장' ? '조회 중...' : '카카오맵으로 길찾기 열기'}</button>
+                        </div>
+                        <AddressMapPreview address={tooltipView.data.location} />
+                      </div>
+                    )}
+                    {tooltipView.data.interview_location && (
+                      <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                          <span style={{ fontSize: 12, color: '#333' }}><b>면접장소</b> · {tooltipView.data.interview_location}</span>
+                          <button
+                            onClick={() => openDirections('면접장소', tooltipView.data.interview_location!)}
+                            disabled={dirLoading === '면접장소'}
+                            style={{ ...outlineBtn, height: 26, padding: '0 10px', fontSize: 11, opacity: dirLoading === '면접장소' ? 0.6 : 1 }}
+                          >{dirLoading === '면접장소' ? '조회 중...' : '카카오맵으로 길찾기 열기'}</button>
+                        </div>
+                        <AddressMapPreview address={tooltipView.data.interview_location} />
+                      </div>
+                    )}
+                    {dirMsg && <div style={{ fontSize: 11, color: '#b91c1c', padding: '6px 10px', background: '#fef2f2', borderRadius: 6 }}>{dirMsg}</div>}
+                  </div>
+                </div>
+              )}
               {(tooltipView.data.pq_date || tooltipView.data.soq_date || tooltipView.project.interview_date || tooltipView.project.bid_date) && (
                 <div style={{ marginTop: 10 }}>
                   <div style={{ fontSize: 11, fontWeight: 600, color: '#555', padding: '6px 10px', background: '#f8f8f7', borderRadius: 6, marginBottom: 4 }}>입찰 일정</div>
@@ -578,9 +628,10 @@ export default function ProjectsPage() {
                 <Field label="발주처"><input style={inp} value={modal.form.client} onChange={e => set('client', e.target.value)} placeholder="발주처명" /></Field>
                 <Field label="용역명 *"><input style={inp} value={modal.form.name} onChange={e => set('name', e.target.value)} placeholder="용역명" /></Field>
                 <Row2>
-                  <Field label="현장위치"><input style={inp} value={modal.form.location} onChange={e => set('location', e.target.value)} placeholder="시/도 군/구 동/면" /></Field>
+                  <Field label="현장위치"><input style={inp} value={modal.form.location} onChange={e => set('location', e.target.value)} placeholder="시/도 군/구 동/면 (지도 자동검색)" /></Field>
                   <Field label="단장(PM)"><input style={inp} value={modal.form.director} onChange={e => set('director', e.target.value)} placeholder="담당자명" /></Field>
                 </Row2>
+                <Field label="면접장소"><input style={inp} value={modal.form.interview_location} onChange={e => set('interview_location', e.target.value)} placeholder="시/도 군/구 동/면 (지도 자동검색)" /></Field>
               </div>
 
               {/* 섹션 2: 용역 상세 */}

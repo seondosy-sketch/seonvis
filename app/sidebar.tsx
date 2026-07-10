@@ -22,7 +22,7 @@ const GROUPS = [
     label: '업무 보조',
     color: '#eab308',
     items: [
-      { id: 6, label: 'Calendar',         href: null },
+      { id: 6, label: '출장지원',          href: '/trip' },
       { id: 7, label: '공고/개찰',         href: null },
       { id: 8, label: 'WEB 검색',           href: '/web' },
       { id: 9, label: '환경영향평가',       href: null },

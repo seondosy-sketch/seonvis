@@ -58,9 +58,12 @@ npm run dev
 NEXT_PUBLIC_SUPABASE_URL=...
 NEXT_PUBLIC_SUPABASE_ANON_KEY=...
 GEMINI_API_KEY=...
+NEXT_PUBLIC_KAKAO_MAP_KEY=...   # Kakao Developers JavaScript 키 (지도/주소검색/길찾기)
 ```
 
 Vercel 환경변수에도 동일하게 설정 필요.
+
+`NEXT_PUBLIC_KAKAO_MAP_KEY`는 [Kakao Developers](https://developers.kakao.com)에서 앱 등록 후 발급받는 JavaScript 키이며, 사용하는 도메인(localhost, Vercel 배포 도메인)을 플랫폼 설정에 등록해야 동작합니다.
 
 ---
 
