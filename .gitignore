@@ -41,3 +41,9 @@ yarn-error.log*
 next-env.d.ts
 
 .vercel
+
+# local business data (sensitive — not committed to GitHub)
+/2026_project list.xlsx
+/excel_data.json
+/projects_import.json
+/search_index.xlsx
