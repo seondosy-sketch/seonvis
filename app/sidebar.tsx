@@ -12,7 +12,9 @@ const GROUPS = [
     items: [
       { id: 1, label: '프로젝트 List',    href: '/projects' },
       { id: 2, label: '주간/월간보고',     href: '/weekly' },
-      { id: 3, label: '근태관리',          href: null },
+      { id: 3, label: '근태관리',          href: null, children: [
+        { id: 12, label: '연장근무',       href: '/overtime' },
+      ] },
       { id: 4, label: '기술인 주소록',     href: null },
       { id: 5, label: '현장 현황',         href: null },
     ],
@@ -107,10 +109,44 @@ export default function Sidebar({ isAdmin, userEmail, onClose }: SidebarProps) {
 
             <div style={{ padding: '0' }}>
               {group.items.map(item => {
+                const children = 'children' in item ? item.children : undefined
                 const isActive = item.href
                   ? pathname === item.href || pathname.startsWith(item.href)
                   : false
                 const isReady = !!item.href
+
+                // 하위 메뉴가 있는 항목: 부모는 클릭 불가 헤더로만 표시하고, 자식만 실제 링크로 표시한다.
+                if (children?.length) {
+                  return (
+                    <div key={item.id}>
+                      <div style={{
+                        display: 'flex', alignItems: 'center', gap: 8,
+                        padding: '6px 10px', cursor: 'default',
+                      }}>
+                        <span style={{ fontSize: 13, color: '#555', flex: 1 }}>{item.label}</span>
+                      </div>
+                      {children.map(child => {
+                        const childActive = pathname === child.href || pathname.startsWith(child.href)
+                        return (
+                          <Link key={child.id} href={child.href} onClick={onClose} style={{ textDecoration: 'none' }}>
+                            <div style={{
+                              display: 'flex', alignItems: 'center', gap: 8,
+                              padding: '6px 10px 6px 22px', cursor: 'pointer',
+                              background: childActive ? '#fef9f0' : 'transparent',
+                              borderRight: childActive ? `2px solid ${group.color}` : '2px solid transparent',
+                            }}>
+                              <span style={{
+                                fontSize: 13, flex: 1,
+                                color: childActive ? '#111' : '#444',
+                                fontWeight: childActive ? 600 : 400,
+                              }}>{child.label}</span>
+                            </div>
+                          </Link>
+                        )
+                      })}
+                    </div>
+                  )
+                }
 
                 if (!isReady) {
                   return (

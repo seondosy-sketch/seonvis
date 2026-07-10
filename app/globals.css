@@ -31,3 +31,10 @@ body {
 .cell-input::placeholder {
   color: #ccc;
 }
+
+/* 연장근무 출력 페이지: 화면 조작용 UI(버튼, 내비게이션)는 인쇄 시 숨긴다 */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+}

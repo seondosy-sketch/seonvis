@@ -11,6 +11,9 @@
 | `expected_projects` | 주간보고용 발주예상 프로젝트 |
 | `weekly_meta` | 주간보고 교육참가자/기타 메타 |
 | `allowed_users` | 접근 허용 사용자 목록 |
+| `overtime_employees` | 연장근무 관리용 직원 목록 |
+| `overtime_projects` | 연장근무 관리용 프로젝트 목록 (입찰 현황 `projects`와 별개) |
+| `overtime_work_records` | 연장근무 업무 1건 = 행 1개 (핵심 테이블) |
 
 ---
 
@@ -169,6 +172,61 @@ result_score 또는 evaluation 비어있으면 → "진행중"
 | `created_at` | timestamptz | |
 
 **주의**: 관리자(`ADMIN_EMAILS`)는 이 테이블에 없어도 접근 가능.
+
+---
+
+## overtime_employees
+
+연장근무 관리용 직원 목록. `docs/overtime.md` 참고.
+
+| 컬럼 | 타입 | 설명 |
+|---|---|---|
+| `id` | uuid PK | |
+| `name` | text UNIQUE | 이름 |
+| `position` | text | 직급 |
+| `is_active` | boolean | 재직여부 — 퇴사해도 행은 삭제하지 않고 false로만 변경 (과거 기록 보존) |
+| `sort_order` | integer | 좌측 직원 목록 정렬순서 |
+| `created_at` | timestamptz | |
+
+---
+
+## overtime_projects
+
+연장근무 관리용 프로젝트 목록. 입찰 현황용 `projects` 테이블과는 별개의 단순 조회 목록.
+
+| 컬럼 | 타입 | 설명 |
+|---|---|---|
+| `id` | uuid PK | |
+| `name` | text UNIQUE | 프로젝트명 |
+| `status` | text | `진행중` 또는 `종료`. 종료된 프로젝트는 신규 업무 등록 시 선택 목록에서 제외 |
+| `sort_order` | integer | |
+| `created_at` | timestamptz | |
+
+---
+
+## overtime_work_records
+
+연장근무의 핵심 테이블. **"직원 1명 + 날짜 1개 + 프로젝트 1개 + 업무 1개 = 행 1개"** 단위를 절대 어기지 않는다.
+총 연장시간·건수 컬럼은 두지 않고, 화면(월간 그리드 셀 "6h (3)")은 항상 이 테이블을
+`employee_id` + `work_date`로 `SUM(hours)` / `COUNT(*)` 해서 구한다.
+
+| 컬럼 | 타입 | 설명 |
+|---|---|---|
+| `id` | uuid PK | |
+| `employee_id` | uuid FK → overtime_employees, ON DELETE RESTRICT | |
+| `project_id` | uuid FK → overtime_projects, ON DELETE RESTRICT | |
+| `work_date` | date | 업무 수행일 |
+| `task_description` | text | 업무내용 |
+| `start_time` | text | `"HH:mm"` (예: `"18:00"`) |
+| `end_time` | text | `"HH:mm"`. 자정을 넘기면 `"24:00"` 이상으로 표기 (예: 21:00~24:00) |
+| `hours` | numeric(4,2) | 저장 시점에 `(end_time - start_time)`으로 계산해 저장 (매 조회마다 재계산하지 않고 `SUM()`으로 바로 집계하기 위함) |
+| `note` | text | 비고 |
+| `created_at` | timestamptz | |
+| `updated_at` | timestamptz | |
+
+**인덱스**: `(employee_id, work_date)`, `(work_date)`, `(project_id)` — 월간 그리드 조회·대시보드 집계용.
+
+**마이그레이션**: `supabase/migration_overtime.sql`
 
 ---
 
