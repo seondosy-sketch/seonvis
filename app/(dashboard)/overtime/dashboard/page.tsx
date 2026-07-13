@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import { useIsMobile } from '@/lib/useIsMobile'
 import { Employee, Project, WorkRecord } from '@/lib/overtime/types'
-import { LabeledTotal, formatHours, monthRange, sumHoursByDate, sumHoursByEmployee, sumHoursByProject } from '@/lib/overtime/summary'
+import { LabeledTotal, currentPayPeriod, formatHours, payPeriodDays, payPeriodRange, sumHoursByDate, sumHoursByEmployee, sumHoursByProject } from '@/lib/overtime/summary'
 
 const MONTH_NAMES = ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월']
 
@@ -19,9 +19,9 @@ export default function OvertimeDashboardPage() {
   const isMobile = useIsMobile()
   const supabase = createSupabaseBrowserClient()
 
-  const now = new Date()
-  const year = now.getFullYear()
-  const month = now.getMonth()
+  const { year, month } = currentPayPeriod()
+  const periodDays = payPeriodDays(year, month)
+  const periodLabel = `${periodDays[0].month + 1}/${periodDays[0].day} ~ ${periodDays[periodDays.length - 1].month + 1}/${periodDays[periodDays.length - 1].day}`
 
   const [employees, setEmployees] = useState<Employee[]>([])
   const [projects, setProjects] = useState<Project[]>([])
@@ -31,7 +31,7 @@ export default function OvertimeDashboardPage() {
 
   const load = useCallback(async () => {
     setLoading(true)
-    const { start, end } = monthRange(year, month)
+    const { start, end } = payPeriodRange(year, month)
     const [empRes, projRes, recRes] = await Promise.all([
       supabase.from('overtime_employees').select('*'),
       supabase.from('overtime_projects').select('*'),
@@ -57,12 +57,12 @@ export default function OvertimeDashboardPage() {
   const byProject = sumHoursByProject(records, projects)
   const byDate = sumHoursByDate(records)
 
-  const daysInMonth = new Date(year, month + 1, 0).getDate()
-  const dailyBars = Array.from({ length: daysInMonth }, (_, i) => {
-    const day = i + 1
-    const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-    return { day, weekday: new Date(year, month, day).getDay(), hours: byDate.get(dateStr) ?? 0 }
-  })
+  const dailyBars = periodDays.map((d, i) => ({
+    ...d,
+    isFirstOfMonth: i === 0 || d.day === 1,
+    weekday: new Date(d.year, d.month, d.day).getDay(),
+    hours: byDate.get(d.dateStr) ?? 0,
+  }))
 
   const recent = [...records]
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
@@ -75,7 +75,7 @@ export default function OvertimeDashboardPage() {
       <header style={{ background: '#fff', borderBottom: '1px solid #e8e8e6' }}>
         <div style={{ maxWidth: 1400, margin: '0 auto', padding: isMobile ? '0 12px' : '0 24px', height: 56, display: 'flex', alignItems: 'center', gap: 12 }}>
           <Link href="/overtime" style={{ textDecoration: 'none', color: '#888', fontSize: 13 }}>← 그리드로</Link>
-          <span style={{ fontSize: 14, color: '#555' }}>연장근무 대시보드 · {year}년 {MONTH_NAMES[month]} (이번 달)</span>
+          <span style={{ fontSize: 14, color: '#555' }}>연장근무 대시보드 · {year}년 {MONTH_NAMES[month]} (이번 달, {periodLabel})</span>
         </div>
       </header>
 
@@ -167,13 +167,17 @@ function RankedBars({ items, emptyText }: { items: LabeledTotal[]; emptyText: st
   )
 }
 
-/** 일별 연장시간 — 날짜(축)를 따라가는 크기 비교라 세로 막대 하나로 충분, 색은 하나로 고정. */
-function DailyBarChart({ bars }: { bars: { day: number; weekday: number; hours: number }[] }) {
+/**
+ * 일별 연장시간 — 날짜(축)를 따라가는 크기 비교라 세로 막대 하나로 충분, 색은 하나로 고정.
+ * 기간이 전달 21일~이번달 20일로 두 달에 걸치므로, 달이 바뀌는 첫 칸에는 작게 "M월"을 표시한다.
+ */
+function DailyBarChart({ bars }: { bars: { day: number; month: number; weekday: number; isFirstOfMonth: boolean; hours: number }[] }) {
   const max = Math.max(1, ...bars.map(b => b.hours))
   return (
     <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 110, overflowX: 'auto' }}>
-      {bars.map(b => (
-        <div key={b.day} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: '1 0 auto', minWidth: 16 }} title={`${b.day}일: ${formatHours(b.hours)}`}>
+      {bars.map((b, i) => (
+        <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: '1 0 auto', minWidth: 16, borderLeft: b.isFirstOfMonth ? '2px solid #ddd' : 'none', paddingLeft: b.isFirstOfMonth ? 2 : 0 }} title={`${b.month + 1}월 ${b.day}일: ${formatHours(b.hours)}`}>
+          <div style={{ fontSize: 8, color: '#bbb', height: 10 }}>{b.isFirstOfMonth ? `${b.month + 1}월` : ''}</div>
           <div style={{ width: '100%', height: 80, display: 'flex', alignItems: 'flex-end' }}>
             <div style={{ width: '100%', height: `${(b.hours / max) * 100}%`, minHeight: b.hours > 0 ? 2 : 0, background: '#f59e0b', borderRadius: '3px 3px 0 0' }} />
           </div>

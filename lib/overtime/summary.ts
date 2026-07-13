@@ -41,14 +41,52 @@ export function formatHours(hours: number): string {
   return `${Number.isInteger(rounded) ? rounded : rounded.toFixed(1)}h`
 }
 
-/** 선택한 연/월의 [1일, 말일] 문자열 범위. work_date 조회의 gte/lte 경계로 쓴다. */
-export function monthRange(year: number, month: number): { start: string; end: string } {
-  const pad = (n: number) => String(n).padStart(2, '0')
-  const lastDay = new Date(year, month + 1, 0).getDate()
-  return {
-    start: `${year}-${pad(month + 1)}-01`,
-    end: `${year}-${pad(month + 1)}-${pad(lastDay)}`,
+/**
+ * 이 팀의 "한 달" 기준: 전달 21일 ~ 이번달 20일 (급여 마감 기준, 달력 월과 다름).
+ * `month`은 그 기간의 마지막 날(20일)이 속한 달을 가리킨다 — 예를 들어
+ * `payPeriodDays(2026, 6)`(2026년 7월)은 2026-06-21 ~ 2026-07-20을 반환한다.
+ * 기간이 두 달에 걸치므로 각 날짜의 실제 연/월/일을 함께 담아 그리드·차트가
+ * 달력 월이 바뀌는 지점을 표시할 수 있게 한다.
+ */
+export interface PayPeriodDay {
+  year: number
+  month: number // 0-indexed, 이 날짜가 실제로 속한 달력 월 (기간의 라벨 월과 다를 수 있음)
+  day: number
+  dateStr: string
+}
+
+export function payPeriodDays(year: number, month: number): PayPeriodDay[] {
+  const start = new Date(year, month - 1, 21)
+  const end = new Date(year, month, 20)
+  const days: PayPeriodDay[] = []
+  const cur = new Date(start)
+  while (cur.getTime() <= end.getTime()) {
+    days.push({ year: cur.getFullYear(), month: cur.getMonth(), day: cur.getDate(), dateStr: toDateStr(cur.getFullYear(), cur.getMonth(), cur.getDate()) })
+    cur.setDate(cur.getDate() + 1)
   }
+  return days
+}
+
+/** work_date 조회의 gte/lte 경계로 쓰는 [시작일, 종료일] 문자열. */
+export function payPeriodRange(year: number, month: number): { start: string; end: string } {
+  const days = payPeriodDays(year, month)
+  return { start: days[0].dateStr, end: days[days.length - 1].dateStr }
+}
+
+/** 오늘이 속한 급여 기준 기간의 라벨(year, month) — 21일 이후면 다음 달 기간으로 넘어간다. */
+export function currentPayPeriod(): { year: number; month: number } {
+  const now = new Date()
+  let year = now.getFullYear()
+  let month = now.getMonth()
+  if (now.getDate() >= 21) {
+    month += 1
+    if (month > 11) { month = 0; year += 1 }
+  }
+  return { year, month }
+}
+
+function toDateStr(year: number, month: number, day: number): string {
+  return `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
 }
 
 export interface LabeledTotal {

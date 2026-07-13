@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import { useIsMobile } from '@/lib/useIsMobile'
 import { Employee, Project, WorkRecord } from '@/lib/overtime/types'
-import { formatHours, monthRange, sumHoursByDate, sumHoursByEmployee, sumHoursByProject, summarizeByEmployeeAndDate, summaryKey } from '@/lib/overtime/summary'
+import { currentPayPeriod, formatHours, payPeriodDays, payPeriodRange, sumHoursByDate, sumHoursByEmployee, sumHoursByProject, summarizeByEmployeeAndDate, summaryKey } from '@/lib/overtime/summary'
 
 const MONTH_NAMES = ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월']
 
@@ -19,9 +19,9 @@ export default function OvertimePrintPage() {
   const isMobile = useIsMobile()
   const supabase = createSupabaseBrowserClient()
 
-  const now = new Date()
-  const [viewYear, setViewYear] = useState(now.getFullYear())
-  const [viewMonth, setViewMonth] = useState(now.getMonth())
+  const initialPeriod = currentPayPeriod()
+  const [viewYear, setViewYear] = useState(initialPeriod.year)
+  const [viewMonth, setViewMonth] = useState(initialPeriod.month)
 
   const [employees, setEmployees] = useState<Employee[]>([])
   const [projects, setProjects] = useState<Project[]>([])
@@ -31,7 +31,7 @@ export default function OvertimePrintPage() {
 
   const load = useCallback(async (year: number, month: number) => {
     setLoading(true)
-    const { start, end } = monthRange(year, month)
+    const { start, end } = payPeriodRange(year, month)
     const [empRes, projRes, recRes] = await Promise.all([
       supabase.from('overtime_employees').select('*').order('sort_order', { ascending: true }),
       supabase.from('overtime_projects').select('*').order('sort_order', { ascending: true }),
@@ -72,8 +72,8 @@ export default function OvertimePrintPage() {
     .map(proj => ({ proj, records: records.filter(r => r.project_id === proj.id).sort((a, b) => a.work_date.localeCompare(b.work_date)) }))
     .filter(g => g.records.length > 0)
 
-  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate()
-  const days = Array.from({ length: daysInMonth }, (_, i) => i + 1)
+  const days = payPeriodDays(viewYear, viewMonth)
+  const periodLabel = `${days[0].month + 1}/${days[0].day} ~ ${days[days.length - 1].month + 1}/${days[days.length - 1].day}`
   const gridSummaries = summarizeByEmployeeAndDate(records)
   const dailyTotals = sumHoursByDate(records)
   const employeeTotals = sumHoursByEmployee(records, employees)
@@ -95,19 +95,13 @@ export default function OvertimePrintPage() {
   }
 
   function exportGridCsv() {
-    const headers = ['직원', ...days.map(d => `${d}일`), '합계']
+    const headers = ['직원', ...days.map(d => `${d.month + 1}/${d.day}`), '합계']
     const rows = employees.map(emp => [
       emp.name,
-      ...days.map(day => {
-        const dateStr = `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-        return gridSummaries.get(summaryKey(emp.id, dateStr))?.total_hours ?? ''
-      }),
+      ...days.map(d => gridSummaries.get(summaryKey(emp.id, d.dateStr))?.total_hours ?? ''),
       employeeTotals.find(t => t.id === emp.id)?.hours ?? 0,
     ])
-    rows.push(['합계', ...days.map(day => {
-      const dateStr = `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-      return dailyTotals.get(dateStr) ?? ''
-    }), grandTotal])
+    rows.push(['합계', ...days.map(d => dailyTotals.get(d.dateStr) ?? ''), grandTotal])
     downloadCsv(`월간집계표_${viewYear}-${viewMonth + 1}.csv`, toCsv(headers, rows))
   }
 
@@ -122,6 +116,7 @@ export default function OvertimePrintPage() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <button onClick={prevMonth} style={navBtn}>‹</button>
             <span style={{ fontSize: 14, fontWeight: 600, minWidth: 90, textAlign: 'center', color: '#111' }}>{viewYear}년 {MONTH_NAMES[viewMonth]}</span>
+            <span style={{ fontSize: 12, color: '#999' }}>({periodLabel})</span>
             <button onClick={nextMonth} style={navBtn}>›</button>
             <button onClick={() => window.print()} style={{ ...outlineBtn, marginLeft: 8 }}>인쇄 / PDF로 저장</button>
           </div>
@@ -129,7 +124,7 @@ export default function OvertimePrintPage() {
       </header>
 
       <div style={{ maxWidth: 1400, margin: '0 auto', padding: isMobile ? '12px 12px 60px' : '20px 24px 60px', display: 'flex', flexDirection: 'column', gap: 16 }}>
-        <h1 style={{ fontSize: 16, fontWeight: 700, color: '#111', margin: 0 }}>{viewYear}년 {MONTH_NAMES[viewMonth]} 연장근무 출력</h1>
+        <h1 style={{ fontSize: 16, fontWeight: 700, color: '#111', margin: 0 }}>{viewYear}년 {MONTH_NAMES[viewMonth]} 연장근무 출력 ({periodLabel})</h1>
 
         {error && (
           <div style={{ padding: '10px 14px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, fontSize: 12, color: '#b91c1c' }}>{error}</div>
@@ -146,7 +141,11 @@ export default function OvertimePrintPage() {
                   <thead>
                     <tr style={{ background: '#f4f4f2' }}>
                       <th style={thLeft}>직원</th>
-                      {days.map(d => <th key={d} style={thCenter}>{d}</th>)}
+                      {days.map((d, i) => (
+                        <th key={d.dateStr} style={{ ...thCenter, borderLeft: (i === 0 || d.day === 1) ? '2px solid #ccc' : thCenter.borderLeft }}>
+                          {(i === 0 || d.day === 1) ? `${d.month + 1}/${d.day}` : d.day}
+                        </th>
+                      ))}
                       <th style={{ ...thCenter, fontWeight: 700 }}>합계</th>
                     </tr>
                   </thead>
@@ -154,20 +153,18 @@ export default function OvertimePrintPage() {
                     {employees.map(emp => (
                       <tr key={emp.id}>
                         <td style={tdLeft}>{emp.name}</td>
-                        {days.map(day => {
-                          const dateStr = `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-                          const hours = gridSummaries.get(summaryKey(emp.id, dateStr))?.total_hours
-                          return <td key={day} style={tdCenter}>{hours ? hours : ''}</td>
+                        {days.map((d, i) => {
+                          const hours = gridSummaries.get(summaryKey(emp.id, d.dateStr))?.total_hours
+                          return <td key={d.dateStr} style={{ ...tdCenter, borderLeft: (i === 0 || d.day === 1) ? '2px solid #ccc' : tdCenter.borderLeft }}>{hours ? hours : ''}</td>
                         })}
                         <td style={{ ...tdCenter, fontWeight: 700 }}>{formatHours(employeeTotals.find(t => t.id === emp.id)?.hours ?? 0)}</td>
                       </tr>
                     ))}
                     <tr style={{ background: '#f9f9f8', borderTop: '2px solid #e8e8e6' }}>
                       <td style={{ ...tdLeft, fontWeight: 700 }}>합계</td>
-                      {days.map(day => {
-                        const dateStr = `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-                        const hours = dailyTotals.get(dateStr)
-                        return <td key={day} style={{ ...tdCenter, fontWeight: 700 }}>{hours ? hours : ''}</td>
+                      {days.map((d, i) => {
+                        const hours = dailyTotals.get(d.dateStr)
+                        return <td key={d.dateStr} style={{ ...tdCenter, fontWeight: 700, borderLeft: (i === 0 || d.day === 1) ? '2px solid #ccc' : tdCenter.borderLeft }}>{hours ? hours : ''}</td>
                       })}
                       <td style={{ ...tdCenter, fontWeight: 700 }}>{formatHours(grandTotal)}</td>
                     </tr>

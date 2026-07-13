@@ -5,9 +5,10 @@ import Link from 'next/link'
 import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import { useIsMobile } from '@/lib/useIsMobile'
 import { DailySummary, Employee, Project, WorkRecord } from '@/lib/overtime/types'
-import { monthRange, summarizeByEmployeeAndDate, summaryKey } from '@/lib/overtime/summary'
+import { currentPayPeriod, payPeriodDays, payPeriodRange, summarizeByEmployeeAndDate, summaryKey } from '@/lib/overtime/summary'
 import MonthGrid from './_components/MonthGrid'
 import WorkRecordModal from './_components/WorkRecordModal'
+import BulkWorkRecordModal from './_components/BulkWorkRecordModal'
 import ProjectManagerModal from './_components/ProjectManagerModal'
 import EmployeeManagerModal from './_components/EmployeeManagerModal'
 
@@ -17,9 +18,9 @@ export default function OvertimePage() {
   const isMobile = useIsMobile()
   const supabase = createSupabaseBrowserClient()
 
-  const now = new Date()
-  const [viewYear, setViewYear] = useState(now.getFullYear())
-  const [viewMonth, setViewMonth] = useState(now.getMonth())
+  const initialPeriod = currentPayPeriod()
+  const [viewYear, setViewYear] = useState(initialPeriod.year)
+  const [viewMonth, setViewMonth] = useState(initialPeriod.month)
 
   const [employees, setEmployees] = useState<Employee[]>([])
   const [employeesLoading, setEmployeesLoading] = useState(true)
@@ -33,6 +34,7 @@ export default function OvertimePage() {
   const [selectedCell, setSelectedCell] = useState<{ employeeId: string; date: string } | null>(null)
   const [showProjectManager, setShowProjectManager] = useState(false)
   const [showEmployeeManager, setShowEmployeeManager] = useState(false)
+  const [showBulkEntry, setShowBulkEntry] = useState(false)
 
   const loadEmployees = useCallback(async () => {
     setEmployeesLoading(true)
@@ -55,7 +57,7 @@ export default function OvertimePage() {
 
   const loadRecords = useCallback(async (year: number, month: number) => {
     setRecordsLoading(true)
-    const { start, end } = monthRange(year, month)
+    const { start, end } = payPeriodRange(year, month)
     const { data, error } = await supabase
       .from('overtime_work_records')
       .select('*')
@@ -84,6 +86,9 @@ export default function OvertimePage() {
   useEffect(() => { loadRecords(viewYear, viewMonth) }, [viewYear, viewMonth, loadRecords])
   useEffect(() => { loadProjects() }, [loadProjects])
 
+  const days = payPeriodDays(viewYear, viewMonth)
+  const periodLabel = `${days[0].month + 1}/${days[0].day} ~ ${days[days.length - 1].month + 1}/${days[days.length - 1].day}`
+
   const prevMonth = () => {
     if (viewMonth === 0) { setViewYear(y => y - 1); setViewMonth(11) }
     else setViewMonth(m => m - 1)
@@ -105,6 +110,7 @@ export default function OvertimePage() {
             <Link href="/overtime/print" style={{ textDecoration: 'none' }}>
               <span style={{ ...outlineBtn, display: 'inline-flex', alignItems: 'center' }}>출력</span>
             </Link>
+            <button onClick={() => setShowBulkEntry(true)} style={outlineBtn}>일괄 입력</button>
             <button onClick={() => setShowEmployeeManager(true)} style={outlineBtn}>직원 관리</button>
             <button onClick={() => setShowProjectManager(true)} style={outlineBtn}>프로젝트 관리</button>
           </div>
@@ -118,6 +124,7 @@ export default function OvertimePage() {
             {viewYear}년 {MONTH_NAMES[viewMonth]}
           </span>
           <button onClick={nextMonth} style={navBtn}>›</button>
+          <span style={{ fontSize: 12, color: '#999' }}>({periodLabel})</span>
           {recordsLoading && !employeesLoading && (
             <span style={{ fontSize: 11, color: '#bbb', marginLeft: 8 }}>집계 불러오는 중...</span>
           )}
@@ -133,8 +140,7 @@ export default function OvertimePage() {
           <div style={{ padding: 40, textAlign: 'center', color: '#bbb', fontSize: 13 }}>불러오는 중...</div>
         ) : (
           <MonthGrid
-            year={viewYear}
-            month={viewMonth}
+            days={days}
             employees={employees}
             summaries={summaries}
             onCellClick={(employeeId, date) => setSelectedCell({ employeeId, date })}
@@ -150,6 +156,16 @@ export default function OvertimePage() {
           summary={summaries.get(summaryKey(selectedCell.employeeId, selectedCell.date))}
           projects={projects}
           onClose={() => setSelectedCell(null)}
+          onSaved={() => loadRecords(viewYear, viewMonth)}
+        />
+      )}
+
+      {showBulkEntry && (
+        <BulkWorkRecordModal
+          employees={employees}
+          projects={projects.filter(p => p.status === '진행중')}
+          days={days}
+          onClose={() => setShowBulkEntry(false)}
           onSaved={() => loadRecords(viewYear, viewMonth)}
         />
       )}
