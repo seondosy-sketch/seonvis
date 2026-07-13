@@ -10,10 +10,10 @@ const GROUPS = [
     label: '사무 보조',
     color: '#f59e0b',
     items: [
-      { id: 1, label: '프로젝트 List',    href: '/projects' },
-      { id: 2, label: '주간/월간보고',     href: '/weekly' },
+      { id: 1, label: '프로젝트 List',    key: 'projects', href: '/projects' },
+      { id: 2, label: '주간/월간보고',     key: 'weekly', href: '/weekly' },
       { id: 3, label: '근태관리',          href: null, children: [
-        { id: 12, label: '연장근무',       href: '/overtime' },
+        { id: 12, label: '연장근무',       key: 'overtime', href: '/overtime' },
       ] },
       { id: 4, label: '기술인 주소록',     href: null },
       { id: 5, label: '현장 현황',         href: null },
@@ -24,9 +24,9 @@ const GROUPS = [
     label: '업무 보조',
     color: '#eab308',
     items: [
-      { id: 6, label: '출장지원',          href: '/trip' },
+      { id: 6, label: '출장지원',          key: 'trip', href: '/trip' },
       { id: 7, label: '공고/개찰',         href: null },
-      { id: 8, label: 'WEB 검색',           href: '/web' },
+      { id: 8, label: 'WEB 검색',           key: 'web', href: '/web' },
       { id: 9, label: '환경영향평가',       href: null },
     ],
   },
@@ -36,18 +36,37 @@ const GROUPS = [
     color: '#0ea5e9',
     items: [
       { id: 10, label: '기술인 경력 DB',   href: null },
-      { id: 11, label: '제안서 DB',        href: 'https://proposal-db-mvp.vercel.app/' },
+      { id: 11, label: '제안서 DB',        key: 'proposal_db', href: 'https://proposal-db-mvp.vercel.app/' },
     ],
   },
 ]
 
+/**
+ * 사람별로 숨겨진 메뉴(hiddenMenuItems, lib/menuConfig.ts의 key 기준)를 제외한 그룹 목록을 만든다.
+ * 하위 메뉴가 전부 숨겨지면 부모(예: 근태관리)도 같이 뺀다 — 부모는 자식을 담는 껍데기일 뿐 자체
+ * href가 없으니, 자식이 하나도 안 보이면 빈 헤더만 남는 게 어색하기 때문.
+ */
+function filterHiddenItems(items: typeof GROUPS[number]['items'], hiddenMenuItems: string[]) {
+  return items
+    .map(item => {
+      if ('children' in item && item.children) {
+        const visibleChildren = item.children.filter(c => !hiddenMenuItems.includes(c.key))
+        return visibleChildren.length > 0 ? { ...item, children: visibleChildren } : null
+      }
+      const key = 'key' in item ? item.key : undefined
+      return key && hiddenMenuItems.includes(key) ? null : item
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null)
+}
+
 interface SidebarProps {
   isAdmin?: boolean
   userEmail?: string
+  hiddenMenuItems?: string[]
   onClose?: () => void
 }
 
-export default function Sidebar({ isAdmin, userEmail, onClose }: SidebarProps) {
+export default function Sidebar({ isAdmin, userEmail, hiddenMenuItems = [], onClose }: SidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
 
@@ -108,7 +127,7 @@ export default function Sidebar({ isAdmin, userEmail, onClose }: SidebarProps) {
             </div>
 
             <div style={{ padding: '0' }}>
-              {group.items.map(item => {
+              {filterHiddenItems(group.items, hiddenMenuItems).map(item => {
                 const children = 'children' in item ? item.children : undefined
                 const isActive = item.href
                   ? pathname === item.href || pathname.startsWith(item.href)

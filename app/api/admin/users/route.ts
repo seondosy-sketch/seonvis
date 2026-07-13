@@ -43,6 +43,27 @@ export async function POST(request: Request) {
   return NextResponse.json(data)
 }
 
+export async function PATCH(request: Request) {
+  const user = await assertAdmin()
+  if (!user) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+
+  const { email, hidden_menu_items } = await request.json()
+  if (!email || !Array.isArray(hidden_menu_items)) {
+    return NextResponse.json({ error: 'email, hidden_menu_items required' }, { status: 400 })
+  }
+
+  const admin = createSupabaseAdminClient()
+  const { data, error } = await admin
+    .from('allowed_users')
+    .update({ hidden_menu_items })
+    .eq('email', email.toLowerCase().trim())
+    .select()
+    .single()
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json(data)
+}
+
 export async function DELETE(request: Request) {
   const user = await assertAdmin()
   if (!user) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })

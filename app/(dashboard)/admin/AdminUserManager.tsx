@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { RESTRICTABLE_MENU_ITEMS } from '@/lib/menuConfig'
 
 interface AllowedUser {
   id: string
@@ -8,6 +9,7 @@ interface AllowedUser {
   is_admin: boolean
   added_by_email: string | null
   created_at: string
+  hidden_menu_items: string[]
 }
 
 interface AccessRequest {
@@ -32,6 +34,8 @@ export default function AdminUserManager() {
   const [newIsAdmin, setNewIsAdmin] = useState(false)
   const [adding, setAdding] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [expandedEmail, setExpandedEmail] = useState<string | null>(null)
+  const [savingPerms, setSavingPerms] = useState<string | null>(null)
 
   async function fetchUsers() {
     setLoading(true)
@@ -68,6 +72,20 @@ export default function AdminUserManager() {
       setError(d.error ?? '오류가 발생했습니다')
     }
     setAdding(false)
+  }
+
+  async function toggleMenuItem(u: AllowedUser, key: string) {
+    const hidden = new Set(u.hidden_menu_items ?? [])
+    if (hidden.has(key)) hidden.delete(key)
+    else hidden.add(key)
+    setSavingPerms(u.email)
+    const res = await fetch('/api/admin/users', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: u.email, hidden_menu_items: [...hidden] }),
+    })
+    if (res.ok) await fetchUsers()
+    setSavingPerms(null)
   }
 
   async function handleDelete(email: string) {
@@ -178,25 +196,59 @@ export default function AdminUserManager() {
             ) : (
               <div>
                 {users.map((u, i) => (
-                  <div key={u.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 24px', borderBottom: i < users.length - 1 ? '1px solid #f4f4f2' : 'none' }}>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={{ fontSize: 13, color: '#222', fontWeight: 500 }}>{u.email}</span>
-                        {u.is_admin && (
-                          <span style={{ fontSize: 10, background: '#eff6ff', color: '#2563eb', padding: '1px 7px', borderRadius: 10, fontWeight: 600 }}>관리자</span>
-                        )}
+                  <div key={u.id} style={{ borderBottom: i < users.length - 1 ? '1px solid #f4f4f2' : 'none' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 24px' }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontSize: 13, color: '#222', fontWeight: 500 }}>{u.email}</span>
+                          {u.is_admin && (
+                            <span style={{ fontSize: 10, background: '#eff6ff', color: '#2563eb', padding: '1px 7px', borderRadius: 10, fontWeight: 600 }}>관리자</span>
+                          )}
+                          {(u.hidden_menu_items?.length ?? 0) > 0 && (
+                            <span style={{ fontSize: 10, background: '#fef3c7', color: '#92400e', padding: '1px 7px', borderRadius: 10, fontWeight: 600 }}>메뉴 {u.hidden_menu_items.length}개 숨김</span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 11, color: '#bbb', marginTop: 2 }}>
+                          {new Date(u.created_at).toLocaleDateString('ko-KR')} 추가
+                          {u.added_by_email && ` · ${u.added_by_email}`}
+                        </div>
                       </div>
-                      <div style={{ fontSize: 11, color: '#bbb', marginTop: 2 }}>
-                        {new Date(u.created_at).toLocaleDateString('ko-KR')} 추가
-                        {u.added_by_email && ` · ${u.added_by_email}`}
-                      </div>
+                      <button
+                        onClick={() => setExpandedEmail(expandedEmail === u.email ? null : u.email)}
+                        style={{ padding: '4px 12px', border: '1px solid #e8e8e6', borderRadius: 5, background: expandedEmail === u.email ? '#f4f4f2' : '#fff', color: '#555', fontSize: 12, cursor: 'pointer' }}
+                      >
+                        메뉴 권한
+                      </button>
+                      <button
+                        onClick={() => handleDelete(u.email)}
+                        style={{ padding: '4px 12px', border: '1px solid #fecaca', borderRadius: 5, background: '#fff5f5', color: '#dc2626', fontSize: 12, cursor: 'pointer' }}
+                      >
+                        삭제
+                      </button>
                     </div>
-                    <button
-                      onClick={() => handleDelete(u.email)}
-                      style={{ padding: '4px 12px', border: '1px solid #fecaca', borderRadius: 5, background: '#fff5f5', color: '#dc2626', fontSize: 12, cursor: 'pointer' }}
-                    >
-                      삭제
-                    </button>
+                    {expandedEmail === u.email && (
+                      <div style={{ padding: '4px 24px 14px', background: '#fafafa' }}>
+                        <div style={{ fontSize: 11, color: '#888', marginBottom: 8 }}>
+                          체크 해제하면 이 사람 사이드바에서 해당 메뉴가 사라집니다 (직접 주소 접근은 막지 않습니다)
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14 }}>
+                          {RESTRICTABLE_MENU_ITEMS.map(item => {
+                            const hidden = (u.hidden_menu_items ?? []).includes(item.key)
+                            return (
+                              <label key={item.key} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#555', cursor: 'pointer' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={!hidden}
+                                  disabled={savingPerms === u.email}
+                                  onChange={() => toggleMenuItem(u, item.key)}
+                                />
+                                {item.label}
+                              </label>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

@@ -7,10 +7,11 @@ import Sidebar from '@/app/sidebar'
 interface Props {
   isAdmin: boolean
   userEmail: string
+  hiddenMenuItems?: string[]
   children: React.ReactNode
 }
 
-export default function SidebarContainer({ isAdmin, userEmail, children }: Props) {
+export default function SidebarContainer({ isAdmin, userEmail, hiddenMenuItems, children }: Props) {
   const isMobile = useIsMobile()
   const [open, setOpen] = useState(false)
 
@@ -33,7 +34,7 @@ export default function SidebarContainer({ isAdmin, userEmail, children }: Props
 
       {/* 데스크톱 사이드바 */}
       {!isMobile && (
-        <Sidebar isAdmin={isAdmin} userEmail={userEmail} />
+        <Sidebar isAdmin={isAdmin} userEmail={userEmail} hiddenMenuItems={hiddenMenuItems} />
       )}
 
       {/* 모바일 오버레이 + 사이드바 */}
@@ -47,7 +48,7 @@ export default function SidebarContainer({ isAdmin, userEmail, children }: Props
             position: 'fixed', top: 0, left: 0, bottom: 0, zIndex: 400,
             width: 240, boxShadow: '4px 0 20px rgba(0,0,0,0.15)',
           }}>
-            <Sidebar isAdmin={isAdmin} userEmail={userEmail} onClose={() => setOpen(false)} />
+            <Sidebar isAdmin={isAdmin} userEmail={userEmail} hiddenMenuItems={hiddenMenuItems} onClose={() => setOpen(false)} />
           </div>
         </>
       )}
