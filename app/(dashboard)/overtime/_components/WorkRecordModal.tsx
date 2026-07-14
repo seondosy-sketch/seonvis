@@ -32,6 +32,7 @@ export default function WorkRecordModal({
   employeeName,
   summary,
   projects,
+  defaultProjectId,
   onClose,
   onSaved,
 }: {
@@ -40,6 +41,7 @@ export default function WorkRecordModal({
   employeeName: string
   summary?: DailySummary
   projects: Project[]
+  defaultProjectId?: string // 프로젝트별 그리드에서 들어온 경우, 업무 추가 폼에 그 프로젝트를 미리 선택
   onClose: () => void
   onSaved: () => void
 }) {
@@ -54,10 +56,11 @@ export default function WorkRecordModal({
   const projectNameById = new Map(projects.map(p => [p.id, p.name]))
 
   // 신규 등록에는 진행중 프로젝트만 보여준다(종료된 프로젝트는 새 업무를 붙이지 않음).
-  // 다만 수정 중인 기록이 이미 종료된 프로젝트를 가리키고 있으면, 그 프로젝트도 선택지에 넣어
+  // 다만 수정 중인 기록이 이미 종료된 프로젝트를 가리키고 있거나, 프로젝트별 그리드에서
+  // 종료된 프로젝트의 셀로 들어온 경우(defaultProjectId)에는 그 프로젝트도 선택지에 넣어
   // 드롭다운이 빈 값으로 보이지 않게 한다.
   const projectOptions = projects.filter(p =>
-    p.status === '진행중' || p.id === editingRecord?.project_id
+    p.status === '진행중' || p.id === editingRecord?.project_id || p.id === defaultProjectId
   )
 
   function openAddForm() {
@@ -139,6 +142,7 @@ export default function WorkRecordModal({
               workDate={date}
               projects={projectOptions}
               initial={editingRecord ?? undefined}
+              defaultProjectId={defaultProjectId}
               onCancel={closeForm}
               onSaved={handleSaved}
             />

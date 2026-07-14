@@ -2,12 +2,16 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
-import { Project } from '@/lib/overtime/types'
+import { Employee, Project, ProjectMember } from '@/lib/overtime/types'
 
 /**
  * 프로젝트 등록/수정/종료 관리. 삭제는 그 프로젝트를 참조하는 overtime_work_records가
  * 하나도 없을 때만 가능하다(FK ON DELETE RESTRICT) — 이미 쓰인 프로젝트는 "종료" 상태로만
  * 바꾸고 행 자체는 지우지 않는다(2단계에서 정한 소프트 삭제 원칙).
+ *
+ * "담당직원" 지정(8단계 완료 후 추가): 행을 펼치면 직원 체크박스 목록이 나오고, 체크/해제가
+ * overtime_project_members에 즉시 저장된다. 실제 근무 이력(overtime_work_records)과 별개의
+ * "배정" 정보로, 향후 프로젝트별 인원을 나열해 근무일을 표기하는 화면의 기초자료가 된다.
  */
 export default function ProjectManagerModal({
   onClose,
@@ -23,6 +27,10 @@ export default function ProjectManagerModal({
   const [adding, setAdding] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [employees, setEmployees] = useState<Employee[]>([])
+  const [members, setMembers] = useState<ProjectMember[]>([])
+
   const load = useCallback(async () => {
     setLoading(true)
     const { data } = await supabase.from('overtime_projects').select('*').order('sort_order', { ascending: true })
@@ -31,7 +39,28 @@ export default function ProjectManagerModal({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  useEffect(() => { load() }, [load])
+  // 배정 데이터는 프로젝트×직원 수준의 작은 테이블이므로 처음에 전부 불러온다 —
+  // 토글 버튼에 담당 인원수를 바로 보여주기 위해 (기본업무내용처럼 lazy 조회하지 않음)
+  const loadMembers = useCallback(async () => {
+    const [empRes, memRes] = await Promise.all([
+      supabase.from('overtime_employees').select('*').order('sort_order', { ascending: true }),
+      supabase.from('overtime_project_members').select('*'),
+    ])
+    if (empRes.data) setEmployees(empRes.data as Employee[])
+    if (memRes.data) setMembers(memRes.data as ProjectMember[])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => { load(); loadMembers() }, [load, loadMembers])
+
+  async function toggleMember(projectId: string, employeeId: string, assigned: boolean) {
+    setError(null)
+    const { error: toggleError } = assigned
+      ? await supabase.from('overtime_project_members').insert({ project_id: projectId, employee_id: employeeId })
+      : await supabase.from('overtime_project_members').delete().eq('project_id', projectId).eq('employee_id', employeeId)
+    if (toggleError) { setError(`담당직원 저장 실패: ${toggleError.message}`); return }
+    await loadMembers()
+  }
 
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault()
@@ -75,7 +104,7 @@ export default function ProjectManagerModal({
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }} onClick={onClose}>
-      <div style={{ background: '#fff', borderRadius: 12, width: 520, maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }} onClick={e => e.stopPropagation()}>
+      <div style={{ background: '#fff', borderRadius: 12, width: 780, maxWidth: 'calc(100vw - 40px)', maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }} onClick={e => e.stopPropagation()}>
         <div style={{ padding: '16px 20px', borderBottom: '1px solid #e8e8e6', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#111', borderRadius: '12px 12px 0 0' }}>
           <div style={{ fontSize: 15, fontWeight: 700, color: '#fff' }}>프로젝트 관리</div>
           <button onClick={onClose} style={{ border: 'none', background: 'rgba(255,255,255,0.15)', color: '#fff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13 }}>✕</button>
@@ -94,29 +123,79 @@ export default function ProjectManagerModal({
           ) : projects.length === 0 ? (
             <div style={{ padding: 30, textAlign: 'center', color: '#bbb', fontSize: 13 }}>등록된 프로젝트가 없습니다</div>
           ) : (
-            projects.map((p, i) => (
-              <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 0', borderBottom: i < projects.length - 1 ? '1px solid #f0f0ee' : 'none' }}>
-                <input
-                  defaultValue={p.name}
-                  onBlur={e => { if (e.target.value.trim() && e.target.value !== p.name) updateProject(p.id, { name: e.target.value.trim() }) }}
-                  style={{ ...inp, flex: 1 }}
-                />
-                <input
-                  type="number"
-                  defaultValue={p.sort_order}
-                  onBlur={e => { const v = parseInt(e.target.value, 10); if (!Number.isNaN(v) && v !== p.sort_order) updateProject(p.id, { sort_order: v }) }}
-                  style={{ ...inp, width: 64 }}
-                  title="정렬순서"
-                />
-                <button
-                  onClick={() => updateProject(p.id, { status: p.status === '진행중' ? '종료' : '진행중' })}
-                  style={p.status === '진행중' ? statusBtnActive : statusBtnEnded}
-                >
-                  {p.status}
-                </button>
-                <button onClick={() => handleDelete(p)} style={deleteBtn}>삭제</button>
-              </div>
-            ))
+            projects.map((p, i) => {
+              const expanded = expandedId === p.id
+              const memberIds = new Set(members.filter(m => m.project_id === p.id).map(m => m.employee_id))
+              // 체크 목록은 재직 중인 직원만 보여주되, 이미 배정된 퇴사자는 해제할 수 있게 남겨둔다
+              const selectable = employees.filter(emp => emp.is_active || memberIds.has(emp.id))
+              return (
+                <div key={p.id} style={{ borderBottom: i < projects.length - 1 ? '1px solid #f0f0ee' : 'none' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 0' }}>
+                    <input
+                      defaultValue={p.name}
+                      onBlur={e => { if (e.target.value.trim() && e.target.value !== p.name) updateProject(p.id, { name: e.target.value.trim() }) }}
+                      style={{ ...inp, flex: 1 }}
+                    />
+                    <input
+                      type="date"
+                      defaultValue={p.start_date ?? ''}
+                      onBlur={e => { const v = e.target.value || null; if (v !== p.start_date) updateProject(p.id, { start_date: v }) }}
+                      style={{ ...inp, width: 128 }}
+                      title="시작일"
+                    />
+                    <span style={{ fontSize: 11, color: '#bbb', flexShrink: 0 }}>~</span>
+                    <input
+                      type="date"
+                      defaultValue={p.end_date ?? ''}
+                      onBlur={e => { const v = e.target.value || null; if (v !== p.end_date) updateProject(p.id, { end_date: v }) }}
+                      style={{ ...inp, width: 128 }}
+                      title="종료일"
+                    />
+                    <input
+                      type="number"
+                      defaultValue={p.sort_order}
+                      onBlur={e => { const v = parseInt(e.target.value, 10); if (!Number.isNaN(v) && v !== p.sort_order) updateProject(p.id, { sort_order: v }) }}
+                      style={{ ...inp, width: 64 }}
+                      title="정렬순서"
+                    />
+                    <button onClick={() => setExpandedId(expanded ? null : p.id)} style={expanded ? memberBtnActive : memberBtn}>
+                      담당직원{memberIds.size > 0 ? ` (${memberIds.size})` : ''} {expanded ? '▲' : '▼'}
+                    </button>
+                    <button
+                      onClick={() => updateProject(p.id, { status: p.status === '진행중' ? '종료' : '진행중' })}
+                      style={p.status === '진행중' ? statusBtnActive : statusBtnEnded}
+                    >
+                      {p.status}
+                    </button>
+                    <button onClick={() => handleDelete(p)} style={deleteBtn}>삭제</button>
+                  </div>
+
+                  {expanded && (
+                    <div style={{ margin: '0 0 12px', padding: 12, background: '#f8f8f7', border: '1px solid #e8e8e6', borderRadius: 8 }}>
+                      <div style={{ fontSize: 11, color: '#888', marginBottom: 8 }}>
+                        {p.name} 담당직원 — 체크하면 바로 저장됩니다 (향후 프로젝트별 인원·근무일 표기에 사용)
+                      </div>
+                      {selectable.length === 0 ? (
+                        <div style={{ fontSize: 12, color: '#bbb' }}>등록된 직원이 없습니다 — 직원 관리에서 먼저 추가하세요</div>
+                      ) : (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 14px' }}>
+                          {selectable.map(emp => (
+                            <label key={emp.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, color: emp.is_active ? '#333' : '#999', cursor: 'pointer' }}>
+                              <input
+                                type="checkbox"
+                                checked={memberIds.has(emp.id)}
+                                onChange={e => toggleMember(p.id, emp.id, e.target.checked)}
+                              />
+                              {emp.name}{emp.position ? ` ${emp.position}` : ''}{emp.is_active ? '' : ' (퇴사)'}
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })
           )}
         </div>
       </div>
@@ -129,3 +208,5 @@ const primaryBtn: React.CSSProperties = { height: 34, padding: '0 16px', borderR
 const deleteBtn: React.CSSProperties = { height: 28, padding: '0 10px', borderRadius: 4, border: 'none', background: '#fee2e2', color: '#b91c1c', fontSize: 11, cursor: 'pointer', flexShrink: 0 }
 const statusBtnActive: React.CSSProperties = { height: 28, padding: '0 10px', borderRadius: 4, border: '1px solid #bbf7d0', background: '#f0fdf4', color: '#15803d', fontSize: 11, cursor: 'pointer', flexShrink: 0, whiteSpace: 'nowrap' }
 const statusBtnEnded: React.CSSProperties = { height: 28, padding: '0 10px', borderRadius: 4, border: '1px solid #e8e8e6', background: '#f4f4f2', color: '#888', fontSize: 11, cursor: 'pointer', flexShrink: 0, whiteSpace: 'nowrap' }
+const memberBtn: React.CSSProperties = { height: 28, padding: '0 10px', borderRadius: 4, border: '1px solid #e8e8e6', background: '#fff', color: '#555', fontSize: 11, cursor: 'pointer', flexShrink: 0, whiteSpace: 'nowrap' }
+const memberBtnActive: React.CSSProperties = { ...memberBtn, background: '#111', color: '#fff', borderColor: '#111' }

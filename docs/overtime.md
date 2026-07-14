@@ -62,6 +62,126 @@ DB에는 Record 3건이 저장되고, 화면(월간 그리드 셀)에는 `6h (3)
 
 ---
 
+## 직원별 기본업무내용 (8단계 완료 후 사용자 요청으로 추가 — 1차)
+
+향후 근무입력(WorkRecordForm/BulkWorkRecordModal)에서 업무내용을 자유 텍스트 대신 직원별
+드롭박스로 고를 수 있게 하려는 작업의 **1차 단계**다. 이번 단계에서는 "그 드롭박스의 기초자료"인
+직원별 업무내용 목록을 직원 관리 화면에서 등록/삭제하는 기능만 추가했다 — **근무입력 화면의
+드롭박스 연동은 아직 하지 않았다** (사용자가 "먼저"라고 범위를 명시적으로 한정함). `task_description`은
+지금도 여전히 자유 텍스트 입력이다.
+
+- **새 테이블 `overtime_employee_tasks`** 추가(`supabase/migration_overtime_employee_tasks.sql`).
+  `overtime_employees`의 하위 테이블로, `(employee_id, task_name)` UNIQUE — 같은 직원에게 같은
+  업무명을 중복 등록할 수 없다. `overtime_work_records`와 달리 이력 데이터가 아니라 "제안 목록"일
+  뿐이므로 FK는 `ON DELETE RESTRICT`가 아니라 `ON DELETE CASCADE`로 걸었다.
+- **`EmployeeManagerModal.tsx`에 직원별 업무내용 관리 UI 추가**: 각 직원 행에 "기본업무내용 ▼"
+  토글 버튼을 달아 펼치면 그 직원의 등록된 업무내용을 칩(chip) 형태로 보여주고, 칩의 ✕로 삭제,
+  입력창 + "추가" 버튼으로 새 업무명을 추가한다. 목록은 토글로 처음 펼칠 때만 조회한다(직원마다
+  목록을 미리 다 불러오지 않음 — 직원 수만큼 불필요한 쿼리를 늘리지 않기 위함).
+- **`lib/overtime/types.ts`에 `EmployeeTask` 타입 추가**. 다른 타입들과 동일하게 DB 컬럼명과 1:1.
+- **다음 단계(미착수)**: `WorkRecordForm`/`BulkWorkRecordModal`의 "업무내용" `<input>`을 선택된
+  직원의 `overtime_employee_tasks`를 옵션으로 하는 드롭박스(+ 목록에 없는 값은 직접 입력 가능한
+  콤보박스 형태 권장 — 기존에 자유 텍스트로 쌓인 데이터와의 호환을 위해)로 바꾸는 작업.
+
+---
+
+## 프로젝트 시작일/종료일 (8단계 완료 후 사용자 요청으로 추가)
+
+- **`overtime_projects`에 `start_date`/`end_date` (date, nullable) 컬럼 추가**
+  (`supabase/migration_overtime_project_dates.sql`). 기존 프로젝트가 이미 있으므로 nullable —
+  기간을 아직 정하지 않은 프로젝트도 허용한다.
+- **`ProjectManagerModal.tsx`에 시작일~종료일 `<input type="date">` 두 개 추가**. 다른 필드와
+  동일하게 `onBlur` 즉시저장이고, 비우면 null로 저장한다. 날짜 입력 두 개가 들어가면서 모달
+  너비를 520 → 680으로 넓혔다.
+- **향후 계획 (사용자 예고, 미착수)**: 프로젝트 목록을 이 모달에서 직접 입력하는 대신 **입찰 현황
+  "프로젝트 List"(`projects` 테이블)에서 가져오는 방안**이 예정되어 있다. 그때 `overtime_projects`가
+  `projects`를 참조/동기화하는 구조로 바뀔 수 있으므로, 이 모달에 기능을 더 얹기 전에 그 작업과의
+  순서를 먼저 정하는 게 좋다.
+
+---
+
+## 프로젝트별 담당직원 (8단계 완료 후 사용자 요청으로 추가)
+
+향후 **프로젝트별 인원을 나열해 근무일을 표기**하는 화면의 기초자료다. 이번 단계에서는 배정
+데이터의 등록/해제만 만들었다 — 인원별 근무일 나열 화면은 아직 없다.
+
+- **새 테이블 `overtime_project_members`** (`supabase/migration_overtime_project_members.sql`).
+  `(project_id, employee_id)` UNIQUE 연결 테이블. 실제 근무 이력이 아니라 "배정" 정보이므로
+  FK는 `ON DELETE CASCADE` — `overtime_employee_tasks`와 같은 이유.
+- **`ProjectManagerModal.tsx`에 "담당직원 ▼" 토글 추가**: 행을 펼치면 직원 체크박스 목록이
+  나오고 체크/해제 즉시 저장된다. 버튼에 현재 배정 인원수를 표기한다.
+  - 배정 데이터는 처음에 **전부 한 번에 불러온다** (직원 목록 + members 테이블 통째). 토글
+    버튼마다 인원수를 바로 보여줘야 해서, 기본업무내용(`EmployeeManagerModal`)처럼 펼칠 때
+    lazy 조회하는 방식과 달리 갔다 — 테이블이 프로젝트×직원 수준으로 작아 부담이 없다.
+  - 체크 목록에는 재직 중인 직원만 보여주되, **이미 배정된 퇴사자는 "(퇴사)" 표기와 함께 남겨**
+    해제할 수 있게 했다.
+- **`lib/overtime/types.ts`에 `ProjectMember` 타입 추가**.
+- 날짜 입력(시작일/종료일)에 담당직원 버튼까지 행이 길어져 **모달 너비를 680 → 780으로** 넓혔다.
+
+---
+
+## 프로젝트별 그리드 보기 (8단계 완료 후 사용자 요청으로 추가)
+
+그리드 페이지(`/overtime`)에 **"프로젝트별" 보기를 추가하고 기본 보기로** 했다. 기존 직원별
+보기(MonthGrid)는 없애지 않고 우측 상단 토글(프로젝트별/직원별)로 남겨뒀다 — 직원별 총합을
+한눈에 보는 용도는 여전히 유효해서.
+
+```
+| 프로젝트명       | 담당직원 | 6/21 | 6/22 | … | 7/20 | 합계 |
+| 화성여자교도소    | 김○○   |  2h  |      | … |      | 12h |
+| (6/21~7/15)    | 이○○   |      |  2h  | … |  3h  | 16h |
+| ○○체육센터      | 김○○   |      |  3h  | … |  2h  |  8h |
+```
+
+- **`_components/ProjectGrid.tsx`** — 행이 "프로젝트 × 담당직원"(프로젝트명 셀은 rowSpan으로
+  묶음), 열이 날짜, 마지막 열이 행 합계. 셀 값은 같은 `overtime_work_records`를
+  "프로젝트 × 직원 × 날짜"로 합산한 것 — 저장 단위(1단계 원칙)는 그대로다.
+- **프로젝트 기간(start_date/end_date) 반영**: 기간 밖 날짜 셀은 회색 + 클릭 불가로 막아
+  "프로젝트 기간 내에만 근무시간을 입력"하게 했다. 단, 기간 밖인데 이미 기록이 있는 셀
+  (기간을 나중에 좁힌 경우)은 값을 보여주고 클릭도 허용해 수정할 수 있다. 날짜 비교는
+  `YYYY-MM-DD` 문자열 사전순 비교로 처리(UTC 파싱 버그 회피).
+- **행 구성**: 진행중 프로젝트 + (종료됐지만 이 기간에 기록이 있는 프로젝트)만 표시.
+  각 프로젝트의 행 직원은 담당 배정(`overtime_project_members`)된 직원 + 배정은 안 됐지만
+  그 프로젝트 기록이 있는 직원 — 후자를 빼면 이미 입력된 시간이 화면에서 사라져 보인다.
+  담당직원이 하나도 없는 프로젝트는 "프로젝트 관리에서 담당직원을 체크하세요" 안내 행 하나.
+- **셀 클릭 → 기존 WorkRecordModal 재사용**: 새 모달을 만들지 않고, `defaultProjectId`를
+  넘겨 업무 추가 폼에 그 프로젝트가 미리 선택되게만 했다(`WorkRecordModal`/`WorkRecordForm`에
+  optional prop 추가). 모달은 여전히 그 직원·그 날짜의 전체 기록(다른 프로젝트 포함)을 보여준다 —
+  같은 날 다른 프로젝트 기록과의 맥락을 잃지 않기 위해.
+- `page.tsx`는 이제 summaries(직원별 보기용)와 별도로 **원본 `records` 배열을 state로 유지**해
+  ProjectGrid에 넘긴다. 프로젝트 목록과 담당 배정은 `loadProjects`에서 함께 불러온다.
+
+---
+
+## 셀 팝오버 입력창 (8단계 완료 후 사용자 요청으로 추가)
+
+프로젝트별 그리드의 셀 클릭 시, 큰 모달 대신 **셀 근처에 뜨는 작은 팝오버 입력창**
+(`_components/OvertimeEntryPopover.tsx`)이 열린다. 프로젝트명/직원명/근무일은 셀에서 이미
+정해져 있으므로 헤더에 자동 표시만 하고, 사용자는 업무내용과 근무시간 유형만 고른다.
+
+- **업무내용은 드롭다운** — 선택지는 그 직원의 기본업무내용(`overtime_employee_tasks`).
+  "직접 입력..." 옵션으로 자유 텍스트도 가능하다. 기존 기록의 업무내용이 목록에 없으면
+  직접 입력으로 매핑해 값이 사라지지 않게 했다. (기본업무내용 기능이 여기서 처음 실사용됨)
+- **근무시간 유형 3가지**:
+  - `2시간`: 18:00~21:00, 휴게 1시간 → 인정 2시간
+  - `3시간`: 18:00~22:00, 휴게 1시간 → 인정 3시간
+  - `기타`: 시작/종료/휴게시간 직접 입력 → **인정 = 종료 − 시작 − 휴게, 1시간 단위 절삭(내림)**
+    (예: 18:00~23:30, 휴게 1시간 → 계산 4.5시간 → 인정 4시간). 계산은
+    `lib/overtime/time.ts`의 `calculateRecognizedHours` — 기존 `calculateHours`(식사시간
+    자동 차감)와 별개 함수다. 절삭 전/후를 함께 반환해 폼이 "계산 4.5시간 → 인정 4시간"을
+    실시간으로 보여준다. 인정시간 1시간 미만이면 저장을 막는다.
+- **`overtime_work_records.break_hours` 컬럼 추가** (`supabase/migration_overtime_break_hours.sql`,
+  numeric(3,1) nullable). 팝오버 저장분은 휴게시간 명시값이 들어가고, **null은 기존 방식
+  레코드**(저장 시점 식사시간 자동 차감)를 뜻한다 — 기존 데이터는 건드리지 않는다.
+  기존 `WorkRecordForm`/`BulkWorkRecordModal`은 여전히 자동 차감 방식으로 저장한다(null).
+- **같은 셀에 기록이 여러 건이면** 팝오버 상단에 목록을 보여주고 골라서 수정하거나
+  "+ 새 업무 추가"로 새 건을 만든다 — "업무 1건 = Record 1건" 원칙 유지.
+- 기존 기록을 열면 시간 값으로 유형을 역추론한다(18:00~21:00·2h → "2시간" 등, `detectTimeType`).
+- **직원별 보기(MonthGrid)의 셀 클릭은 기존 WorkRecordModal 그대로** — 그 보기의 셀은
+  프로젝트가 특정되지 않아(하루 총합) 팝오버의 "프로젝트 자동 표시" 전제가 안 맞는다.
+
+---
+
 ## 화면 구조 요약
 
 - **좌측**: 직원 목록
@@ -124,12 +244,13 @@ app/(dashboard)/overtime/print/
                                     #   (API route는 안 만들었다 — 아래 8단계 결정사항 참고)
 
 lib/overtime/
-├── types.ts                      # [1단계] 완료 — 도메인 타입 (Employee, Project, WorkRecord, DailySummary)
+├── types.ts                      # [1단계] 완료 — 도메인 타입 (Employee, Project, WorkRecord, DailySummary) / 8단계 이후 EmployeeTask 추가
 ├── summary.ts                    # [4단계] 완료 — DailySummary 집계, 시간 포맷 / [7단계] monthRange, 직원·프로젝트·날짜별 합계 추가
 └── time.ts                       # [6단계] 완료 — HH:mm → hours 계산 (WorkRecordForm에서 저장 시 사용)
 
 supabase 테이블 (2단계 완료 — supabase/migration_overtime.sql)
 ├── overtime_employees
+├── overtime_employee_tasks        # 8단계 완료 후 추가 — 직원별 기본업무내용 (supabase/migration_overtime_employee_tasks.sql)
 ├── overtime_projects
 └── overtime_work_records         # 핵심 테이블 — 업무 1건 = 행 1개
 ```

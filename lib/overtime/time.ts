@@ -45,3 +45,27 @@ export function calculateHours(startTime: string, endTime: string): number | nul
   const hours = hasMealBreak ? rawHours - MEAL_BREAK_HOURS : rawHours
   return Math.round(hours * 100) / 100
 }
+
+/**
+ * 셀 팝오버 입력("기타" 유형)의 인정시간 계산 — calculateHours의 식사시간 자동 차감과 달리
+ * 휴게시간을 명시적으로 입력받는다.
+ *
+ *   인정 초과근무시간 = 종료시간 - 시작시간 - 휴게시간, 1시간 단위 절삭(내림)
+ *   예) 18:00~23:30, 휴게 1시간 → 계산 4.5시간 → 인정 4시간
+ *
+ * raw(절삭 전)와 recognized(절삭 후)를 함께 반환해 폼이 "4.5시간 → 4시간" 안내를 보여줄 수 있게 한다.
+ * 형식 오류, 종료 ≤ 시작, 휴게시간 음수, 계산 결과 0 이하면 null.
+ */
+export function calculateRecognizedHours(
+  startTime: string,
+  endTime: string,
+  breakHours: number,
+): { raw: number; recognized: number } | null {
+  const start = toMinutes(startTime)
+  const end = toMinutes(endTime)
+  if (Number.isNaN(start) || Number.isNaN(end) || end <= start) return null
+  if (Number.isNaN(breakHours) || breakHours < 0) return null
+  const raw = Math.round(((end - start) / 60 - breakHours) * 100) / 100
+  if (raw <= 0) return null
+  return { raw, recognized: Math.floor(raw) }
+}

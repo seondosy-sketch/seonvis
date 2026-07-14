@@ -12,7 +12,9 @@
 | `weekly_meta` | 주간보고 교육참가자/기타 메타 |
 | `allowed_users` | 접근 허용 사용자 목록 |
 | `overtime_employees` | 연장근무 관리용 직원 목록 |
+| `overtime_employee_tasks` | 직원별 기본업무내용(자주 쓰는 업무) 목록 — 근무입력 드롭박스 기초자료 |
 | `overtime_projects` | 연장근무 관리용 프로젝트 목록 (입찰 현황 `projects`와 별개) |
+| `overtime_project_members` | 프로젝트별 담당직원 배정 (체크) — 향후 프로젝트별 인원·근무일 표기 기초자료 |
 | `overtime_work_records` | 연장근무 업무 1건 = 행 1개 (핵심 테이블) |
 
 ---
@@ -190,9 +192,27 @@ result_score 또는 evaluation 비어있으면 → "진행중"
 
 ---
 
+## overtime_employee_tasks
+
+직원별 기본업무내용(자주 쓰는 업무) 목록. `overtime_employees`의 하위 데이터로, 근무입력 화면에서
+업무내용을 드롭박스로 고를 수 있게 하는 기초자료다 (드롭박스 연동 자체는 별도 단계).
+
+| 컬럼 | 타입 | 설명 |
+|---|---|---|
+| `id` | uuid PK | |
+| `employee_id` | uuid FK → overtime_employees, ON DELETE CASCADE | |
+| `task_name` | text | 업무내용 (직원별 UNIQUE) |
+| `sort_order` | integer | 정렬순서 |
+| `created_at` | timestamptz | |
+
+**마이그레이션**: `supabase/migration_overtime_employee_tasks.sql`
+
+---
+
 ## overtime_projects
 
 연장근무 관리용 프로젝트 목록. 입찰 현황용 `projects` 테이블과는 별개의 단순 조회 목록.
+(향후 계획: 이 목록을 직접 입력하는 대신 입찰 현황 `projects` 테이블에서 가져오는 방안 예정 — `docs/overtime.md` 참고)
 
 | 컬럼 | 타입 | 설명 |
 |---|---|---|
@@ -200,7 +220,29 @@ result_score 또는 evaluation 비어있으면 → "진행중"
 | `name` | text UNIQUE | 프로젝트명 |
 | `status` | text | `진행중` 또는 `종료`. 종료된 프로젝트는 신규 업무 등록 시 선택 목록에서 제외 |
 | `sort_order` | integer | |
+| `start_date` | date (nullable) | 프로젝트 시작일. 아직 정하지 않았으면 null |
+| `end_date` | date (nullable) | 프로젝트 종료일 |
 | `created_at` | timestamptz | |
+
+**마이그레이션**: `supabase/migration_overtime.sql` + `supabase/migration_overtime_project_dates.sql` (시작일/종료일 추가)
+
+---
+
+## overtime_project_members
+
+프로젝트별 담당직원 배정. 프로젝트 관리 화면에서 체크로 지정하며, 실제 근무 이력
+(`overtime_work_records`)과 별개의 "배정" 정보다 — 향후 프로젝트별 인원을 나열해 근무일을
+표기하는 화면의 기초자료.
+
+| 컬럼 | 타입 | 설명 |
+|---|---|---|
+| `id` | uuid PK | |
+| `project_id` | uuid FK → overtime_projects, ON DELETE CASCADE | |
+| `employee_id` | uuid FK → overtime_employees, ON DELETE CASCADE | |
+| `created_at` | timestamptz | |
+| UNIQUE | (project_id, employee_id) | 중복 배정 방지 |
+
+**마이그레이션**: `supabase/migration_overtime_project_members.sql`
 
 ---
 
@@ -219,7 +261,8 @@ result_score 또는 evaluation 비어있으면 → "진행중"
 | `task_description` | text | 업무내용 |
 | `start_time` | text | `"HH:mm"` (예: `"18:00"`) |
 | `end_time` | text | `"HH:mm"`. 자정을 넘기면 `"24:00"` 이상으로 표기 (예: 21:00~24:00) |
-| `hours` | numeric(4,2) | 저장 시점에 `(end_time - start_time)`으로 계산해 저장 (매 조회마다 재계산하지 않고 `SUM()`으로 바로 집계하기 위함) |
+| `hours` | numeric(4,2) | 인정시간. 저장 시점에 계산해 저장 (매 조회마다 재계산하지 않고 `SUM()`으로 바로 집계하기 위함) |
+| `break_hours` | numeric(3,1) (nullable) | 휴게시간. 팝오버 입력은 명시값(인정 = 종료−시작−휴게, 1시간 절삭), null은 기존 방식(식사시간 자동 차감) 레코드 |
 | `note` | text | 비고 |
 | `created_at` | timestamptz | |
 | `updated_at` | timestamptz | |

@@ -22,6 +22,18 @@ export interface Employee {
   sort_order: number   // 좌측 직원 목록 정렬순서
 }
 
+/**
+ * 직원별 기본업무내용 — 직원 관리 화면에서 미리 등록해두는 "자주 쓰는 업무" 목록.
+ * WorkRecord.task_description은 여전히 자유 텍스트이지만, 이 목록이 향후 근무입력 화면에서
+ * 드롭박스 선택지로 쓰일 기초자료가 된다 (드롭박스 연동 자체는 별도 단계).
+ */
+export interface EmployeeTask {
+  id: string
+  employee_id: string
+  task_name: string
+  sort_order: number
+}
+
 export type ProjectStatus = '진행중' | '종료'
 
 export interface Project {
@@ -29,6 +41,19 @@ export interface Project {
   name: string
   status: ProjectStatus // 종료된 프로젝트는 신규 업무 등록 시 선택 목록에서 제외
   sort_order: number
+  start_date: string | null // YYYY-MM-DD. 아직 기간을 정하지 않은 프로젝트는 null
+  end_date: string | null   // YYYY-MM-DD
+}
+
+/**
+ * 프로젝트별 담당직원 배정 — 프로젝트 관리 화면에서 체크로 지정한다.
+ * 실제 근무 이력(WorkRecord)과 별개의 "배정" 정보로, 향후 프로젝트별 인원을
+ * 나열해 근무일을 표기하는 화면의 기초자료가 된다.
+ */
+export interface ProjectMember {
+  id: string
+  project_id: string
+  employee_id: string
 }
 
 /**
@@ -44,7 +69,9 @@ export interface WorkRecord {
   task_description: string // 업무내용
   start_time: string        // "HH:mm"
   end_time: string           // "HH:mm". 자정을 넘기면 "24:00" 이상으로 표기 (예: 21:00~24:00)
-  hours: number              // 저장 시점에 (end_time - start_time)으로 자동 계산해 저장
+  hours: number              // 인정시간. 저장 시점에 계산해 저장 (아래 break_hours 참고)
+  break_hours: number | null // 휴게시간. 팝오버 입력은 명시값(인정 = 종료-시작-휴게, 1시간 절삭),
+                             // null은 기존 방식 레코드(식사시간 1시간 자동 차감, time.ts calculateHours)
   note: string                // 비고
   created_at: string          // 대시보드 "최근 입력 내역" 정렬 기준 (7단계)
 }

@@ -14,6 +14,7 @@ export default function WorkRecordForm({
   workDate,
   projects,
   initial,
+  defaultProjectId,
   onCancel,
   onSaved,
 }: {
@@ -21,11 +22,12 @@ export default function WorkRecordForm({
   workDate: string
   projects: Project[]
   initial?: WorkRecord
+  defaultProjectId?: string // 프로젝트별 그리드에서 셀을 눌러 들어온 경우, 그 프로젝트를 미리 선택
   onCancel: () => void
   onSaved: () => void
 }) {
   const supabase = createSupabaseBrowserClient()
-  const [projectId, setProjectId] = useState(initial?.project_id ?? '')
+  const [projectId, setProjectId] = useState(initial?.project_id ?? defaultProjectId ?? '')
   const [taskDescription, setTaskDescription] = useState(initial?.task_description ?? '')
   // 연장근무는 보통 정규 근무가 끝나는 18시부터 시작하므로 기본값으로 넣어둔다 — 물론 수정 가능.
   const [startTime, setStartTime] = useState(initial?.start_time ?? '18:00')
