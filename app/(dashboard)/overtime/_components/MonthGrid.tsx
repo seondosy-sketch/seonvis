@@ -46,6 +46,7 @@ export default function MonthGrid({
           <colgroup>
             <col style={{ width: 100 }} />
             {days.map(d => <col key={d.dateStr} />)}
+            <col style={{ width: 48 }} />
           </colgroup>
           <thead>
             <tr>
@@ -68,17 +69,21 @@ export default function MonthGrid({
                   </th>
                 )
               })}
+              <th style={{ ...dayHeaderCell, fontWeight: 500, color: '#555' }}>합계</th>
             </tr>
           </thead>
           <tbody>
             {employees.length === 0 ? (
               <tr>
-                <td colSpan={days.length + 1} style={{ padding: 40, textAlign: 'center', color: '#bbb' }}>
+                <td colSpan={days.length + 2} style={{ padding: 40, textAlign: 'center', color: '#bbb' }}>
                   등록된 직원이 없습니다. 직원 관리에서 추가하세요.
                 </td>
               </tr>
             ) : (
-              employees.map(emp => (
+              employees.map(emp => {
+                // 이 직원의 기간 총합 — 셀과 같은 summaries에서 더하기만 한다 (원본 계산은 summary.ts)
+                const rowTotal = days.reduce((sum, d) => sum + (summaries.get(summaryKey(emp.id, d.dateStr))?.total_hours ?? 0), 0)
+                return (
                 <tr key={emp.id}>
                   <td style={employeeCell}>
                     <div style={{ fontWeight: 600, color: '#111' }}>{emp.name}</div>
@@ -104,8 +109,10 @@ export default function MonthGrid({
                       </td>
                     )
                   })}
+                  <td style={totalCell}>{rowTotal > 0 ? formatHours(rowTotal) : ''}</td>
                 </tr>
-              ))
+                )
+              })
             )}
           </tbody>
         </table>
@@ -161,6 +168,17 @@ const dataCell: React.CSSProperties = {
   borderLeft: '1px solid #f0f0ee',
   textAlign: 'center',
   cursor: 'pointer',
+  overflow: 'hidden',
+}
+
+const totalCell: React.CSSProperties = {
+  height: 40,
+  borderBottom: '1px solid #f0f0ee',
+  borderLeft: '1px solid #e8e8e6',
+  textAlign: 'center',
+  fontWeight: 700,
+  color: '#111',
+  background: '#fbfbfa',
   overflow: 'hidden',
 }
 
