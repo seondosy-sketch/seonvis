@@ -202,10 +202,12 @@ export default function Dashboard() {
       setExpected(carried.length > 0 ? carried : [EMPTY_EXPECTED(0, week), EMPTY_EXPECTED(1, week)])
     }
 
-    // 교육참가자: 진행중 프로젝트에서만 취합
+    // 교육참가자: 진행중 프로젝트에서만 취합. 담당자가 아직 "미정"인 항목은 사람이 아니므로 제외
     const activeRefs = jinhaengRefs
     const uniq = (field: keyof ProjectRef) => {
-      const names = activeRefs.map(r => (r[field] as string) ?? '').filter(Boolean)
+      const names = activeRefs
+        .map(r => ((r[field] as string) ?? '').trim())
+        .filter(n => n && n !== '미정')
       return [...new Set(names)].join(', ')
     }
     const baseMeta: WeeklyMeta = m ? m as WeeklyMeta : { week, education_note: '', edu_chief: '', edu_arch: '', edu_civil: '', edu_safety: '', edu_mech: '', other_note: '' }
