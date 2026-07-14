@@ -11,11 +11,17 @@
 | `expected_projects` | 주간보고용 발주예상 프로젝트 |
 | `weekly_meta` | 주간보고 교육참가자/기타 메타 |
 | `allowed_users` | 접근 허용 사용자 목록 |
-| `overtime_employees` | 연장근무 관리용 직원 목록 |
+| `overtime_employees` | 직원 목록 (연장근무·휴가관리 공용) |
 | `overtime_employee_tasks` | 직원별 기본업무내용(자주 쓰는 업무) 목록 — 근무입력 드롭박스 기초자료 |
 | `overtime_projects` | 연장근무 관리용 프로젝트 목록 (입찰 현황 `projects`에서 자동 동기화 + 수동 등록) |
 | `overtime_project_members` | 프로젝트별 담당직원 배정 (체크) — 향후 프로젝트별 인원·근무일 표기 기초자료 |
 | `overtime_work_records` | 연장근무 업무 1건 = 행 1개 (핵심 테이블) |
+| `leave_types` | 휴가 유형 (연차/반차/경조 등, 차감 여부·단위) |
+| `annual_leave_balances` | 직원·연도별 연차 부여(기본+조정) |
+| `annual_leave_balance_history` | 연차 부여/조정 수정 이력 |
+| `leave_records` | 휴가 1건 (원본) |
+| `leave_record_dates` | 휴가의 날짜별 전개 — 집계·중복검증·월 셀 상세의 기준 |
+| `holidays` | 법정공휴일 + 회사휴무 (차감 제외일, 오프라인 동작) |
 
 ---
 
@@ -180,7 +186,7 @@ result_score 또는 evaluation 비어있으면 → "진행중"
 
 ## overtime_employees
 
-연장근무 관리용 직원 목록. `docs/overtime.md` 참고.
+직원 목록 — 연장근무와 휴가관리가 **공용**으로 쓴다. `docs/overtime.md`, `docs/leave-management/` 참고.
 
 | 컬럼 | 타입 | 설명 |
 |---|---|---|
@@ -189,6 +195,8 @@ result_score 또는 evaluation 비어있으면 → "진행중"
 | `position` | text | 직급 |
 | `is_active` | boolean | 재직여부 — 퇴사해도 행은 삭제하지 않고 false로만 변경 (과거 기록 보존) |
 | `sort_order` | integer | 좌측 직원 목록 정렬순서 |
+| `hire_date` | date (nullable) | 입사일 — 휴가관리 연차 설정 모달에서 편집 (`migration_leave.sql`) |
+| `resign_date` | date (nullable) | 퇴사일. 재직 중이면 null |
 | `created_at` | timestamptz | |
 
 ---
@@ -284,3 +292,19 @@ result_score 또는 evaluation 비어있으면 → "진행중"
 | `lib/supabase-browser.ts` | `createSupabaseBrowserClient()` — Client Component용 | 세션 쿠키 자동 처리 |
 | `lib/supabase-server.ts` | `createSupabaseServerClient()` — Server Component/API Route용 | `await` 필요 |
 | `lib/supabase-admin.ts` | Service role — RLS 우회, **서버 사이드 전용** | 클라이언트 노출 금지 |
+
+---
+
+## 휴가관리 테이블 (leave_*)
+
+상세 설계는 [docs/leave-management/03-data-model.md](./leave-management/03-data-model.md) 참고.
+핵심 원칙: 월별/연간 사용일수·잔여 연차는 저장하지 않고 항상 `leave_record_dates`에서 계산.
+
+- `leave_types(id, name, deducts_annual_leave, default_deduction_unit, is_active, sort_order)` — 기본 8종 시드
+- `annual_leave_balances(id, employee_id FK, year, granted_days, adjustment_days, adjustment_reason, updated_at)` — UNIQUE(employee_id, year). 최종 = granted + adjustment (계산값)
+- `annual_leave_balance_history(id, employee_id, year, previous/new_granted_days, previous/new_adjustment_days, reason, changed_at)` — 연차 설정 저장 시 앱이 1행씩 기록
+- `leave_records(id, employee_id FK, leave_type_id FK, start_date, end_date, start/end_day_unit(full|am|pm), total_calendar_days, deducted_days, memo)` — 몇 박은 total_calendar_days-1로 파생
+- `leave_record_dates(id, leave_record_id FK CASCADE, leave_date, day_unit, deducted_days, is_weekend, is_holiday, holiday_name)` — 기간 내 모든 달력 날짜 저장(주말·공휴일 차감 0), 공휴일 여부는 저장 시점 스냅샷. 수정 시 전체 삭제 후 재생성
+- `holidays(id, holiday_date UNIQUE, name, holiday_type: 법정공휴일|회사휴무)` — 2026년 법정공휴일 시드, `/api/holidays`로 연도별 불러오기 가능
+
+**마이그레이션**: `supabase/migration_leave.sql` (overtime_employees의 hire_date/resign_date 추가 포함)

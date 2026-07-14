@@ -13,6 +13,7 @@ export const RESTRICTABLE_MENU_ITEMS: MenuItemConfig[] = [
   { key: 'projects', label: '프로젝트 List' },
   { key: 'weekly', label: '주간/월간보고' },
   { key: 'overtime', label: '연장근무' },
+  { key: 'leave', label: '휴가관리' },
   { key: 'trip', label: '출장지원' },
   { key: 'web', label: 'WEB 검색' },
   { key: 'proposal_db', label: '제안서 DB' },
