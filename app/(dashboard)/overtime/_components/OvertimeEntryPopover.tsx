@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import { Employee, EmployeeTask, Project, WorkRecord } from '@/lib/overtime/types'
-import { calculateRecognizedHours } from '@/lib/overtime/time'
+import { calculateRecognizedHours, TIME_TYPE_PRESETS, TimeType } from '@/lib/overtime/time'
 
 /**
  * 프로젝트별 그리드의 셀 클릭 시 열리는 작은 팝오버 입력창.
@@ -22,12 +22,7 @@ import { calculateRecognizedHours } from '@/lib/overtime/time'
 
 const CUSTOM_TASK = '__custom__'
 
-type TimeType = '2h' | '3h' | 'custom'
-
-const PRESETS: Record<'2h' | '3h', { start: string; end: string; breakH: number; hours: number; label: string; desc: string }> = {
-  '2h': { start: '18:00', end: '21:00', breakH: 1, hours: 2, label: '2시간', desc: '18:00~21:00 · 휴게 1시간' },
-  '3h': { start: '18:00', end: '22:00', breakH: 1, hours: 3, label: '3시간', desc: '18:00~22:00 · 휴게 1시간' },
-}
+const PRESETS = TIME_TYPE_PRESETS
 
 function detectTimeType(r: WorkRecord): TimeType {
   if (r.start_time === PRESETS['2h'].start && r.end_time === PRESETS['2h'].end && r.hours === PRESETS['2h'].hours) return '2h'

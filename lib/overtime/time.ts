@@ -47,6 +47,19 @@ export function calculateHours(startTime: string, endTime: string): number | nul
 }
 
 /**
+ * 근무시간 유형 프리셋 — 셀 팝오버(OvertimeEntryPopover)와 일괄 입력(BulkWorkRecordModal)이
+ * 같은 기준을 쓰도록 여기 하나로 모아둔다.
+ *   2시간: 18:00~21:00, 휴게 1시간 → 인정 2시간
+ *   3시간: 18:00~22:00, 휴게 1시간 → 인정 3시간
+ */
+export const TIME_TYPE_PRESETS = {
+  '2h': { start: '18:00', end: '21:00', breakH: 1, hours: 2, label: '2시간', desc: '18:00~21:00 · 휴게 1시간' },
+  '3h': { start: '18:00', end: '22:00', breakH: 1, hours: 3, label: '3시간', desc: '18:00~22:00 · 휴게 1시간' },
+} as const
+
+export type TimeType = keyof typeof TIME_TYPE_PRESETS | 'custom'
+
+/**
  * 셀 팝오버 입력("기타" 유형)의 인정시간 계산 — calculateHours의 식사시간 자동 차감과 달리
  * 휴게시간을 명시적으로 입력받는다.
  *

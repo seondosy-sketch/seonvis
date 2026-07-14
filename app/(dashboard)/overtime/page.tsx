@@ -219,6 +219,7 @@ export default function OvertimePage() {
         <BulkWorkRecordModal
           employees={employees}
           projects={projects.filter(p => p.status === '진행중')}
+          tasks={employeeTasks}
           days={days}
           onClose={() => setShowBulkEntry(false)}
           onSaved={() => loadRecords(viewYear, viewMonth)}
