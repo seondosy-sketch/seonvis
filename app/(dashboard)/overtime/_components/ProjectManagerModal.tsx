@@ -208,5 +208,6 @@ const primaryBtn: React.CSSProperties = { height: 34, padding: '0 16px', borderR
 const deleteBtn: React.CSSProperties = { height: 28, padding: '0 10px', borderRadius: 4, border: 'none', background: '#fee2e2', color: '#b91c1c', fontSize: 11, cursor: 'pointer', flexShrink: 0 }
 const statusBtnActive: React.CSSProperties = { height: 28, padding: '0 10px', borderRadius: 4, border: '1px solid #bbf7d0', background: '#f0fdf4', color: '#15803d', fontSize: 11, cursor: 'pointer', flexShrink: 0, whiteSpace: 'nowrap' }
 const statusBtnEnded: React.CSSProperties = { height: 28, padding: '0 10px', borderRadius: 4, border: '1px solid #e8e8e6', background: '#f4f4f2', color: '#888', fontSize: 11, cursor: 'pointer', flexShrink: 0, whiteSpace: 'nowrap' }
-const memberBtn: React.CSSProperties = { height: 28, padding: '0 10px', borderRadius: 4, border: '1px solid #e8e8e6', background: '#fff', color: '#555', fontSize: 11, cursor: 'pointer', flexShrink: 0, whiteSpace: 'nowrap' }
+// border 축약형 + borderColor 개별 속성을 섞으면 React가 리렌더 시 스타일 충돌을 경고하므로 개별 속성으로만 정의
+const memberBtn: React.CSSProperties = { height: 28, padding: '0 10px', borderRadius: 4, borderWidth: 1, borderStyle: 'solid', borderColor: '#e8e8e6', background: '#fff', color: '#555', fontSize: 11, cursor: 'pointer', flexShrink: 0, whiteSpace: 'nowrap' }
 const memberBtnActive: React.CSSProperties = { ...memberBtn, background: '#111', color: '#fff', borderColor: '#111' }

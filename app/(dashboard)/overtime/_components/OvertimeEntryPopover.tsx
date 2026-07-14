@@ -270,8 +270,10 @@ export default function OvertimeEntryPopover({
 
 const lbl: React.CSSProperties = { fontSize: 10, color: '#888', marginBottom: 3 }
 const inp: React.CSSProperties = { width: '100%', height: 30, padding: '0 8px', border: '1px solid #e8e8e6', borderRadius: 5, fontSize: 12, background: '#fff', boxSizing: 'border-box' }
-const typeBtn: React.CSSProperties = { flex: 1, height: 30, borderRadius: 5, border: '1px solid #e8e8e6', background: '#fff', color: '#555', fontSize: 12, cursor: 'pointer' }
+// border 축약형과 borderColor/borderStyle 개별 속성을 섞으면 React가 리렌더 시 스타일 충돌을
+// 경고하므로, 개별 속성을 덮어쓰는 스타일은 처음부터 개별 속성(longhand)으로만 정의한다.
+const typeBtn: React.CSSProperties = { flex: 1, height: 30, borderRadius: 5, borderWidth: 1, borderStyle: 'solid', borderColor: '#e8e8e6', background: '#fff', color: '#555', fontSize: 12, cursor: 'pointer' }
 const typeBtnActive: React.CSSProperties = { ...typeBtn, background: '#111', color: '#fff', borderColor: '#111' }
-const recordRow: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, height: 28, padding: '0 8px', borderRadius: 5, border: '1px solid #e8e8e6', background: '#fff', fontSize: 11, color: '#333', cursor: 'pointer', textAlign: 'left' }
+const recordRow: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, height: 28, padding: '0 8px', borderRadius: 5, borderWidth: 1, borderStyle: 'solid', borderColor: '#e8e8e6', background: '#fff', fontSize: 11, color: '#333', cursor: 'pointer', textAlign: 'left' }
 const deleteBtn: React.CSSProperties = { height: 30, padding: '0 12px', borderRadius: 5, border: 'none', background: '#fee2e2', color: '#b91c1c', fontSize: 12, cursor: 'pointer' }
 const saveBtn: React.CSSProperties = { height: 30, padding: '0 16px', borderRadius: 5, border: 'none', background: '#111', color: '#fff', fontSize: 12, cursor: 'pointer' }
