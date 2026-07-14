@@ -277,7 +277,7 @@ result_score 또는 evaluation 비어있으면 → "진행중"
 
 | 파일 | 용도 | 주의 |
 |---|---|---|
-| `lib/supabase.ts` | anon 클라이언트 (레거시, 일부 페이지에서 직접 사용) | |
+| `lib/supabase.ts` | 주간보고 도메인 타입만 제공 (레거시 anon 클라이언트는 제거됨 — localStorage 세션이라 토큰 만료 시 RLS에 걸려 빈 결과가 돌아오는 버그가 있었음) | 클라이언트 생성 금지 |
 | `lib/supabase-browser.ts` | `createSupabaseBrowserClient()` — Client Component용 | 세션 쿠키 자동 처리 |
 | `lib/supabase-server.ts` | `createSupabaseServerClient()` — Server Component/API Route용 | `await` 필요 |
 | `lib/supabase-admin.ts` | Service role — RLS 우회, **서버 사이드 전용** | 클라이언트 노출 금지 |

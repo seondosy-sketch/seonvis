@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { supabase, PerformingProject, ExpectedProject, WeeklyMeta } from '@/lib/supabase'
+import { PerformingProject, ExpectedProject, WeeklyMeta } from '@/lib/supabase'
 import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import WeeklyCalendar from './components/WeeklyCalendar'
 import { useIsMobile } from '@/lib/useIsMobile'
@@ -54,6 +54,12 @@ function shiftWeek(week: string, delta: number): string {
 
 export default function Dashboard() {
   const isMobile = useIsMobile()
+  // 주간보고 테이블(performing/expected/weekly_meta) 조회·저장도 반드시 쿠키 세션 기반
+  // createSupabaseBrowserClient()를 쓴다. 이전에는 lib/supabase.ts의 레거시 클라이언트
+  // (localStorage 세션)를 썼는데, 앱 로그인은 쿠키에만 세션을 저장하므로 레거시 클라이언트의
+  // 토큰이 만료되면 RLS(authenticated 전용)에 걸려 "오류 없이 빈 결과"가 돌아왔다 —
+  // 저장해둔 발주예상 프로젝트가 화면에서 사라진 것처럼 보였던 원인.
+  const supabase = createSupabaseBrowserClient()
   const currentWeek = getCurrentWeek()
   const [week, setWeek] = useState(currentWeek)
   const [performing, setPerforming] = useState<PerformingProject[]>([])
