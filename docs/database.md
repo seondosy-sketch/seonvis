@@ -33,6 +33,7 @@
 | `fee` | numeric | 용역비(억) |
 | `tp_score` | text | TP 점수 |
 | `duration_days` | text | 용역 기간 |
+| `announce_date` | text | 공고일 (YYYY-MM-DD) |
 | `submit_date` | text | 제출일 (YYYY-MM-DD 또는 M/D) |
 | `interview_date` | text | 발표/면접일 (날짜 또는 "서면"/"추후") |
 | `bid_date` | text | 개찰일 |

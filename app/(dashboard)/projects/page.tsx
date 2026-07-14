@@ -18,6 +18,7 @@ interface Project {
   fee: number | null
   tp_score: string
   duration_days: string
+  announce_date: string | null
   submit_date: string | null
   interview_date: string | null
   bid_date: string | null
@@ -68,6 +69,7 @@ interface FormData {
   fee: number | null
   tp_score: string
   duration_days: string
+  announce_date: string | null
   submit_date: string | null
   interview_date: string | null
   bid_date: string | null
@@ -106,7 +108,7 @@ interface FormData {
 const EMPTY_FORM: FormData = {
   project_number: '', type: '면접', client: '', name: '',
   fee: null, tp_score: '', duration_days: '',
-  submit_date: null, interview_date: null, bid_date: null,
+  announce_date: null, submit_date: null, interview_date: null, bid_date: null,
   result_score: '', evaluation: '', award_fee: null,
   participants: '', participation_ratio: '',
   director: '', status_override: null,
@@ -227,7 +229,7 @@ export default function ProjectsPage() {
       form: {
         project_number: p.project_number, type: p.type, client: p.client, name: p.name,
         fee: p.fee, tp_score: p.tp_score, duration_days: p.duration_days,
-        submit_date: p.submit_date, interview_date: p.interview_date, bid_date: p.bid_date,
+        announce_date: p.announce_date, submit_date: p.submit_date, interview_date: p.interview_date, bid_date: p.bid_date,
         result_score: p.result_score, evaluation: p.evaluation, award_fee: p.award_fee,
         participants: p.participants, participation_ratio: p.participation_ratio,
         director: p.director, status_override: p.status_override,
@@ -266,7 +268,7 @@ export default function ProjectsPage() {
       const projectPayload = {
         project_number: f.project_number, type: f.type, client: f.client, name: f.name,
         fee: f.fee, tp_score: f.tp_score, duration_days: f.duration_days,
-        submit_date: f.submit_date || null, interview_date: f.interview_date || null, bid_date: f.bid_date || null,
+        announce_date: f.announce_date || null, submit_date: f.submit_date || null, interview_date: f.interview_date || null, bid_date: f.bid_date || null,
         result_score: f.result_score, evaluation: f.evaluation, award_fee: f.award_fee,
         participants: f.participants, participation_ratio: f.participation_ratio,
         director: f.director, status_override: f.status_override || null,
@@ -326,11 +328,11 @@ export default function ProjectsPage() {
   }
 
   const exportCsv = () => {
-    const headers = ['번호', '유형', '발주처', '용역명', '용역비(억)', '제안서', '점수', '제출일', '발표일', '개찰일', '결과', '낙찰사', '참여사', '단장', '건축', '토목', '기계', '안전', '상태', '비고']
+    const headers = ['번호', '유형', '발주처', '용역명', '용역비(억)', '제안서', '점수', '공고일', '제출일', '발표일', '개찰일', '결과', '낙찰사', '참여사', '단장', '건축', '토목', '기계', '안전', '상태', '비고']
     const rowsData = filtered.map(p => [
       p.project_number, p.type, p.client, p.name,
       p.fee ?? '', p.tp_score, (tooltipAll[p.project_number]?.score_dist ?? '').match(/^[\d.]+/)?.[0] ?? '',
-      p.submit_date ?? '', p.interview_date ?? '', p.bid_date ?? '',
+      p.announce_date ?? '', p.submit_date ?? '', p.interview_date ?? '', p.bid_date ?? '',
       p.result_score, p.evaluation, p.participants, p.director,
       p.staff_arch, p.staff_civil, p.staff_mech, p.staff_safety,
       computeStatus(p.result_score, p.evaluation, p.participants, p.status_override), p.note,
@@ -387,14 +389,14 @@ export default function ProjectsPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr style={{ background: '#f4f4f2' }}>
-                {['', '번호', '유형', '발주처', '용역명', '용역비(억)', '제안서', '점수', '제출일', '발표일', '개찰일', '결과', '낙찰사', '낙찰액', '참여사', '단장', '건축', '토목', '기계', '안전', '상태'].map(h => (
+                {['', '번호', '유형', '발주처', '용역명', '용역비(억)', '제안서', '점수', '공고일', '제출일', '발표일', '개찰일', '결과', '낙찰사', '낙찰액', '참여사', '단장', '건축', '토목', '기계', '안전', '상태'].map(h => (
                   <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 500, color: '#555', borderBottom: '1px solid #e8e8e6', whiteSpace: 'nowrap', position: 'sticky', top: 0, background: '#f4f4f2', zIndex: 1 }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 ? (
-                <tr><td colSpan={21} style={{ padding: 40, textAlign: 'center', color: '#bbb' }}>데이터가 없습니다</td></tr>
+                <tr><td colSpan={22} style={{ padding: 40, textAlign: 'center', color: '#bbb' }}>데이터가 없습니다</td></tr>
               ) : filtered.map(p => {
                 const hasTooltip = !!tooltipAll[p.project_number]
                 const scoreDist = tooltipAll[p.project_number]?.score_dist ?? ''
@@ -418,6 +420,7 @@ export default function ProjectsPage() {
                     <td style={{ ...tdnw, textAlign: 'right' }}>{p.fee != null ? p.fee : '-'}</td>
                     <td style={tdnw}>{p.tp_score}</td>
                     <td style={tdnw}>{scoreDist.match(/^[\d.]+/)?.[0] ?? ''}</td>
+                    <td style={tdnw}>{p.announce_date ?? '-'}</td>
                     <td style={tdnw}><NoteCell value={p.submit_date ?? '-'} note={notes[p.project_number]?.['submit_date']} onNote={e => openNote(e, p.project_number, 'submit_date')} /></td>
                     <td style={tdnw}><NoteCell value={p.interview_date ?? '-'} note={notes[p.project_number]?.['interview_date']} onNote={e => openNote(e, p.project_number, 'interview_date')} /></td>
                     <td style={tdnw}><NoteCell value={p.bid_date ?? '-'} note={notes[p.project_number]?.['bid_date']} onNote={e => openNote(e, p.project_number, 'bid_date')} /></td>
@@ -439,7 +442,7 @@ export default function ProjectsPage() {
               <tr style={{ background: '#f9f9f8', borderTop: '2px solid #e8e8e6' }}>
                 <td colSpan={4} style={{ padding: '8px 12px', fontSize: 12, color: '#555', fontWeight: 500 }}>합계 {filtered.length}건</td>
                 <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600, color: '#111' }}>{filtered.reduce((s, p) => s + (p.fee ?? 0), 0).toFixed(1)}</td>
-                <td colSpan={11} />
+                <td colSpan={12} />
               </tr>
             </tfoot>
           </table>
@@ -681,10 +684,11 @@ export default function ProjectsPage() {
               {/* 섹션 5: 일정 */}
               <SectionTitle>일정</SectionTitle>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
-                <Row2>
+                <Row3>
+                  <Field label="공고일"><input style={inp} type="date" value={modal.form.announce_date ?? ''} onChange={e => set('announce_date', e.target.value || null)} /></Field>
                   <Field label="제출일"><input style={inp} type="date" value={modal.form.submit_date ?? ''} onChange={e => set('submit_date', e.target.value || null)} /></Field>
                   <Field label="PQ 제출일"><input style={inp} value={modal.form.pq_date} onChange={e => set('pq_date', e.target.value)} placeholder="2026-07-01" /></Field>
-                </Row2>
+                </Row3>
                 <Row3>
                   <Field label="발표/면접일"><input style={inp} type="date" value={modal.form.interview_date ?? ''} onChange={e => set('interview_date', e.target.value || null)} /></Field>
                   <Field label="면접시간"><input style={inp} value={modal.form.interview_time} onChange={e => set('interview_time', e.target.value)} placeholder="5분/4분" /></Field>
