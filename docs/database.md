@@ -220,7 +220,7 @@ result_score 또는 evaluation 비어있으면 → "진행중"
 |---|---|---|
 | `id` | uuid PK | |
 | `name` | text | 프로젝트명. 연계 행은 `projects.name` 미러라 UNIQUE 아님 (구 UNIQUE 제약은 연계 도입 때 제거) |
-| `status` | text | `진행중` 또는 `종료`. 종료된 프로젝트는 신규 업무 등록 시 선택 목록에서 제외. 연계 행은 입찰 `취소` 시 `종료`로 동기화 |
+| `status` | text | `진행중` 또는 `종료`. 종료된 프로젝트는 신규 업무 등록 시 선택 목록에서 제외. 연계 행은 입찰 상태가 `진행중`일 때만 `진행중`, 그 외(수주/탈락/취소)는 `종료`로 동기화 |
 | `sort_order` | integer | |
 | `start_date` | date (nullable) | 프로젝트 시작일. 연계 행은 공고일(`announce_date`)로 동기화 |
 | `end_date` | date (nullable) | 프로젝트 종료일. 연계 행은 발표일(`interview_date`)로 동기화 — 발표일이 없으면 null(종료일 없이 계속 표기) |

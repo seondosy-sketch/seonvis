@@ -14,8 +14,9 @@ import { Project } from './types'
  * - 추가/갱신만 하고 삭제는 절대 하지 않는다. 수동 프로젝트(source_project_id null)는
  *   건드리지 않고, 기간이 지난 연계 프로젝트는 그리드 행 필터에서 빠질 뿐 데이터는 남는다.
  * - 발표일이 없는 프로젝트는 end_date를 null로 둔다 → 종료일 없이 계속 표기 (사용자 결정).
- * - 취소된 입찰 프로젝트는 status '종료'로 넣는다 → 그리드는 근무기록이 있을 때만
- *   보여주므로 "포함하되, 기록 없으면 숨김"이 된다 (사용자 결정).
+ * - 입찰 상태가 '진행중'일 때만 연장근무에서도 '진행중'이다. 수주/탈락(개찰 완료)/취소는
+ *   전부 '종료' → 그리드는 근무기록이 있을 때만 보여주므로 "포함하되, 기록 없으면 숨김"이
+ *   된다 (사용자 결정 + 개찰 끝난 프로젝트가 진행중으로 떠 보이던 문제 수정).
  */
 export async function syncBidProjects(supabase: SupabaseClient, start: string, end: string): Promise<void> {
   // 기간 겹침: 공고일 <= 기간끝 AND (발표일 없음 OR 발표일 >= 기간시작)
@@ -46,7 +47,7 @@ export async function syncBidProjects(supabase: SupabaseClient, start: string, e
       name: bid.name as string,
       start_date: bid.announce_date as string,
       end_date: (bid.interview_date ?? null) as string | null,
-      status: (bid.status === '취소' ? '종료' : '진행중') as Project['status'],
+      status: (bid.status === '진행중' ? '진행중' : '종료') as Project['status'],
     }
     const cur = bySourceId.get(bid.id)
     if (!cur) {
