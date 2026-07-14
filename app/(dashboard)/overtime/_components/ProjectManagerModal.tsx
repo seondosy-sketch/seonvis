@@ -9,6 +9,11 @@ import { Employee, Project, ProjectMember } from '@/lib/overtime/types'
  * 하나도 없을 때만 가능하다(FK ON DELETE RESTRICT) — 이미 쓰인 프로젝트는 "종료" 상태로만
  * 바꾸고 행 자체는 지우지 않는다(2단계에서 정한 소프트 삭제 원칙).
  *
+ * 입찰 연계 프로젝트(source_project_id 있음)는 이름·기간(공고일~발표일)·상태가
+ * 프로젝트 List에서 자동 동기화되므로(lib/overtime/sync.ts) 여기서 수정/삭제할 수 없다 —
+ * 어차피 다음 페이지 로드 때 덮어써진다. 정렬순서와 담당직원 배정만 이 화면에서 관리한다.
+ * 입찰 List에 없는 프로젝트(내부 업무 등)의 수동 등록은 기존대로 가능하다.
+ *
  * "담당직원" 지정(8단계 완료 후 추가): 행을 펼치면 직원 체크박스 목록이 나오고, 체크/해제가
  * overtime_project_members에 즉시 저장된다. 실제 근무 이력(overtime_work_records)과 별개의
  * "배정" 정보로, 향후 프로젝트별 인원을 나열해 근무일을 표기하는 화면의 기초자료가 된다.
@@ -128,28 +133,37 @@ export default function ProjectManagerModal({
               const memberIds = new Set(members.filter(m => m.project_id === p.id).map(m => m.employee_id))
               // 체크 목록은 재직 중인 직원만 보여주되, 이미 배정된 퇴사자는 해제할 수 있게 남겨둔다
               const selectable = employees.filter(emp => emp.is_active || memberIds.has(emp.id))
+              // 입찰 연계 프로젝트: 이름·기간·상태는 프로젝트 List가 원본이므로 읽기 전용,
+              // 삭제도 막는다(지워도 다음 로드 때 동기화로 되살아나 혼란만 준다).
+              const synced = !!p.source_project_id
               return (
                 <div key={p.id} style={{ borderBottom: i < projects.length - 1 ? '1px solid #f0f0ee' : 'none' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 0' }}>
+                    {synced && (
+                      <span style={syncedBadge} title="입찰 현황 프로젝트 List와 연계됨 — 이름·기간·상태는 그쪽에서 수정하세요">입찰연계</span>
+                    )}
                     <input
                       defaultValue={p.name}
+                      disabled={synced}
                       onBlur={e => { if (e.target.value.trim() && e.target.value !== p.name) updateProject(p.id, { name: e.target.value.trim() }) }}
-                      style={{ ...inp, flex: 1 }}
+                      style={{ ...inp, flex: 1, ...(synced ? inpDisabled : null) }}
                     />
                     <input
                       type="date"
                       defaultValue={p.start_date ?? ''}
+                      disabled={synced}
                       onBlur={e => { const v = e.target.value || null; if (v !== p.start_date) updateProject(p.id, { start_date: v }) }}
-                      style={{ ...inp, width: 128 }}
-                      title="시작일"
+                      style={{ ...inp, width: 128, ...(synced ? inpDisabled : null) }}
+                      title={synced ? '공고일 (프로젝트 List 연동)' : '시작일'}
                     />
                     <span style={{ fontSize: 11, color: '#bbb', flexShrink: 0 }}>~</span>
                     <input
                       type="date"
                       defaultValue={p.end_date ?? ''}
+                      disabled={synced}
                       onBlur={e => { const v = e.target.value || null; if (v !== p.end_date) updateProject(p.id, { end_date: v }) }}
-                      style={{ ...inp, width: 128 }}
-                      title="종료일"
+                      style={{ ...inp, width: 128, ...(synced ? inpDisabled : null) }}
+                      title={synced ? '발표일 (프로젝트 List 연동, 없으면 계속 표기)' : '종료일'}
                     />
                     <input
                       type="number"
@@ -162,12 +176,14 @@ export default function ProjectManagerModal({
                       담당직원{memberIds.size > 0 ? ` (${memberIds.size})` : ''} {expanded ? '▲' : '▼'}
                     </button>
                     <button
-                      onClick={() => updateProject(p.id, { status: p.status === '진행중' ? '종료' : '진행중' })}
-                      style={p.status === '진행중' ? statusBtnActive : statusBtnEnded}
+                      onClick={synced ? undefined : () => updateProject(p.id, { status: p.status === '진행중' ? '종료' : '진행중' })}
+                      disabled={synced}
+                      title={synced ? '입찰 연계 프로젝트의 상태는 프로젝트 List를 따릅니다' : undefined}
+                      style={{ ...(p.status === '진행중' ? statusBtnActive : statusBtnEnded), ...(synced ? { cursor: 'default', opacity: 0.7 } : null) }}
                     >
                       {p.status}
                     </button>
-                    <button onClick={() => handleDelete(p)} style={deleteBtn}>삭제</button>
+                    {!synced && <button onClick={() => handleDelete(p)} style={deleteBtn}>삭제</button>}
                   </div>
 
                   {expanded && (
@@ -204,6 +220,8 @@ export default function ProjectManagerModal({
 }
 
 const inp: React.CSSProperties = { height: 34, padding: '0 10px', border: '1px solid #e8e8e6', borderRadius: 6, fontSize: 13, background: '#fff', boxSizing: 'border-box' }
+const inpDisabled: React.CSSProperties = { background: '#f8f8f7', color: '#888' }
+const syncedBadge: React.CSSProperties = { flexShrink: 0, fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', whiteSpace: 'nowrap', cursor: 'help' }
 const primaryBtn: React.CSSProperties = { height: 34, padding: '0 16px', borderRadius: 6, border: 'none', background: '#111', color: '#fff', fontSize: 13, cursor: 'pointer' }
 const deleteBtn: React.CSSProperties = { height: 28, padding: '0 10px', borderRadius: 4, border: 'none', background: '#fee2e2', color: '#b91c1c', fontSize: 11, cursor: 'pointer', flexShrink: 0 }
 const statusBtnActive: React.CSSProperties = { height: 28, padding: '0 10px', borderRadius: 4, border: '1px solid #bbf7d0', background: '#f0fdf4', color: '#15803d', fontSize: 11, cursor: 'pointer', flexShrink: 0, whiteSpace: 'nowrap' }

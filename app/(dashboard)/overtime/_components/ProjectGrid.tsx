@@ -41,10 +41,19 @@ export default function ProjectGrid({
     cellHours.set(key, (cellHours.get(key) ?? 0) + r.hours)
   }
 
-  // 진행중 프로젝트 + (종료됐지만 이 기간에 기록이 있는 프로젝트)만 보여준다 —
-  // 기록도 없는 종료 프로젝트까지 행으로 깔면 표만 길어진다.
+  // 표시할 프로젝트: (진행중이면서 프로젝트 기간이 이 급여기간과 겹침) + (이 기간에 기록이 있음).
+  // - 기간 겹침 조건이 없으면 입찰 List에서 동기화된 프로젝트가 지나간 달에도 계속 행으로 남는다.
+  // - 시작일/종료일이 없는 수동 프로젝트는 기간 제한 없음으로 보고 항상 겹치는 것으로 취급.
+  // - 종료(취소된 입찰 포함) 프로젝트는 이 기간에 기록이 있을 때만 보여준다.
+  const periodStart = days[0].dateStr
+  const periodEnd = days[days.length - 1].dateStr
+  function overlapsPeriod(p: Project): boolean {
+    if (p.start_date && p.start_date > periodEnd) return false
+    if (p.end_date && p.end_date < periodStart) return false
+    return true
+  }
   const recordedProjectIds = new Set(records.map(r => r.project_id))
-  const visibleProjects = projects.filter(p => p.status === '진행중' || recordedProjectIds.has(p.id))
+  const visibleProjects = projects.filter(p => (p.status === '진행중' && overlapsPeriod(p)) || recordedProjectIds.has(p.id))
 
   // 프로젝트의 행 직원: 담당으로 배정된 직원 + (배정은 안 됐지만 이 기간에 그 프로젝트
   // 기록이 있는 직원). 후자를 빼면 이미 입력된 시간이 화면에서 사라져 보인다.

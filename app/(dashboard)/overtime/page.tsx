@@ -6,6 +6,7 @@ import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import { useIsMobile } from '@/lib/useIsMobile'
 import { DailySummary, Employee, EmployeeTask, Project, ProjectMember, WorkRecord } from '@/lib/overtime/types'
 import { currentPayPeriod, payPeriodDays, payPeriodRange, summarizeByEmployeeAndDate, summaryKey } from '@/lib/overtime/summary'
+import { syncBidProjects } from '@/lib/overtime/sync'
 import MonthGrid from './_components/MonthGrid'
 import ProjectGrid from './_components/ProjectGrid'
 import OvertimeEntryPopover from './_components/OvertimeEntryPopover'
@@ -89,7 +90,11 @@ export default function OvertimePage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const loadProjects = useCallback(async () => {
+  const loadProjects = useCallback(async (year: number, month: number) => {
+    // 조회 기간과 공고일~발표일이 겹치는 입찰 프로젝트를 먼저 자동 등록/갱신한다 —
+    // 프로젝트 List에서 가져오므로 작성자가 수동으로 입력할 필요가 없다 (수동 등록도 여전히 가능).
+    const { start, end } = payPeriodRange(year, month)
+    await syncBidProjects(supabase, start, end)
     // 종료된 프로젝트도 과거 기록에서 이름을 보여줘야 하므로 status로 거르지 않고 전체를 가져온다.
     // 담당직원 배정(members)은 프로젝트별 그리드의 행 구성에 쓰이므로 함께 불러온다.
     const [projRes, memRes] = await Promise.all([
@@ -103,7 +108,7 @@ export default function OvertimePage() {
 
   useEffect(() => { loadEmployees() }, [loadEmployees])
   useEffect(() => { loadRecords(viewYear, viewMonth) }, [viewYear, viewMonth, loadRecords])
-  useEffect(() => { loadProjects() }, [loadProjects])
+  useEffect(() => { loadProjects(viewYear, viewMonth) }, [viewYear, viewMonth, loadProjects])
 
   const days = payPeriodDays(viewYear, viewMonth)
   const periodLabel = `${days[0].month + 1}/${days[0].day} ~ ${days[days.length - 1].month + 1}/${days[days.length - 1].day}`
@@ -231,7 +236,7 @@ export default function OvertimePage() {
       )}
 
       {showProjectManager && (
-        <ProjectManagerModal onClose={() => setShowProjectManager(false)} onChange={loadProjects} />
+        <ProjectManagerModal onClose={() => setShowProjectManager(false)} onChange={() => loadProjects(viewYear, viewMonth)} />
       )}
     </div>
   )

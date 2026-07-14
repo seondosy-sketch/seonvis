@@ -43,6 +43,10 @@ export interface Project {
   sort_order: number
   start_date: string | null // YYYY-MM-DD. 아직 기간을 정하지 않은 프로젝트는 null
   end_date: string | null   // YYYY-MM-DD
+  // 입찰 현황 "프로젝트 List"(projects 테이블)와의 연계. null이면 수동 등록 프로젝트.
+  // 연계된 프로젝트는 이름·기간(공고일~발표일)·상태가 lib/overtime/sync.ts에서
+  // 단방향(projects → overtime_projects)으로 덮어써지므로 이 화면에서 직접 수정하지 않는다.
+  source_project_id: string | null
 }
 
 /**

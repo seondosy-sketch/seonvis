@@ -13,7 +13,7 @@
 | `allowed_users` | 접근 허용 사용자 목록 |
 | `overtime_employees` | 연장근무 관리용 직원 목록 |
 | `overtime_employee_tasks` | 직원별 기본업무내용(자주 쓰는 업무) 목록 — 근무입력 드롭박스 기초자료 |
-| `overtime_projects` | 연장근무 관리용 프로젝트 목록 (입찰 현황 `projects`와 별개) |
+| `overtime_projects` | 연장근무 관리용 프로젝트 목록 (입찰 현황 `projects`에서 자동 동기화 + 수동 등록) |
 | `overtime_project_members` | 프로젝트별 담당직원 배정 (체크) — 향후 프로젝트별 인원·근무일 표기 기초자료 |
 | `overtime_work_records` | 연장근무 업무 1건 = 행 1개 (핵심 테이블) |
 
@@ -212,17 +212,19 @@ result_score 또는 evaluation 비어있으면 → "진행중"
 
 ## overtime_projects
 
-연장근무 관리용 프로젝트 목록. 입찰 현황용 `projects` 테이블과는 별개의 단순 조회 목록.
-(향후 계획: 이 목록을 직접 입력하는 대신 입찰 현황 `projects` 테이블에서 가져오는 방안 예정 — `docs/overtime.md` 참고)
+연장근무 관리용 프로젝트 목록. 입찰 현황 `projects`와 겹치는 프로젝트는
+`lib/overtime/sync.ts`가 자동 등록/갱신한다(공고일~발표일 기간 기준, 단방향 동기화 —
+`docs/overtime.md`의 "입찰 프로젝트 자동 연계" 참고). 수동 등록도 여전히 가능하다.
 
 | 컬럼 | 타입 | 설명 |
 |---|---|---|
 | `id` | uuid PK | |
-| `name` | text UNIQUE | 프로젝트명 |
-| `status` | text | `진행중` 또는 `종료`. 종료된 프로젝트는 신규 업무 등록 시 선택 목록에서 제외 |
+| `name` | text | 프로젝트명. 연계 행은 `projects.name` 미러라 UNIQUE 아님 (구 UNIQUE 제약은 연계 도입 때 제거) |
+| `status` | text | `진행중` 또는 `종료`. 종료된 프로젝트는 신규 업무 등록 시 선택 목록에서 제외. 연계 행은 입찰 `취소` 시 `종료`로 동기화 |
 | `sort_order` | integer | |
-| `start_date` | date (nullable) | 프로젝트 시작일. 아직 정하지 않았으면 null |
-| `end_date` | date (nullable) | 프로젝트 종료일 |
+| `start_date` | date (nullable) | 프로젝트 시작일. 연계 행은 공고일(`announce_date`)로 동기화 |
+| `end_date` | date (nullable) | 프로젝트 종료일. 연계 행은 발표일(`interview_date`)로 동기화 — 발표일이 없으면 null(종료일 없이 계속 표기) |
+| `source_project_id` | uuid FK → projects, ON DELETE SET NULL (nullable) | 입찰 연계 원본. null이면 수동 프로젝트. partial UNIQUE(중복 동기화 방지) |
 | `created_at` | timestamptz | |
 
 **마이그레이션**: `supabase/migration_overtime.sql` + `supabase/migration_overtime_project_dates.sql` (시작일/종료일 추가)
