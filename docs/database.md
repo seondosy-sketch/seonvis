@@ -22,6 +22,12 @@
 | `leave_records` | 휴가 1건 (원본) |
 | `leave_record_dates` | 휴가의 날짜별 전개 — 집계·중복검증·월 셀 상세의 기준 |
 | `holidays` | 법정공휴일 + 회사휴무 (차감 제외일, 오프라인 동작) |
+| `engineer_contacts` | 기술인 주소록 (외부 기술인력 풀 — 내부 직원과 별도) |
+| `engineer_specialties` | 기술인 전문분야 마스터 |
+| `engineer_contact_specialties` | 기술인별 전문분야 다중 지정 |
+| `engineer_sync_logs` | 향후 엑셀 동기화 실행 이력 (구조 예약) |
+| `sites` | 현장 현황 (현재 운영 중인 현장 기본정보 대장) |
+| `site_sync_logs` | 향후 엑셀 동기화 실행 이력 (구조 예약) |
 
 ---
 
@@ -310,3 +316,29 @@ result_score 또는 evaluation 비어있으면 → "진행중"
 - `holidays(id, holiday_date UNIQUE, name, holiday_type: 법정공휴일|회사휴무)` — 2026년 법정공휴일 시드, `/api/holidays`로 연도별 불러오기 가능
 
 **마이그레이션**: `supabase/migration_leave.sql` (overtime_employees의 hire_date/resign_date 추가 포함)
+
+---
+
+## 기술인 주소록 테이블 (engineer_*)
+
+상세 설계는 [docs/engineer-address-book/03-data-model.md](./engineer-address-book/03-data-model.md) 참고.
+외부 기술인력 풀(667명 규모)이라 팀 내부용 `overtime_employees`와 별도 테이블.
+
+- `engineer_contacts(id, engineer_no identity UNIQUE, employee_id FK→overtime_employees SET NULL, name, rank, position, company, mobile_phone, office_phone, email, region, address, employment_status(재직|퇴직|비활성), joined_date, retired_date, memo, is_favorite)` — engineer_no는 향후 Excel 내보내기/동기화의 1순위 매칭 키. 비활성이 소프트 삭제 역할. 인덱스: name, mobile_phone, region, employment_status
+- `engineer_specialties(id, name UNIQUE, is_active, sort_order)` — 전문분야 마스터, 12종 시드
+- `engineer_contact_specialties(contact_id FK CASCADE, specialty_id FK RESTRICT, UNIQUE쌍)` — 다중 지정
+- `engineer_sync_logs(executed_at, file_name, added/updated/deactivated/error_count, note)` — 향후 엑셀 동기화 실행 이력 (구조 예약, MVP 미사용)
+
+**마이그레이션**: `supabase/migration_engineers.sql` / **초기 시드**: `supabase/seed_engineers.sql` (address book.xls 667건 1회 이관)
+
+---
+
+## 현장 현황 테이블 (sites)
+
+상세 설계는 [docs/site-status/04-data-model.md](./site-status/04-data-model.md) 참고.
+월별 배치/스냅샷은 다루지 않는다 — 현재 운영 중인 현장 기본정보 단일 대장.
+
+- `sites(id, site_code identity UNIQUE, original_site_name, site_name, source_category(건진법|주택법|건축법|전통소, 원본), legal_category(건설기술진흥법|주택법|건축법|분리발주(전기·통신·소방), 표준 표시값), manager_name, contractor, site_phone_raw(원본 보존), site_landline(추출), manager_mobile(추출), phone_uncertain, site_address, office_address, region, start_date, planned_completion_date, manual_status(nullable=자동), memo, is_favorite, active)` — active가 소프트 삭제 역할, deleted_at 없음. site_code는 향후 Excel 동기화 1순위 매칭 키
+- `site_sync_logs(executed_at, file_name, added/updated/deactivated/error_count, note)` — 향후 엑셀 동기화 실행 이력 (구조 예약, MVP 미사용)
+
+**마이그레이션**: `supabase/migration_sites.sql` (스키마만, 개인정보 없음). **89건 초기 데이터**는 구현 시점 1회성 로컬 스크립트가 `Project Portfolio.xlsx`(건진법·주택법·건축법·전통소 4개 시트만, 숨김 월별 시트 제외)를 직접 읽어 Supabase REST로 삽입 — 개인정보 포함 시드는 저장소에 커밋하지 않는다.

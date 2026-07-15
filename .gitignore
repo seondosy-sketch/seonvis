@@ -48,3 +48,10 @@ next-env.d.ts
 /excel_data.json
 /projects_import.json
 /search_index.xlsx
+/address book.xls
+/Project Portfolio.xlsx
+
+# 개인정보(전화번호·주소 등)가 포함된 1회성 이관 시드는 저장소에 보관하지 않는다.
+# 이관은 구현 시점에 로컬 스크립트가 엑셀을 직접 읽어 Supabase REST로 삽입하고,
+# 스크립트/산출 SQL은 세션 스크래치패드에만 둔다 (docs/*/03-data-model.md 참고).
+/supabase/seed_*.sql
