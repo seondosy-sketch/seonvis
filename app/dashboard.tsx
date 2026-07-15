@@ -315,7 +315,6 @@ export default function Dashboard() {
 
   const gaeching = performing.filter(r => r.status === '개찰')
   const jinhaeng = performing.filter(r => r.status === '진행중')
-  const totalFee = performing.reduce((s, r) => s + (r.fee ?? 0), 0)
 
   return (
     <div className="min-h-screen" style={{ background: '#f8f8f7' }}>
@@ -367,9 +366,9 @@ export default function Dashboard() {
         <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)', gap: 10, marginBottom: 24 }}>
           {[
             { label: '수행 프로젝트', value: performing.filter(r => r.name).length + '건' },
-            { label: '총 용역비', value: totalFee.toFixed(1) + '억' },
             { label: '개찰', value: gaeching.filter(r => r.name).length + '건' },
             { label: '진행중', value: jinhaeng.filter(r => r.name).length + '건' },
+            { label: '발주예상 Project', value: expected.filter(r => r.name.trim()).length + '건' },
           ].map(card => (
             <div key={card.label} style={{ background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8, padding: '14px 16px' }}>
               <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>{card.label}</div>
