@@ -540,7 +540,11 @@ export default function Dashboard() {
   )
 }
 
-const tdStyle: React.CSSProperties = { padding: '6px 10px', verticalAlign: 'middle', color: '#111' }
+const tdStyle: React.CSSProperties = { padding: '6px 14px', verticalAlign: 'middle', color: '#111' }
+// 수행 Project 표의 5개 열 그룹(용역명 / 단장 / 제출일·발표면접·개찰일 / 용역비 / 내용) 경계 —
+// 그룹 시작 열의 좌측 여백을 넓혀 그룹 사이 간격을 차별화한다 (헤더 인덱스 기준).
+// 단장은 용역명과 더 확실히 구분되도록 다른 그룹 시작보다 더 크게 띄운다.
+const GROUP_START_PADDING: Record<number, number> = { 2: 70, 3: 20, 6: 40, 7: 40 }
 const removeBtn: React.CSSProperties = {
   background: 'none', border: 'none', color: '#ccc', cursor: 'pointer',
   fontSize: 12, padding: '2px 4px', borderRadius: 4
@@ -648,8 +652,8 @@ function PerformingTable({ rows, status, projectRefs, calNotes, onUpdate, onFill
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
             <tr style={{ background: '#f9f9f8' }}>
-              {['연번', '용역명', '단장', '제출일', '발표/면접', '개찰일', '용역비(억)', '내용', ''].map(h => (
-                <th key={h} style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 500, color: '#888', fontSize: 11, borderBottom: '1px solid #f0f0ee', whiteSpace: 'nowrap' }}>{h}</th>
+              {['연번', '용역명', '단장', '제출일', '발표/면접', '개찰일', '용역비(억)', '내용', ''].map((h, i) => (
+                <th key={h} style={{ padding: `6px 14px 6px ${GROUP_START_PADDING[i] ?? 14}px`, textAlign: 'left', fontWeight: 500, color: '#888', fontSize: 11, borderBottom: '1px solid #f0f0ee', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -657,7 +661,7 @@ function PerformingTable({ rows, status, projectRefs, calNotes, onUpdate, onFill
             {rows.map((row, i) => (
               <tr key={i} style={{ borderBottom: '1px solid #f5f5f3' }}>
                 <td style={{ ...tdStyle, color: '#999', width: 36 }}>{i + 1}</td>
-                <td style={{ ...tdStyle, minWidth: 200, position: 'relative' }}>
+                <td style={{ ...tdStyle, minWidth: 380, position: 'relative' }}>
                   <ProjectNameInput
                     value={row.name}
                     projectRefs={projectRefs}
@@ -665,12 +669,12 @@ function PerformingTable({ rows, status, projectRefs, calNotes, onUpdate, onFill
                     onSelect={ref => onFill(i, ref)}
                   />
                 </td>
-                <td style={{ ...tdStyle, minWidth: 80 }}><input className="cell-input" value={row.director} onChange={e => onUpdate(i, 'director', e.target.value)} placeholder="단장" /></td>
-                <td style={{ ...tdStyle, minWidth: 70 }}><NoteTooltipCell value={row.submit_date} note={calNotes?.[row.name]?.submit_date} placeholder="6/5" onChange={v => onUpdate(i, 'submit_date', v)} /></td>
+                <td style={{ ...tdStyle, minWidth: 100, paddingLeft: GROUP_START_PADDING[2] }}><input className="cell-input" value={row.director} onChange={e => onUpdate(i, 'director', e.target.value)} placeholder="단장" /></td>
+                <td style={{ ...tdStyle, minWidth: 70, paddingLeft: GROUP_START_PADDING[3] }}><NoteTooltipCell value={row.submit_date} note={calNotes?.[row.name]?.submit_date} placeholder="6/5" onChange={v => onUpdate(i, 'submit_date', v)} /></td>
                 <td style={{ ...tdStyle, minWidth: 70 }}><NoteTooltipCell value={row.interview_date} note={calNotes?.[row.name]?.interview_date} placeholder="6/10" onChange={v => onUpdate(i, 'interview_date', v)} /></td>
                 <td style={{ ...tdStyle, minWidth: 70 }}><NoteTooltipCell value={row.result_date} note={calNotes?.[row.name]?.bid_date} placeholder="추후" onChange={v => onUpdate(i, 'result_date', v)} /></td>
-                <td style={{ ...tdStyle, minWidth: 80 }}><input className="cell-input" type="number" value={row.fee ?? ''} onChange={e => onUpdate(i, 'fee', e.target.value ? parseFloat(e.target.value) : null)} placeholder="0.0" /></td>
-                <td style={{ ...tdStyle, minWidth: 200 }}><input className="cell-input" value={row.note} onChange={e => onUpdate(i, 'note', e.target.value)} placeholder="내용" /></td>
+                <td style={{ ...tdStyle, minWidth: 80, paddingLeft: GROUP_START_PADDING[6] }}><input className="cell-input" type="number" value={row.fee ?? ''} onChange={e => onUpdate(i, 'fee', e.target.value ? parseFloat(e.target.value) : null)} placeholder="0.0" /></td>
+                <td style={{ ...tdStyle, minWidth: 200, paddingLeft: GROUP_START_PADDING[7] }}><input className="cell-input" value={row.note} onChange={e => onUpdate(i, 'note', e.target.value)} placeholder="내용" /></td>
                 <td style={tdStyle}><button onClick={() => onRemove(i)} style={removeBtn}>✕</button></td>
               </tr>
             ))}
