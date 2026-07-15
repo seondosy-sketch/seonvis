@@ -19,6 +19,7 @@ export default function EmployeeLeaveHistory({
   used,
   records,
   leaveTypes,
+  readOnly = false,
   onEdit,
   onChanged,
 }: {
@@ -28,6 +29,7 @@ export default function EmployeeLeaveHistory({
   used: number
   records: LeaveRecord[]
   leaveTypes: LeaveType[]
+  readOnly?: boolean // 읽기 권한 — 수정/삭제 버튼 숨김
   onEdit: (record: LeaveRecord) => void
   onChanged: () => void
 }) {
@@ -129,10 +131,12 @@ export default function EmployeeLeaveHistory({
                   <td style={{ ...td, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>{rec.memo}</td>
                   <td style={{ ...td, color: '#999', fontSize: 11 }}>{rec.created_at?.slice(0, 10)}</td>
                   <td style={{ ...td, whiteSpace: 'nowrap' }}>
-                    <div style={{ display: 'flex', gap: 4 }}>
-                      <button onClick={() => onEdit(rec)} style={editBtn}>수정</button>
-                      <button onClick={() => remove(rec)} disabled={deleting === rec.id} style={deleteBtn}>삭제</button>
-                    </div>
+                    {!readOnly && (
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        <button onClick={() => onEdit(rec)} style={editBtn}>수정</button>
+                        <button onClick={() => remove(rec)} disabled={deleting === rec.id} style={deleteBtn}>삭제</button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               )

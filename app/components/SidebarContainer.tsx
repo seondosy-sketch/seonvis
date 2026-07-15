@@ -3,15 +3,18 @@
 import { useState } from 'react'
 import { useIsMobile } from '@/lib/useIsMobile'
 import Sidebar from '@/app/sidebar'
+import { PermissionsProvider } from '@/app/components/PermissionsProvider'
+import { MenuPermission } from '@/lib/menuConfig'
 
 interface Props {
   isAdmin: boolean
   userEmail: string
   hiddenMenuItems?: string[]
+  menuPermissions?: Record<string, MenuPermission>
   children: React.ReactNode
 }
 
-export default function SidebarContainer({ isAdmin, userEmail, hiddenMenuItems, children }: Props) {
+export default function SidebarContainer({ isAdmin, userEmail, hiddenMenuItems, menuPermissions = {}, children }: Props) {
   const isMobile = useIsMobile()
   const [open, setOpen] = useState(false)
 
@@ -53,9 +56,11 @@ export default function SidebarContainer({ isAdmin, userEmail, hiddenMenuItems, 
         </>
       )}
 
-      {/* 메인 콘텐츠 */}
+      {/* 메인 콘텐츠 — 항목별 권한(read/write)을 페이지들에 컨텍스트로 내려준다 */}
       <main style={{ flex: 1, minWidth: 0, ...(isMobile ? { marginTop: 48 } : {}) }}>
-        {children}
+        <PermissionsProvider isAdmin={isAdmin} permissions={menuPermissions}>
+          {children}
+        </PermissionsProvider>
       </main>
     </div>
   )

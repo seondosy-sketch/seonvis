@@ -5,6 +5,7 @@ import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import AddressMapPreview from '@/app/components/AddressMapPreview'
 import { openDirectionsFromOffice } from '@/lib/kakaoMap'
 import { type ProjectRef, getCurrentWeek, getWeekRange, categorizeProject } from '@/lib/projectStatus'
+import { useMenuPermission } from '@/app/components/PermissionsProvider'
 
 interface Project extends ProjectRef {
   id: string
@@ -21,6 +22,8 @@ type TripItem = { project: Project; location: string; interviewLocation: string 
 
 export default function TripSupportPage() {
   const supabase = createSupabaseBrowserClient()
+  // 읽기 권한 사용자는 지도/길찾기 조회만 — 주소 입력·저장을 막는다
+  const canWrite = useMenuPermission('trip') === 'write'
   const [items, setItems] = useState<TripItem[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -85,6 +88,7 @@ export default function TripSupportPage() {
                   label="면접장소"
                   dbField="interview_location"
                   value={interviewLocation}
+                  readOnly={!canWrite}
                   onSaved={v => updateField(p.id, 'interviewLocation', v)}
                 />
                 <LocationEditor
@@ -92,6 +96,7 @@ export default function TripSupportPage() {
                   label="현장위치"
                   dbField="location"
                   value={location}
+                  readOnly={!canWrite}
                   onSaved={v => updateField(p.id, 'location', v)}
                 />
               </div>
@@ -104,12 +109,13 @@ export default function TripSupportPage() {
 }
 
 function LocationEditor({
-  projectNumber, label, dbField, value, onSaved,
+  projectNumber, label, dbField, value, readOnly = false, onSaved,
 }: {
   projectNumber: string
   label: string
   dbField: 'location' | 'interview_location'
   value: string
+  readOnly?: boolean // 읽기 권한 — 주소 편집·저장 숨김, 지도/길찾기는 그대로
   onSaved: (value: string) => void
 }) {
   const supabase = createSupabaseBrowserClient()
@@ -153,12 +159,15 @@ function LocationEditor({
         <input
           value={draft}
           onChange={e => setDraft(e.target.value)}
-          placeholder={`${label} 주소 입력 (지도 자동검색)`}
-          style={{ flex: 1, height: 30, padding: '0 8px', border: '1px solid #e8e8e6', borderRadius: 6, fontSize: 12, boxSizing: 'border-box' }}
+          readOnly={readOnly}
+          placeholder={readOnly ? `${label} 미입력` : `${label} 주소 입력 (지도 자동검색)`}
+          style={{ flex: 1, height: 30, padding: '0 8px', border: '1px solid #e8e8e6', borderRadius: 6, fontSize: 12, boxSizing: 'border-box', background: readOnly ? '#f8f8f7' : '#fff' }}
         />
-        <button onClick={save} disabled={!dirty || saving} style={{ ...outlineBtn, opacity: (!dirty || saving) ? 0.5 : 1, flexShrink: 0 }}>
-          {saving ? '저장 중...' : '저장'}
-        </button>
+        {!readOnly && (
+          <button onClick={save} disabled={!dirty || saving} style={{ ...outlineBtn, opacity: (!dirty || saving) ? 0.5 : 1, flexShrink: 0 }}>
+            {saving ? '저장 중...' : '저장'}
+          </button>
+        )}
         <button onClick={openDirections} disabled={!committed.trim() || dirLoading} style={{ ...outlineBtn, opacity: (!committed.trim() || dirLoading) ? 0.5 : 1, flexShrink: 0, whiteSpace: 'nowrap' }}>
           {dirLoading ? '조회 중...' : '카카오맵으로 길찾기 열기'}
         </button>

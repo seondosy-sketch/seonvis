@@ -178,9 +178,11 @@ result_score 또는 evaluation 비어있으면 → "진행중"
 | `id` | uuid PK | |
 | `email` | text UNIQUE | 소문자 이메일 |
 | `name` | text | 이름 |
+| `menu_permissions` | jsonb | 항목별 권한 `{키: 'none'\|'read'\|'write'}`. 키는 `lib/menuConfig.ts`, 없으면 write. none=사이드바 숨김, read=조회만(수정 UI 숨김) — UI 레벨 제어 (`migration_menu_permissions_v2.sql`) |
+| `hidden_menu_items` | text[] | **deprecated** — menu_permissions로 이관됨. 코드에서 더 이상 읽지 않음 |
 | `created_at` | timestamptz | |
 
-**주의**: 관리자(`ADMIN_EMAILS`)는 이 테이블에 없어도 접근 가능.
+**주의**: 관리자(`ADMIN_EMAILS`)는 이 테이블에 없어도 접근 가능하며 항상 전체 쓰기 권한.
 
 ---
 

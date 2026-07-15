@@ -47,15 +47,21 @@ export async function PATCH(request: Request) {
   const user = await assertAdmin()
   if (!user) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
-  const { email, hidden_menu_items } = await request.json()
-  if (!email || !Array.isArray(hidden_menu_items)) {
-    return NextResponse.json({ error: 'email, hidden_menu_items required' }, { status: 400 })
+  const { email, menu_permissions } = await request.json()
+  if (!email || typeof menu_permissions !== 'object' || menu_permissions === null || Array.isArray(menu_permissions)) {
+    return NextResponse.json({ error: 'email, menu_permissions required' }, { status: 400 })
+  }
+  const valid = ['none', 'read', 'write']
+  for (const v of Object.values(menu_permissions)) {
+    if (!valid.includes(v as string)) {
+      return NextResponse.json({ error: `invalid permission value: ${v}` }, { status: 400 })
+    }
   }
 
   const admin = createSupabaseAdminClient()
   const { data, error } = await admin
     .from('allowed_users')
-    .update({ hidden_menu_items })
+    .update({ menu_permissions })
     .eq('email', email.toLowerCase().trim())
     .select()
     .single()

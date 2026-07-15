@@ -5,6 +5,7 @@ import { PerformingProject, ExpectedProject, WeeklyMeta } from '@/lib/supabase'
 import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import WeeklyCalendar from './components/WeeklyCalendar'
 import { useIsMobile } from '@/lib/useIsMobile'
+import { useMenuPermission } from '@/app/components/PermissionsProvider'
 import {
   type ProjectRef,
   getCurrentWeek,
@@ -54,6 +55,8 @@ function shiftWeek(week: string, delta: number): string {
 
 export default function Dashboard() {
   const isMobile = useIsMobile()
+  // 읽기 권한 사용자는 조회·다운로드만 — 입력/저장/행 추가·삭제를 비활성화한다
+  const canWrite = useMenuPermission('weekly') === 'write'
   // 주간보고 테이블(performing/expected/weekly_meta) 조회·저장도 반드시 쿠키 세션 기반
   // createSupabaseBrowserClient()를 쓴다. 이전에는 lib/supabase.ts의 레거시 클라이언트
   // (localStorage 세션)를 썼는데, 앱 로그인은 쿠키에만 세션을 저장하므로 레거시 클라이언트의
@@ -334,12 +337,15 @@ export default function Dashboard() {
           {/* 액션 버튼 */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, ...(isMobile ? { paddingBottom: 10 } : { height: 56 }) }}>
             {saveMsg && <span style={{ fontSize: 12, color: '#22c55e' }}>{saveMsg}</span>}
-            {performing.every(r => !r.name) && (
+            {!canWrite && <span style={{ fontSize: 11, color: '#92400e', background: '#fef3c7', padding: '2px 8px', borderRadius: 10, fontWeight: 600, whiteSpace: 'nowrap' }}>읽기 전용</span>}
+            {canWrite && performing.every(r => !r.name) && (
               <button onClick={copyFromPrevWeek} style={{ height: 32, padding: '0 10px', borderRadius: 6, border: '1px solid #f59e0b', background: '#fffbeb', fontSize: isMobile ? 11 : 13, color: '#b45309', cursor: 'pointer', whiteSpace: 'nowrap' }}>↩ 지난주</button>
             )}
-            <button onClick={save} disabled={saving} style={{ height: 32, padding: '0 12px', borderRadius: 6, border: '1px solid #ddd', background: '#fff', fontSize: isMobile ? 12 : 13, color: '#333', cursor: 'pointer', opacity: saving ? 0.6 : 1 }}>
-              {saving ? '저장 중...' : '저장'}
-            </button>
+            {canWrite && (
+              <button onClick={save} disabled={saving} style={{ height: 32, padding: '0 12px', borderRadius: 6, border: '1px solid #ddd', background: '#fff', fontSize: isMobile ? 12 : 13, color: '#333', cursor: 'pointer', opacity: saving ? 0.6 : 1 }}>
+                {saving ? '저장 중...' : '저장'}
+              </button>
+            )}
             <button onClick={() => download('weekly')} disabled={downloading !== ''} style={{ height: 32, padding: '0 12px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: isMobile ? 12 : 13, cursor: 'pointer', opacity: downloading !== '' ? 0.6 : 1, whiteSpace: 'nowrap' }}>
               {downloading === 'weekly' ? '생성 중...' : '주간'}
             </button>
@@ -372,6 +378,9 @@ export default function Dashboard() {
           ))}
         </div>
 
+        {/* 읽기 권한이면 fieldset disabled로 내부의 모든 입력/버튼(행 추가·삭제, 셀 입력)을
+            한 번에 비활성화한다 — 셀 단위로 일일이 readOnly를 달지 않기 위한 표준 HTML 동작 */}
+        <fieldset disabled={!canWrite} style={{ border: 'none', margin: 0, padding: 0, minWidth: 0 }}>
         {/* 수행 프로젝트 */}
         <Section title="1) 수행 Project (공동수행)">
           <PerformingTable
@@ -525,6 +534,7 @@ export default function Dashboard() {
             />
           </Section>
         </div>
+        </fieldset>
 
       </div>
     </div>

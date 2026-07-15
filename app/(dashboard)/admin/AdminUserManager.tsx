@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { RESTRICTABLE_MENU_ITEMS } from '@/lib/menuConfig'
+import { MenuPermission, PERMISSION_LABEL, RESTRICTABLE_MENU_ITEMS, permissionFor } from '@/lib/menuConfig'
 
 interface AllowedUser {
   id: string
@@ -9,7 +9,7 @@ interface AllowedUser {
   is_admin: boolean
   added_by_email: string | null
   created_at: string
-  hidden_menu_items: string[]
+  menu_permissions: Record<string, MenuPermission> | null
 }
 
 interface AccessRequest {
@@ -74,15 +74,16 @@ export default function AdminUserManager() {
     setAdding(false)
   }
 
-  async function toggleMenuItem(u: AllowedUser, key: string) {
-    const hidden = new Set(u.hidden_menu_items ?? [])
-    if (hidden.has(key)) hidden.delete(key)
-    else hidden.add(key)
+  async function setPermission(u: AllowedUser, key: string, value: MenuPermission) {
+    // write(기본)는 저장하지 않고 키를 지운다 — 새 메뉴가 추가돼도 자동으로 쓰기가 되게
+    const next = { ...(u.menu_permissions ?? {}) }
+    if (value === 'write') delete next[key]
+    else next[key] = value
     setSavingPerms(u.email)
     const res = await fetch('/api/admin/users', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: u.email, hidden_menu_items: [...hidden] }),
+      body: JSON.stringify({ email: u.email, menu_permissions: next }),
     })
     if (res.ok) await fetchUsers()
     setSavingPerms(null)
@@ -204,9 +205,17 @@ export default function AdminUserManager() {
                           {u.is_admin && (
                             <span style={{ fontSize: 10, background: '#eff6ff', color: '#2563eb', padding: '1px 7px', borderRadius: 10, fontWeight: 600 }}>관리자</span>
                           )}
-                          {(u.hidden_menu_items?.length ?? 0) > 0 && (
-                            <span style={{ fontSize: 10, background: '#fef3c7', color: '#92400e', padding: '1px 7px', borderRadius: 10, fontWeight: 600 }}>메뉴 {u.hidden_menu_items.length}개 숨김</span>
-                          )}
+                          {(() => {
+                            const perms = Object.values(u.menu_permissions ?? {})
+                            const hidden = perms.filter(v => v === 'none').length
+                            const readOnly = perms.filter(v => v === 'read').length
+                            return (
+                              <>
+                                {hidden > 0 && <span style={{ fontSize: 10, background: '#fef3c7', color: '#92400e', padding: '1px 7px', borderRadius: 10, fontWeight: 600 }}>숨김 {hidden}</span>}
+                                {readOnly > 0 && <span style={{ fontSize: 10, background: '#e0f2fe', color: '#0369a1', padding: '1px 7px', borderRadius: 10, fontWeight: 600 }}>읽기 {readOnly}</span>}
+                              </>
+                            )
+                          })()}
                         </div>
                         <div style={{ fontSize: 11, color: '#bbb', marginTop: 2 }}>
                           {new Date(u.created_at).toLocaleDateString('ko-KR')} 추가
@@ -228,22 +237,34 @@ export default function AdminUserManager() {
                     </div>
                     {expandedEmail === u.email && (
                       <div style={{ padding: '4px 24px 14px', background: '#fafafa' }}>
-                        <div style={{ fontSize: 11, color: '#888', marginBottom: 8 }}>
-                          체크 해제하면 이 사람 사이드바에서 해당 메뉴가 사라집니다 (직접 주소 접근은 막지 않습니다)
+                        <div style={{ fontSize: 11, color: '#888', marginBottom: 10 }}>
+                          쓰기 = 전체 사용 · 읽기 = 조회만 가능(추가/수정/삭제 버튼 숨김) · 숨김 = 사이드바에서 제거
                         </div>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14 }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: '8px 20px' }}>
                           {RESTRICTABLE_MENU_ITEMS.map(item => {
-                            const hidden = (u.hidden_menu_items ?? []).includes(item.key)
+                            const current = permissionFor(u.menu_permissions, item.key)
                             return (
-                              <label key={item.key} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#555', cursor: 'pointer' }}>
-                                <input
-                                  type="checkbox"
-                                  checked={!hidden}
-                                  disabled={savingPerms === u.email}
-                                  onChange={() => toggleMenuItem(u, item.key)}
-                                />
-                                {item.label}
-                              </label>
+                              <div key={item.key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <span style={{ fontSize: 12, color: '#555', flex: 1, whiteSpace: 'nowrap' }}>{item.label}</span>
+                                <div style={{ display: 'flex', border: '1px solid #e0e0de', borderRadius: 5, overflow: 'hidden' }}>
+                                  {(['write', 'read', 'none'] as MenuPermission[]).map(v => (
+                                    <button
+                                      key={v}
+                                      disabled={savingPerms === u.email}
+                                      onClick={() => { if (current !== v) setPermission(u, item.key, v) }}
+                                      style={{
+                                        padding: '3px 9px', border: 'none', fontSize: 11, cursor: 'pointer',
+                                        background: current === v ? (v === 'write' ? '#111' : v === 'read' ? '#0369a1' : '#92400e') : '#fff',
+                                        color: current === v ? '#fff' : '#888',
+                                        fontWeight: current === v ? 600 : 400,
+                                        opacity: savingPerms === u.email ? 0.5 : 1,
+                                      }}
+                                    >
+                                      {PERMISSION_LABEL[v]}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
                             )
                           })}
                         </div>

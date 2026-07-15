@@ -23,7 +23,8 @@ export default function MonthGrid({
   days: PayPeriodDay[]
   employees: Employee[]
   summaries: Map<string, DailySummary>
-  onCellClick: (employeeId: string, date: string) => void
+  // 읽기 권한이면 undefined — 셀 클릭(입력 모달)이 비활성화된다
+  onCellClick?: (employeeId: string, date: string) => void
 }) {
   const today = new Date()
 
@@ -95,8 +96,8 @@ export default function MonthGrid({
                     return (
                       <td
                         key={d.dateStr}
-                        style={{ ...dataCell, borderLeft: isFirstOfMonth ? '2px solid #ccc' : dataCell.borderLeft }}
-                        onClick={() => onCellClick(emp.id, d.dateStr)}
+                        style={{ ...dataCell, borderLeft: isFirstOfMonth ? '2px solid #ccc' : dataCell.borderLeft, cursor: onCellClick ? dataCell.cursor : 'default' }}
+                        onClick={onCellClick ? () => onCellClick(emp.id, d.dateStr) : undefined}
                       >
                         {summary && (
                           <div style={{ position: 'relative', display: 'inline-block' }}>

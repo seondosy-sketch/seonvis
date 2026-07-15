@@ -7,6 +7,7 @@ import {
   AnnualLeaveBalance, Holiday, LeaveEmployee, LeaveRecord, LeaveRecordDate, LeaveType,
 } from '@/lib/leave/types'
 import { monthlySums, sumDeducted } from '@/lib/leave/calc'
+import { useMenuPermission } from '@/app/components/PermissionsProvider'
 import LeaveYearTable from './_components/LeaveYearTable'
 import LeaveRecordModal from './_components/LeaveRecordModal'
 import BalanceManagerModal from './_components/BalanceManagerModal'
@@ -18,6 +19,8 @@ import EmployeeLeaveHistory from './_components/EmployeeLeaveHistory'
 export default function LeavePage() {
   const isMobile = useIsMobile()
   const supabase = createSupabaseBrowserClient()
+  // 읽기 권한 사용자는 현황 조회만 — 등록/설정 모달 진입과 이력 수정/삭제를 막는다
+  const canWrite = useMenuPermission('leave') === 'write'
 
   const [year, setYear] = useState(new Date().getFullYear())
   const [employees, setEmployees] = useState<LeaveEmployee[]>([])
@@ -124,10 +127,10 @@ export default function LeavePage() {
         <div style={{ maxWidth: 1400, margin: '0 auto', padding: isMobile ? '0 12px' : '0 24px', height: 56, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span style={{ fontSize: 14, color: '#555' }}>휴가관리</span>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={() => setShowHolidayManager(true)} style={outlineBtn}>공휴일 관리</button>
-            <button onClick={() => setShowTypeManager(true)} style={outlineBtn}>휴가 유형</button>
-            <button onClick={() => setShowBalanceManager(true)} style={outlineBtn}>연차 설정</button>
-            <button onClick={() => setRecordModal({ open: true, edit: null })} style={primaryBtn}>+ 휴가 추가</button>
+            {canWrite && <button onClick={() => setShowHolidayManager(true)} style={outlineBtn}>공휴일 관리</button>}
+            {canWrite && <button onClick={() => setShowTypeManager(true)} style={outlineBtn}>휴가 유형</button>}
+            {canWrite && <button onClick={() => setShowBalanceManager(true)} style={outlineBtn}>연차 설정</button>}
+            {canWrite && <button onClick={() => setRecordModal({ open: true, edit: null })} style={primaryBtn}>+ 휴가 추가</button>}
           </div>
         </div>
       </header>
@@ -177,6 +180,7 @@ export default function LeavePage() {
             used={usedByEmployee.get(selectedEmployee.id) ?? 0}
             records={records.filter(r => r.employee_id === selectedEmployee.id)}
             leaveTypes={leaveTypes}
+            readOnly={!canWrite}
             onEdit={rec => setRecordModal({ open: true, edit: rec })}
             onChanged={() => loadYearData(year)}
           />

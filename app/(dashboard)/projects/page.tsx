@@ -5,6 +5,7 @@ import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import { useIsMobile } from '@/lib/useIsMobile'
 import AddressMapPreview from '@/app/components/AddressMapPreview'
 import { openDirectionsFromOffice } from '@/lib/kakaoMap'
+import { useMenuPermission } from '@/app/components/PermissionsProvider'
 
 type ProjectStatus = '진행중' | '수주' | '탈락' | '취소'
 type ProjectType = '면접' | 'SOQ' | '종심제' | 'TP' | 'PQ' | '기타' | ''
@@ -142,6 +143,8 @@ const STATUSES: ProjectStatus[] = ['진행중', '수주', '탈락', '취소']
 export default function ProjectsPage() {
   const isMobile = useIsMobile()
   const supabase = createSupabaseBrowserClient()
+  // 읽기 권한 사용자는 조회만 — 추가/수정/삭제/메모 편집 UI를 숨긴다 (관리자 화면에서 설정)
+  const canWrite = useMenuPermission('projects') === 'write'
   const [projects, setProjects] = useState<Project[]>([])
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState<ProjectStatus | '전체'>('전체')
@@ -176,6 +179,7 @@ export default function ProjectsPage() {
 
   const openNote = (e: React.MouseEvent, projectNumber: string, field: string) => {
     e.stopPropagation()
+    if (!canWrite) return
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
     const draft = notes[projectNumber]?.[field] ?? ''
     setNotePopup({ projectNumber, field, draft, rect })
@@ -354,7 +358,7 @@ export default function ProjectsPage() {
           <span style={{ fontSize: 14, color: '#555' }}>프로젝트 List</span>
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={exportCsv} style={outlineBtn}>CSV 내보내기</button>
-            <button onClick={openAdd} style={primaryBtn}>+ 추가</button>
+            {canWrite && <button onClick={openAdd} style={primaryBtn}>+ 추가</button>}
           </div>
         </div>
       </header>
@@ -403,10 +407,12 @@ export default function ProjectsPage() {
                 return (
                   <tr key={p.id} style={{ borderBottom: '1px solid #f0f0ee' }}>
                     <td style={td}>
-                      <div style={{ display: 'flex', gap: 4 }}>
-                        <button onClick={() => openEdit(p)} style={editBtn}>수정</button>
-                        <button onClick={() => remove(p.id, p.project_number)} disabled={deleting === p.id} style={deleteBtn}>삭제</button>
-                      </div>
+                      {canWrite && (
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          <button onClick={() => openEdit(p)} style={editBtn}>수정</button>
+                          <button onClick={() => remove(p.id, p.project_number)} disabled={deleting === p.id} style={deleteBtn}>삭제</button>
+                        </div>
+                      )}
                     </td>
                     <td style={tdnw}><span style={{ color: '#999' }}>{p.project_number}</span></td>
                     <td style={tdnw}><span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 3, background: '#f0f0ee', color: '#555' }}>{p.type}</span></td>
@@ -460,7 +466,7 @@ export default function ProjectsPage() {
                 <div style={{ fontSize: 15, fontWeight: 700, color: '#fff', lineHeight: 1.4 }}>{tooltipView.project.name}</div>
               </div>
               <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                <button onClick={() => { openEdit(tooltipView.project); closeTooltipView() }} style={{ border: 'none', background: '#2563eb', color: '#fff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>편집</button>
+                {canWrite && <button onClick={() => { openEdit(tooltipView.project); closeTooltipView() }} style={{ border: 'none', background: '#2563eb', color: '#fff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>편집</button>}
                 <button onClick={closeTooltipView} style={{ border: 'none', background: 'rgba(255,255,255,0.15)', color: '#fff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13 }}>✕</button>
               </div>
             </div>

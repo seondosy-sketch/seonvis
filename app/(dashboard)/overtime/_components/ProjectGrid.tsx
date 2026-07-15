@@ -29,8 +29,9 @@ export default function ProjectGrid({
   employees: Employee[]
   members: ProjectMember[]
   records: WorkRecord[]
-  // anchor: 클릭한 셀의 화면 좌표 — 팝오버(OvertimeEntryPopover)를 셀 근처에 띄우는 데 쓴다
-  onCellClick: (employeeId: string, projectId: string, date: string, anchor: { x: number; y: number }) => void
+  // anchor: 클릭한 셀의 화면 좌표 — 팝오버(OvertimeEntryPopover)를 셀 근처에 띄우는 데 쓴다.
+  // 읽기 권한이면 undefined — 셀 클릭(입력 팝오버)이 비활성화된다
+  onCellClick?: (employeeId: string, projectId: string, date: string, anchor: { x: number; y: number }) => void
 }) {
   const today = new Date()
 
@@ -164,17 +165,24 @@ export default function ProjectGrid({
                         const hours = cellHours.get(`${project.id}__${emp.id}__${d.dateStr}`)
                         const active = inPeriod(project, d.dateStr)
                         // 기간 밖이라도 기록이 있으면 보여주고 수정할 수 있게 클릭을 허용한다
-                        const clickable = active || hours !== undefined
+                        const clickable = (active || hours !== undefined) && !!onCellClick
                         const base = clickable ? dataCell : dataCellDisabled
+                        // 기간 안팎 구분 강조: 기간 안은 옅은 앰버, 기간 밖은 진한 음영, 경계는 앰버 세로선.
+                        // 흰색 vs #f4f4f2만으로는 구분이 안 보인다는 피드백으로 변경 (빗금은 시도 후 제거).
+                        const isPeriodBoundary = i > 0 && active !== inPeriod(project, days[i - 1].dateStr)
+                        const borderLeft = isPeriodBoundary ? '2px solid #f59e0b'
+                          : isFirstOfMonth ? '2px solid #ccc'
+                          : active ? '1px solid #f5ead1'
+                          : base.borderLeft
                         return (
                           <td
                             key={d.dateStr}
                             style={{
                               ...base,
-                              background: active ? base.background : '#f4f4f2',
-                              borderLeft: isFirstOfMonth ? '2px solid #ccc' : base.borderLeft,
+                              background: active ? '#fffbeb' : '#ececea',
+                              borderLeft,
                             }}
-                            onClick={clickable ? e => onCellClick(emp.id, project.id, d.dateStr, { x: e.clientX, y: e.clientY }) : undefined}
+                            onClick={clickable ? e => onCellClick!(emp.id, project.id, d.dateStr, { x: e.clientX, y: e.clientY }) : undefined}
                             title={active ? undefined : '프로젝트 기간 밖입니다'}
                           >
                             {hours !== undefined && (

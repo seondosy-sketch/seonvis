@@ -7,6 +7,7 @@ import { useIsMobile } from '@/lib/useIsMobile'
 import { DailySummary, Employee, EmployeeTask, Project, ProjectMember, WorkRecord } from '@/lib/overtime/types'
 import { currentPayPeriod, payPeriodDays, payPeriodRange, summarizeByEmployeeAndDate, summaryKey } from '@/lib/overtime/summary'
 import { syncBidProjects } from '@/lib/overtime/sync'
+import { useMenuPermission } from '@/app/components/PermissionsProvider'
 import MonthGrid from './_components/MonthGrid'
 import ProjectGrid from './_components/ProjectGrid'
 import OvertimeEntryPopover from './_components/OvertimeEntryPopover'
@@ -20,6 +21,8 @@ const MONTH_NAMES = ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8�
 export default function OvertimePage() {
   const isMobile = useIsMobile()
   const supabase = createSupabaseBrowserClient()
+  // 읽기 권한 사용자는 그리드 조회만 — 셀 입력/관리 모달을 막는다
+  const canWrite = useMenuPermission('overtime') === 'write'
 
   const initialPeriod = currentPayPeriod()
   const [viewYear, setViewYear] = useState(initialPeriod.year)
@@ -134,9 +137,9 @@ export default function OvertimePage() {
             <Link href="/overtime/print" style={{ textDecoration: 'none' }}>
               <span style={{ ...outlineBtn, display: 'inline-flex', alignItems: 'center' }}>출력</span>
             </Link>
-            <button onClick={() => setShowBulkEntry(true)} style={outlineBtn}>일괄 입력</button>
-            <button onClick={() => setShowEmployeeManager(true)} style={outlineBtn}>직원 관리</button>
-            <button onClick={() => setShowProjectManager(true)} style={outlineBtn}>프로젝트 관리</button>
+            {canWrite && <button onClick={() => setShowBulkEntry(true)} style={outlineBtn}>일괄 입력</button>}
+            {canWrite && <button onClick={() => setShowEmployeeManager(true)} style={outlineBtn}>직원 관리</button>}
+            {canWrite && <button onClick={() => setShowProjectManager(true)} style={outlineBtn}>프로젝트 관리</button>}
           </div>
         </div>
       </header>
@@ -173,14 +176,14 @@ export default function OvertimePage() {
             employees={employees}
             members={members}
             records={records}
-            onCellClick={(employeeId, projectId, date, anchor) => setPopoverCell({ employeeId, projectId, date, anchor })}
+            onCellClick={canWrite ? (employeeId, projectId, date, anchor) => setPopoverCell({ employeeId, projectId, date, anchor }) : undefined}
           />
         ) : (
           <MonthGrid
             days={days}
             employees={employees}
             summaries={summaries}
-            onCellClick={(employeeId, date) => setSelectedCell({ employeeId, date })}
+            onCellClick={canWrite ? (employeeId, date) => setSelectedCell({ employeeId, date }) : undefined}
           />
         )}
       </div>

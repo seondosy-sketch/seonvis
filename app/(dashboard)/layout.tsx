@@ -16,23 +16,27 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const adminEmails = getAdminEmails()
   const isAdmin = adminEmails.includes(user.email)
 
-  // 관리자는 항상 접근 허용 + 전체 메뉴 노출. 일반 사용자는 allowed_users 테이블 확인
-  // (admin client로 RLS 우회) 겸 사람별로 숨긴 메뉴(hidden_menu_items)를 함께 읽어온다.
-  let hiddenMenuItems: string[] = []
+  // 관리자는 항상 접근 허용 + 전체 메뉴 쓰기. 일반 사용자는 allowed_users 테이블 확인
+  // (admin client로 RLS 우회) 겸 항목별 권한(menu_permissions: none/read/write)을 읽어온다.
+  // none은 사이드바에서 숨기고, read/write는 PermissionsProvider로 페이지들에 내려준다.
+  let menuPermissions: Record<string, 'none' | 'read' | 'write'> = {}
   if (!isAdmin) {
     const admin = createSupabaseAdminClient()
     const { data } = await admin
       .from('allowed_users')
-      .select('email, hidden_menu_items')
+      .select('email, menu_permissions')
       .eq('email', user.email.toLowerCase().trim())
       .maybeSingle()
 
     if (!data) redirect('/unauthorized')
-    hiddenMenuItems = data.hidden_menu_items ?? []
+    menuPermissions = data.menu_permissions ?? {}
   }
+  const hiddenMenuItems = Object.entries(menuPermissions)
+    .filter(([, v]) => v === 'none')
+    .map(([k]) => k)
 
   return (
-    <SidebarContainer isAdmin={isAdmin} userEmail={user.email} hiddenMenuItems={hiddenMenuItems}>
+    <SidebarContainer isAdmin={isAdmin} userEmail={user.email} hiddenMenuItems={hiddenMenuItems} menuPermissions={menuPermissions}>
       {children}
     </SidebarContainer>
   )
