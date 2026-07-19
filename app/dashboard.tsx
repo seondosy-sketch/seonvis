@@ -148,7 +148,16 @@ export default function Dashboard() {
         if (ref) {
           const cat = categorizeProject(ref, weekStart)
           if (cat === '제외') return []
-          return [{ ...row, status: cat }]
+          return [{
+            ...row,
+            status: cat,
+            director: ref.director ?? '',
+            submit_date: fmtDate(ref.submit_date),
+            interview_date: fmtDate(ref.interview_date),
+            result_date: fmtDate(ref.bid_date),
+            fee: ref.fee ?? null,
+            note: makeNote(ref),
+          }]
         }
         // 수동 추가 행: performing_projects 날짜로 직접 판단
         const submit    = parseLocalDate(row.submit_date)
