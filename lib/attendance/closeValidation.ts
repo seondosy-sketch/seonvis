@@ -1,5 +1,5 @@
 /**
- * 기술인 출퇴근부 — 월 마감 전 검증 (마스터 프롬프트 7번 항목, docs/attendance/02-requirements.md §7).
+ * 기술인 출근부 — 월 마감 전 검증 (마스터 프롬프트 7번 항목, docs/attendance/02-requirements.md §7).
  *
  * 이 코드베이스 관례상 쿼리 레이어(queries.ts)를 두지 않으므로(docs/overtime.md 6단계 결정사항),
  * 이 함수는 DB에 접근하지 않는 순수 함수다 — Phase 4에서 화면이 이미 조회해둔 배열을 그대로 넘긴다.

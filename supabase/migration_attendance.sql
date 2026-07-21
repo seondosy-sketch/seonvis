@@ -1,4 +1,4 @@
--- 기술인 출퇴근부 — 1단계 DB 설계 (docs/attendance/03-data-model.md, 사용자 승인/재검토사항 반영)
+-- 기술인 출근부 — 1단계 DB 설계 (docs/attendance/03-data-model.md, 사용자 승인/재검토사항 반영)
 --
 -- 핵심 원칙 (연장근무 overtime_work_records와 동일):
 --   attendance_records는 "기술인 1명 + 날짜 1개 + 프로젝트 1개 = 행 1개" 단위를 절대 어기지 않는다.
@@ -188,7 +188,7 @@ create trigger trg_attendance_closure_snapshot_rows_no_dup_dates
 -- ── 5. 프로젝트 변경이력 ─────────────────────────────────────────────────
 -- Project List에는 이런 이력 테이블이 없다(01-current-analysis.md §6) — 신규 생성.
 -- 재공고/변경공고/공고취소 여부는 이 테이블이 공식 원본이다(사용자 확정 #2).
--- 출퇴근부는 이 테이블을 연계해서 읽기만 한다(중복 관리하지 않음).
+-- 출근부는 이 테이블을 연계해서 읽기만 한다(중복 관리하지 않음).
 create table if not exists project_change_history (
   id uuid primary key default gen_random_uuid(),
   project_id uuid not null references projects(id) on delete restrict,

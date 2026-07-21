@@ -28,12 +28,12 @@
 | `engineer_sync_logs` | 향후 엑셀 동기화 실행 이력 (구조 예약) |
 | `sites` | 현장 현황 (현재 운영 중인 현장 기본정보 대장) |
 | `site_sync_logs` | 향후 엑셀 동기화 실행 이력 (구조 예약) |
-| `project_participants` | 기술인 출퇴근부 — 프로젝트 참여기술인 (projects × engineer_contacts 연결) |
-| `attendance_records` | 기술인 출퇴근부 — 출근기록 핵심 테이블 (레코드 존재 = 출근) |
-| `attendance_month_closures` | 기술인 출퇴근부 — 월 마감(마감 시도마다 버전이 쌓이는 append-only 이력) |
-| `attendance_closure_snapshot_rows` | 기술인 출퇴근부 — 마감 시점 스냅샷 |
-| `project_change_history` | 기술인 출퇴근부 — 프로젝트 변경이력(재공고/변경공고/취소 등의 공식 원본) |
-| `attendance_audit_log` | 기술인 출퇴근부 — 마감취소·과거기록수정 등 감사이력 |
+| `project_participants` | 기술인 출근부 — 프로젝트 참여기술인 (projects × engineer_contacts 연결) |
+| `attendance_records` | 기술인 출근부 — 출근기록 핵심 테이블 (레코드 존재 = 출근) |
+| `attendance_month_closures` | 기술인 출근부 — 월 마감(마감 시도마다 버전이 쌓이는 append-only 이력) |
+| `attendance_closure_snapshot_rows` | 기술인 출근부 — 마감 시점 스냅샷 |
+| `project_change_history` | 기술인 출근부 — 프로젝트 변경이력(재공고/변경공고/취소 등의 공식 원본) |
+| `attendance_audit_log` | 기술인 출근부 — 마감취소·과거기록수정 등 감사이력 |
 
 ---
 
@@ -71,7 +71,7 @@
 > text("YYYY-MM-DD 또는 M/D", "서면"/"추후" 같은 비날짜 텍스트 허용)로, `status`는 저장 컬럼 없이
 > 클라이언트에서만 계산하는 값으로 문서화하고 있었다. Supabase(`seonvis` 프로젝트)를 `list_tables`로
 > 직접 조회한 결과 **셋 다 실제로는 `date` 타입이고, `status`는 CHECK 제약이 있는 실제 저장 컬럼**임을
-> 확인해 위 표를 정정했다(기술인 출퇴근부 Phase 1 검토 중 발견, `docs/attendance/01-current-analysis.md`).
+> 확인해 위 표를 정정했다(기술인 출근부 Phase 1 검토 중 발견, `docs/attendance/01-current-analysis.md`).
 > `announce_date`만 아직 text로 남아있다.
 
 **상태 계산 로직 (computeStatus, `app/(dashboard)/projects/page.tsx`)** — 계산 결과를 화면 표시뿐 아니라 실제 `status` 컬럼에 저장한다(위 정정 참고. 계산 자체는 여전히 클라이언트에서 하고, 저장 시점에 그 결과값을 컬럼에 함께 써넣는 방식):
@@ -84,7 +84,7 @@ result_score 또는 evaluation 비어있으면 → "진행중"
 ```
 `lib/projectStatus.ts`의 `computeProjectStatus`/`categorizeProject`는 이름이 비슷하지만 **다른 용도**(주간보고 `performing_projects` 행 분류)의 별도 함수다 — 아래 참고.
 
-**`interview_date`가 "서면"/"추후" 같은 비날짜 텍스트를 가질 수 있는지(기술인 출퇴근부 검토 중 확인)**: `projects.interview_date`는 이제 실제 `date` 타입이라 그런 텍스트를 저장할 수 없다. 다만 `lib/projectStatus.ts`의 `categorizeProject`가 여전히 `interview_date === '서면'` 분기를 갖고 있는데, 이는 죽은 코드가 아니다 — `app/dashboard.tsx`(주간보고)가 이 함수를 두 경로에 쓴다: (1) `projects`에서 막 읽어온 행(이제 `date`라 "서면" 불가능), (2) **`performing_projects.interview_date`(실제 `text` 타입)를 사용자가 주간보고 화면에서 직접 자유 텍스트로 수정한 "수동 추가 행"**(2)의 경우 "서면"이 실제로 입력될 수 있다. 즉 이 분기는 `projects` 경로에서는 사실상 도달 불가능하지만 `performing_projects` 경로에서는 여전히 유효하다 — 기술인 출퇴근부는 `projects.interview_date`만 참조하므로 영향받지 않는다.
+**`interview_date`가 "서면"/"추후" 같은 비날짜 텍스트를 가질 수 있는지(기술인 출근부 검토 중 확인)**: `projects.interview_date`는 이제 실제 `date` 타입이라 그런 텍스트를 저장할 수 없다. 다만 `lib/projectStatus.ts`의 `categorizeProject`가 여전히 `interview_date === '서면'` 분기를 갖고 있는데, 이는 죽은 코드가 아니다 — `app/dashboard.tsx`(주간보고)가 이 함수를 두 경로에 쓴다: (1) `projects`에서 막 읽어온 행(이제 `date`라 "서면" 불가능), (2) **`performing_projects.interview_date`(실제 `text` 타입)를 사용자가 주간보고 화면에서 직접 자유 텍스트로 수정한 "수동 추가 행"**(2)의 경우 "서면"이 실제로 입력될 수 있다. 즉 이 분기는 `projects` 경로에서는 사실상 도달 불가능하지만 `performing_projects` 경로에서는 여전히 유효하다 — 기술인 출근부는 `projects.interview_date`만 참조하므로 영향받지 않는다.
 
 ---
 
@@ -359,7 +359,7 @@ result_score 또는 evaluation 비어있으면 → "진행중"
 
 ---
 
-## 기술인 출퇴근부 테이블 (Phase 1 — attendance_*, project_participants, project_change_history)
+## 기술인 출근부 테이블 (Phase 1 — attendance_*, project_participants, project_change_history)
 
 상세 설계는 [docs/attendance/03-data-model.md](./attendance/03-data-model.md) 참고.
 핵심 원칙: `attendance_records`는 "기술인 1명 + 날짜 1개 + 프로젝트 1개 = 행 1개"이며, **레코드 존재 자체가 출근을

@@ -1,4 +1,4 @@
-# 기술인 출퇴근부 — 구현 단계별 계획
+# 기술인 출근부 — 구현 단계별 계획
 
 > 마스터 프롬프트 14번이 지시한 7단계 구조를 그대로 채택한다. **각 Phase는 승인 후 하나씩 순서대로 진행하며,
 > 이전 Phase 완료·보고 없이 다음 Phase로 임의로 넘어가지 않는다**(연장근무 기능의 진행 원칙과 동일,
@@ -44,7 +44,7 @@
 |---|---|
 | 변경이력 CRUD | `_components/ProjectChangeHistoryModal.tsx` |
 | 비고 조립 유틸 | `lib/attendance/changeHistory.ts` (`formatChangeHistoryForPeriod(records, start, end)` → 마스터 프롬프트 예시 포맷 문자열 배열) |
-| Project List 연동 지점 검토 | `app/(dashboard)/projects/page.tsx`에 "변경이력 보기" 진입점을 추가할지 여부(Proposed, 필수 아님 — 출퇴근부 쪽에서만 먼저 노출해도 요구사항 충족) |
+| Project List 연동 지점 검토 | `app/(dashboard)/projects/page.tsx`에 "변경이력 보기" 진입점을 추가할지 여부(Proposed, 필수 아님 — 출근부 쪽에서만 먼저 노출해도 요구사항 충족) |
 
 ---
 

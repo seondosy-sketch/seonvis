@@ -15,6 +15,7 @@ const GROUPS = [
       { id: 3, label: '근태관리',          href: null, children: [
         { id: 12, label: '연장근무',       key: 'overtime', href: '/overtime' },
         { id: 13, label: '휴가관리',       key: 'leave', href: '/leave' },
+        { id: 14, label: '기술인 출근부',  key: 'attendance', href: '/attendance' },
       ] },
       { id: 4, label: '기술인 주소록',     key: 'engineers', href: '/engineers' },
       { id: 5, label: '현장 현황',         key: 'sites', href: '/sites' },

@@ -1,5 +1,5 @@
 /**
- * 기술인 출퇴근부 — 마감 스냅샷(attendance_closure_snapshot_rows) 생성 로직.
+ * 기술인 출근부 — 마감 스냅샷(attendance_closure_snapshot_rows) 생성 로직.
  *
  * 이 파일의 함수들은 마감 시점에 attendance_records를 통째로 얼리는 규칙을 강제한다
  * (사용자 검토 지시 #5, docs/attendance/03-data-model.md §4/§5 참고):

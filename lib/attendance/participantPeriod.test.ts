@@ -82,4 +82,16 @@ describe('isDateWithinAttendancePeriod', () => {
     const result = computeAttendancePeriod({ ...base, announceDate: null })
     expect(isDateWithinAttendancePeriod(result, '2026-06-01')).toBe(false)
   })
+
+  it('참여 시작일(participationStart, 관리자 예외조정) 이전 날짜는 공고일보다 늦어도 체크 불가', () => {
+    const result = computeAttendancePeriod({ ...base, participationStart: '2026-06-15' })
+    expect(isDateWithinAttendancePeriod(result, '2026-06-10')).toBe(false) // 공고일(6/1) 이후지만 참여시작일(6/15) 이전
+    expect(isDateWithinAttendancePeriod(result, '2026-06-15')).toBe(true)  // 경계값 포함
+  })
+
+  it('참여 종료일(participationEnd, 관리자 예외조정) 이후 날짜는 면접일보다 일러도 체크 불가', () => {
+    const result = computeAttendancePeriod({ ...base, participationEnd: '2026-07-01' })
+    expect(isDateWithinAttendancePeriod(result, '2026-07-10')).toBe(false) // 면접일(7/15) 이전이지만 참여종료일(7/1) 이후
+    expect(isDateWithinAttendancePeriod(result, '2026-07-01')).toBe(true)  // 경계값 포함
+  })
 })

@@ -1,4 +1,4 @@
-# 기술인 출퇴근부 — 화면 구조 및 사용자 흐름
+# 기술인 출근부 — 화면 구조 및 사용자 흐름
 
 > 기존 컨벤션 그대로 따른다: 전체 inline style(`docs/conventions.md`), 라우트는 `app/(dashboard)/attendance/`,
 > 라우트 전용 컴포넌트는 `_components/`, 모바일 분기는 `useIsMobile()`(768px). 연장근무 화면(`MonthGrid`, `ProjectGrid`,
@@ -10,7 +10,7 @@
 ## 1. 라우팅 (Proposed)
 
 ```
-/attendance              — 월별 출퇴근부(기본 화면)
+/attendance              — 월별 출근부(기본 화면)
 /attendance/annual       — 연간 통합 출근명부(조회·출력 전용)
 /attendance/print        — 월별 출력 미리보기(연장근무 /overtime/print와 동일 패턴)
 ```
@@ -18,7 +18,7 @@
 
 ---
 
-## 2. 월별 출퇴근부 화면 (`/attendance`)
+## 2. 월별 출근부 화면 (`/attendance`)
 
 ### 2.1 상단 바 (마스터 프롬프트 4번 항목 — Confirmed 항목 그대로, 배치만 Proposed)
 
