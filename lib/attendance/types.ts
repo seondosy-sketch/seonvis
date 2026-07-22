@@ -131,6 +131,30 @@ export interface ProjectChangeHistory {
   created_at: string
 }
 
+export type SourceSlot = 'director' | 'staff_arch' | 'staff_civil' | 'staff_mech' | 'staff_safety'
+
+/**
+ * Project List 슬롯 ↔ 기술인 주소록 확정 연결 (Phase 3). project_participants는 확정된 참여기술인만
+ * 저장하는 테이블로 그대로 두고, "이 슬롯이 어느 참여행과 연결됐는지"만 이 테이블이 추적한다.
+ * 아직 확정되지 않은 슬롯(동명이인/주소록미등록/신규연결예정)은 이 테이블에 행이 없다 — 화면 조회
+ * 시점마다 projects의 현재 텍스트 + engineer_contacts로 순수 계산한다(lib/attendance/engineerLink.ts).
+ *
+ * source_name_snapshot은 "마지막으로 사용자가 이 연결을 확정/재확인했을 때"의 Project List 슬롯
+ * 텍스트다 — 단순 조회·동기화 미리보기 과정에서는 절대 갱신하지 않는다. 현재 Project List 텍스트가
+ * 이 값과 다르면 "원본변경" 상태로 표시하되 자동 재매핑은 하지 않는다(사용자 확인 후에만 처리).
+ */
+export interface ProjectParticipantLink {
+  id: string
+  project_id: string
+  source_slot: SourceSlot
+  source_name_snapshot: string
+  engineer_id: string
+  participant_id: string | null // null = 참여가 종료되며 연결 해제됨(제거됨 처리 등). 재확정 전까지 대기.
+  link_status: '자동연결' | '연결완료' // 확정 방식만 기록 — 나머지 표시 상태는 위 설명대로 순수 계산.
+  created_at: string
+  updated_at: string
+}
+
 export type AuditActionType = 'closure_reopen' | 'past_record_edit' | 'out_of_period_check' | 'other'
 
 /** 감사이력 — 마감취소·과거기록수정·기간외 출근입력 전용 범용 로그. */

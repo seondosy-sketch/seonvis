@@ -63,3 +63,11 @@ export function annualPeriodRange(year: number): { start: string; end: string } 
 export function annualMonthLabels(year: number): Array<{ year: number; periodMonth: number }> {
   return Array.from({ length: 12 }, (_, i) => ({ year, periodMonth: i + 1 }))
 }
+
+/** 오늘 날짜(KST, YYYY-MM-DD) — UTC 자정 부근 하루밀림을 피하기 위해 Asia/Seoul 고정 포맷을 쓴다. */
+export function todayKST(): string {
+  return new Date()
+    .toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' })
+    .replace(/\. /g, '-')
+    .replace('.', '')
+}

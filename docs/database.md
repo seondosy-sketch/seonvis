@@ -34,6 +34,7 @@
 | `attendance_closure_snapshot_rows` | 기술인 출근부 — 마감 시점 스냅샷 |
 | `project_change_history` | 기술인 출근부 — 프로젝트 변경이력(재공고/변경공고/취소 등의 공식 원본) |
 | `attendance_audit_log` | 기술인 출근부 — 마감취소·과거기록수정 등 감사이력 |
+| `project_participant_links` | 기술인 출근부 — Project List 슬롯(director/staff_*) ↔ engineer_contacts 확정 연결(Phase 3) |
 
 ---
 
@@ -377,3 +378,14 @@ result_score 또는 evaluation 비어있으면 → "진행중"
 - `allowed_users.can_close_attendance`(boolean, default false) — 월 마감/마감취소 전용 권한(사용자 확정 #6). 기존 `menu_permissions`(none/read/write)와 별개이며, `ADMIN_EMAILS` 관리자는 기존 관례대로 이 컬럼과 무관하게 항상 가능.
 
 **마이그레이션**: `supabase/migration_attendance.sql`. 순수 계산 로직(기간 계산·체크기간 검증·마감 전 검증·비고 조립)은 `lib/attendance/*.ts` + `lib/attendance/*.test.ts`(Vitest) 참고 — 이 코드베이스 관례상 쿼리 레이어(`queries.ts`)를 두지 않으므로 실제 Supabase 호출은 Phase 2 이후 화면 컴포넌트 안에 직접 작성한다.
+
+### Phase 3 — Project List 자동연계(`project_participant_links`, 아직 실사용 DB 미적용)
+
+상세 설계는 [docs/attendance/03-data-model.md §12](./attendance/03-data-model.md#12-project_participant_links--project-list-자동연계-phase-3-사용자-지시-반영) 참고.
+
+- `project_participant_links(id, project_id FK→projects CASCADE, source_slot(director|staff_arch|staff_civil|staff_mech|staff_safety), source_name_snapshot, engineer_id FK→engineer_contacts RESTRICT not null, participant_id FK→project_participants SET NULL nullable, link_status(자동연결|연결완료), created_at, updated_at)` — UNIQUE(project_id, source_slot) + UNIQUE(participant_id) WHERE NOT NULL. `project_participants`는 확정된 참여기술인만 저장하는 테이블로 그대로 두고, 아직 미확정인 슬롯(동명이인/주소록미등록/신규연결예정)은 이 테이블에 행을 두지 않는다 — 매번 `projects` 현재 텍스트 + `engineer_contacts`로 순수 계산(`lib/attendance/engineerLink.ts`).
+- 신규 RPC: `attendance_confirm_participant_link`(슬롯 최초 확정), `attendance_reassign_engineer`(출근기록 있는 일반 참여자의 연결 기술인 교체 — "종료+신규" 패턴, 링크도 같은 트랜잭션에서 함께 이동). `attendance_replace_director`는 시그니처를 유지한 채 "옛 단장 링크를 새 단장 참여행으로 이동" 로직만 추가.
+- 참여기간 상속 확장: `participation_start`도 `participation_end`처럼 NULL이면 Project List(`announce_date`)를 상속하도록 `lib/attendance/participantPeriod.ts`를 확장(컬럼 추가 없음).
+- 백그라운드 자동 동기화(`lib/attendance/autoSync.ts`, 2026-07-22 추가): 후보 1명인 슬롯은 사용자가 동기화 버튼을 누르기 전에 페이지 로드 시점에 자동 반영. 개찰일(`projects.bid_date`, 기존 컬럼 재사용)이 지난 프로젝트, 상태가 '취소'인 프로젝트는 대상 제외.
+- 그리드 표시 필터(`lib/attendance/gridFilters.ts`)도 확장 — 면접일이 비어 있어도 개찰일이 조회 기간 시작보다 이전이면 더 이상 "겹침"으로 보지 않고, 상태가 '취소'인 프로젝트는 상태 필터에서 명시적으로 '취소'를 선택하지 않는 한 활성 참여자·기록 유무와 무관하게 기본적으로 숨긴다.
+- 마이그레이션: `supabase/migration_attendance_participant_links.sql`, `supabase/migration_attendance_participant_links_rpc.sql` — `BEGIN...ROLLBACK` 검증 후 **2026-07-22 실사용 DB(seonvis)에 적용 완료**(사용자 승인). 적용 후 신규 함수 3개 모두 `search_path`를 명시적으로 고정하는 후속 마이그레이션도 함께 적용해 Supabase 보안 어드바이저의 `function_search_path_mutable` 경고를 해소했다.

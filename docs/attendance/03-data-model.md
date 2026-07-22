@@ -301,3 +301,67 @@ attendance_audit_log (독립 로그 테이블)
 | 5 | `attendance_dates`/`present_count` | present_count는 SQL CHECK로, 중복 날짜는 DB 트리거로, 기간 내 검증은 애플리케이션 레이어(`snapshotBuilder.ts`)로 각각 강제 |
 
 남은 Open Question은 `02-requirements.md`의 것과 동일하며, 이번 재검토로 새로 발생한 미확정 사항은 없다.
+
+---
+
+## 12. `project_participant_links` — Project List 자동연계 (Phase 3, 사용자 지시 반영)
+
+**배경**: Project List(`projects`)의 `director`/`staff_arch`/`staff_civil`/`staff_mech`/`staff_safety` 5개 텍스트 슬롯을 `engineer_contacts`와 자동 연계하되, `project_participants`는 **확정된 참여기술인만 저장하는 테이블로 그대로 유지**한다(사용자 지시). 아직 확정되지 않은 슬롯(동명이인/주소록미등록/신규연결예정)을 위한 별도 연결 테이블을 신설했다.
+
+| 컬럼 | 타입 | 설명 |
+|---|---|---|
+| `id` | uuid PK | |
+| `project_id` | uuid FK → `projects(id)` ON DELETE CASCADE | |
+| `source_slot` | text check in (5개 슬롯명) | 이 링크가 Project List의 어느 슬롯에서 왔는지 |
+| `source_name_snapshot` | text | **마지막으로 사용자가 이 연결을 확정/재확인했을 때**의 슬롯 텍스트. 단순 조회·동기화 미리보기 과정에서는 절대 갱신하지 않는다 |
+| `engineer_id` | uuid FK → `engineer_contacts(id)` ON DELETE RESTRICT not null | |
+| `participant_id` | uuid FK → `project_participants(id)` ON DELETE SET NULL (nullable) | 확정된 참여행. null = 연결 해제 후 재확정 대기 |
+| `link_status` | text check in ('자동연결','연결완료') | 확정 방식만 기록(자동 1명일치 vs 사용자 직접 선택) |
+| `created_at` / `updated_at` | timestamptz | |
+
+**제약**
+- `UNIQUE(project_id, source_slot)` — 슬롯 하나에 링크 하나.
+- `UNIQUE(participant_id) WHERE participant_id IS NOT NULL` — 참여행 하나는 동시에 슬롯 하나에만 연결(사용자 확인: 한 슬롯=한 참여행, 한 참여행=한 슬롯).
+
+**미확정 상태는 이 테이블에 행으로 존재하지 않는다.** 동명이인/주소록미등록/신규연결예정 여부는 매번 `projects`의 현재 텍스트 + `engineer_contacts`로 순수 계산한다(`lib/attendance/engineerLink.ts`의 `evaluateSlot`/`evaluateProjectSlots`).
+
+**백그라운드 자동 동기화(사용자 지시, 2026-07-22 추가)**: 후보가 정확히 1명인 슬롯(`auto_ready`)은 사용자가 "동기화" 버튼을 누르기 **전에** 출근부 페이지 로드 시점에 자동으로 반영된다(`lib/attendance/autoSync.ts`의 `selectAutoSyncCandidates`/`applyAutoSyncCandidates`, `app/(dashboard)/attendance/page.tsx`의 background effect). 동명이인/주소록미등록/원본변경/제거됨처럼 사용자 판단이 필요한 상태는 이 자동화 대상이 아니며 여전히 모달의 동기화 패널에서 사용자가 직접 처리해야 한다. 개찰일(`bid_date`)이 이미 지난 프로젝트, 그리고 상태가 '취소'인 프로젝트는 자동 동기화 대상에서 제외한다(`lib/attendance/autoSync.ts`) — 개찰이 끝났거나 취소된 사업에는 더 이상 신규 참여기술인을 자동 연계하지 않는다. 그리드 표시(`lib/attendance/gridFilters.ts`)에서도 취소된 프로젝트는 상태 필터에서 사용자가 명시적으로 '취소'를 선택하지 않는 한 기본적으로 숨긴다(활성 참여자·출근기록이 있어도). 쓰기 권한(`menu_permissions.attendance = 'write'`)이 없는 사용자에게는 이 자동 동기화도 실행되지 않는다(다른 쓰기 액션과 동일한 권한 게이트).
+
+**이름 변경 감지("원본변경") — DB에 저장하지 않고 매번 계산**: `participant_id`가 있는 확정 링크에 대해, 현재 Project List 슬롯 텍스트가 `source_name_snapshot`과 다르면 화면에 "원본변경"으로 표시한다. 이 상태는 DB 컬럼에 저장하지 않고 표시 시점에 비교해서만 계산한다(자동 재매핑 절대 금지 — 사용자가 "유지"(snapshot만 현재 이름으로 갱신) 또는 "재배정"을 선택해야 한다). 슬롯 텍스트가 완전히 비워지면 "제거됨"으로 표시하고, 참여행·출근기록은 그대로 두고 `participant_id`를 즉시 null로 바꾸지 않는다 — 사용자가 "참여 종료"를 확정할 때만 null로 바꾼다.
+
+### 12.1 슬롯 ↔ 역할/분야 고정 매핑 (`lib/attendance/engineerLink.ts`의 `SLOT_META`)
+
+| `source_slot` | 역할 | 단장 여부 | 분야(engineer_specialties.name) |
+|---|---|---|---|
+| `director` | 책임 | true | 건축(사용자 지시 — 2026-07-22 변경, 종전에는 분야 없음) |
+| `staff_arch` | 건축 담당 | false | 건축 |
+| `staff_civil` | 토목 담당 | false | 토목 |
+| `staff_mech` | 기계 담당 | false | 기계 |
+| `staff_safety` | 안전 담당 | false | 안전 |
+
+분야 id는 하드코딩하지 않고 `resolveSlotSpecialtyId()`가 매번 `engineer_specialties`에서 이름으로 조회한다 — 마스터에 그 이름이 없으면(시드가 바뀐 경우) null로 두고 분야 미지정 상태로만 확정한다(자동으로 새 분야를 만들지 않음).
+
+### 12.2 신규 RPC — `attendance_confirm_participant_link` / `attendance_reassign_engineer`
+
+`supabase/migration_attendance_participant_links_rpc.sql`.
+
+- **`attendance_confirm_participant_link`**: 슬롯을 최초로 확정할 때 쓴다. 참여행 생성(단장이면 `attendance_replace_director` 내부 재사용)과 링크 행 생성을 하나의 트랜잭션으로 묶는다. 이미 확정된(participant_id not null) 슬롯은 이 함수로 재확정할 수 없다(재매핑은 반드시 아래 RPC로만).
+- **`attendance_reassign_engineer`**: 출근기록이 있는 "일반(단장 아님)" 참여기술인의 연결 기술인을 바꿀 때 쓴다. `attendance_replace_director`와 동일한 "기존 행 종료 + 새 행 추가" 패턴만 쓰고(과거 `attendance_records`는 옛 `participant_id`를 그대로 가리켜 절대 다른 기술인에게 이전되지 않음), 옛 참여행을 가리키던 링크가 있으면 같은 트랜잭션에서 새 참여행으로 참조를 옮긴다. `is_director=true`인 행은 이 함수로 처리할 수 없고 `attendance_replace_director`를 거쳐야 한다(에러로 명확히 차단).
+- 출근기록이 **없는** 참여자의 연결 기술인 변경은 RPC를 거치지 않고 클라이언트가 `project_participants.engineer_id`를 단순 UPDATE한다(불필요한 이력 행 생성 방지) — 링크가 있으면 `engineer_id`/`source_name_snapshot`만 함께 갱신.
+
+### 12.3 `attendance_replace_director` 재정의 — 링크 연계 추가
+
+시그니처는 그대로 두고(하위 호환), 결과 행이 확정된 뒤 "이 프로젝트의 `director` 슬롯 링크가 옛 단장 참여행을 가리키고 있었는지"만 추가로 확인해 같은 트랜잭션에서 새 단장 참여행으로 참조를 옮긴다. 수동 등록 단장(Project List 슬롯과 무관)을 교체하는 경우는 매칭되는 링크가 없어 자연히 no-op — 임의로 새 링크를 만들지 않는다.
+
+### 12.4 참여기간 상속 — NULL = Project List 상속(컬럼 추가 없음)
+
+`project_participants.participation_start`/`participation_end`는 스키마를 바꾸지 않았다. `lib/attendance/participantPeriod.ts`의 `computeAttendancePeriod()`를 확장해 **시작일도 종료일과 동일한 "NULL=상속" 규칙**을 따르게 했다:
+- `participation_start`가 NULL이면 `announce_date`를 상속(공고일이 나중에 바뀌면 즉시 반영). `announce_date`가 text 컬럼이라 ISO 날짜로 파싱되지 않으면 임의 날짜를 만들지 않고 "공고일 확인 필요" 경고만 남긴다.
+- `participation_end`가 NULL이면 `interview_date`를 상속(기존 Phase 1 동작 그대로).
+- 값이 있으면(override) 그 값이 항상 최우선.
+
+자동연계로 확정한 참여행은 `participation_start`/`end`를 항상 NULL로 생성한다(사용자 지시 #8) — 화면에는 계산된 실제 날짜를, DB에는 NULL을 유지해 Project List 일정 변경이 항상 즉시 반영되게 한다. "기본기간 사용" 버튼은 두 컬럼을 다시 NULL로 되돌리는 단순 UPDATE다.
+
+### 12.5 Project List 날짜 변경 후 출근기록 충돌
+
+변경된 면접일보다 뒤에 이미 출근기록이 있는 경우를 자동 삭제하지 않는다 — 기존 `lib/attendance/closeValidation.ts`의 `findAttendanceOutOfPeriod()`가 `computeAttendancePeriod()`를 그대로 재사용하므로, 시작일 상속 확장에 의해 **이 검증은 별도 구현 없이 시작일 쪽 충돌도 함께 잡는다**(월 마감 시점에 오류로 표시, 기존 기록은 그대로 유지).

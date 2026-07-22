@@ -34,17 +34,36 @@ export interface AttendancePeriodResult {
 
 export const ATTENDANCE_PERIOD_WARNINGS = {
   ANNOUNCE_DATE_MISSING: '공고일 미입력',
+  ANNOUNCE_DATE_INVALID: '공고일 확인 필요',
   INTERVIEW_DATE_MISSING: '면접일 미입력',
   SCHEDULE_UNCONFIRMED: '일정 미확정',
   CONFIRM_BEFORE_CLOSE: '월 마감 전 확인 필요',
 } as const
 
-/** 이 프로젝트·참여자 조합의 출근 체크 가능 기간(경계 포함)과 경고 목록을 계산한다. */
+/**
+ * 이 프로젝트·참여자 조합의 출근 체크 가능 기간(경계 포함)과 경고 목록을 계산한다.
+ *
+ * 시작일(Phase 3 확장): participationStart(개별 override)가 있으면 최우선. 없으면 announceDate를
+ * "상속"한다 — participation_start를 NULL로 두는 것 자체가 곧 "Project List 공고일을 그대로 따른다"는
+ * 뜻이다(사용자 지시 #8, NULL=상속). 공고일이 text 컬럼이라 자유 텍스트가 들어올 수 있으므로, ISO
+ * 날짜 형식이 아니면 임의로 날짜를 만들지 않고 시작일 미확정으로 처리한다(사용자 지시 #8).
+ */
 export function computeAttendancePeriod(input: AttendancePeriodInput): AttendancePeriodResult {
   const warnings: string[] = []
 
-  const effectiveStart = input.participationStart ?? input.announceDate ?? null
-  if (!effectiveStart) warnings.push(ATTENDANCE_PERIOD_WARNINGS.ANNOUNCE_DATE_MISSING)
+  let effectiveStart: string | null
+  if (input.participationStart) {
+    effectiveStart = input.participationStart
+  } else if (!input.announceDate || !input.announceDate.trim()) {
+    effectiveStart = null
+    warnings.push(ATTENDANCE_PERIOD_WARNINGS.ANNOUNCE_DATE_MISSING)
+  } else if (isIsoDate(input.announceDate)) {
+    effectiveStart = input.announceDate
+  } else {
+    // 공고일에 날짜가 아닌 텍스트가 들어있음(text 컬럼) — 임의 날짜를 만들지 않고 확인 필요로만 표시.
+    effectiveStart = null
+    warnings.push(ATTENDANCE_PERIOD_WARNINGS.ANNOUNCE_DATE_INVALID)
+  }
 
   let effectiveEnd: string | null
   if (input.participationEnd) {

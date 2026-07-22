@@ -14,7 +14,7 @@ const periodEnd = '2026-08-20'
 function makeProject(overrides: Partial<ProjectForGridFilter> = {}): ProjectForGridFilter {
   return {
     id: 'proj-1', project_number: 'A001', name: '테스트프로젝트',
-    announce_date: '2026-06-01', interview_date: '2026-08-10', status: '진행중',
+    announce_date: '2026-06-01', interview_date: '2026-08-10', bid_date: null, status: '진행중',
     ...overrides,
   }
 }
@@ -47,6 +47,18 @@ describe('projectOverlapsPeriod', () => {
 
   it('공고일이 없으면 false', () => {
     expect(projectOverlapsPeriod(makeProject({ announce_date: null }), periodStart, periodEnd)).toBe(false)
+  })
+
+  it('개찰일이 기간 시작 이전이면 면접일이 없어도 false(개찰 끝난 사업 제외)', () => {
+    expect(
+      projectOverlapsPeriod(makeProject({ interview_date: null, bid_date: '2026-07-01' }), periodStart, periodEnd),
+    ).toBe(false)
+  })
+
+  it('개찰일이 기간 안이면 true', () => {
+    expect(
+      projectOverlapsPeriod(makeProject({ interview_date: null, bid_date: '2026-08-01' }), periodStart, periodEnd),
+    ).toBe(true)
   })
 })
 
@@ -142,6 +154,20 @@ describe('filterVisibleProjects — 프로젝트 필터', () => {
     expect(filterVisibleProjects({
       ...baseInput, projects: [outOfPeriod], projectIdsWithActiveParticipants: new Set([outOfPeriod.id]),
     })).toHaveLength(1)
+  })
+
+  it('취소된 프로젝트는 활성 참여자·기록이 있어도 기본적으로 숨긴다', () => {
+    const cancelled = makeProject({ status: '취소' })
+    expect(filterVisibleProjects({
+      ...baseInput, projects: [cancelled],
+      projectIdsWithActiveParticipants: new Set([cancelled.id]),
+      projectIdsWithRecords: new Set([cancelled.id]),
+    })).toHaveLength(0)
+  })
+
+  it('상태 필터에서 명시적으로 "취소"를 선택하면 취소된 프로젝트를 보여준다', () => {
+    const cancelled = makeProject({ status: '취소' })
+    expect(filterVisibleProjects({ ...baseInput, projects: [cancelled], statusFilter: '취소' })).toHaveLength(1)
   })
 
   it('기술인/분야 필터가 걸려 있는데 참여자 행이 0건이면 프로젝트 자체를 숨긴다', () => {

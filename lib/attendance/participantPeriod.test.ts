@@ -59,6 +59,23 @@ describe('computeAttendancePeriod', () => {
     expect(result.effectiveStart).toBeNull()
     expect(result.warnings).toContain(ATTENDANCE_PERIOD_WARNINGS.ANNOUNCE_DATE_MISSING)
   })
+
+  it('공고일이 날짜로 해석되지 않는 텍스트면 임의 날짜를 만들지 않고 확인 필요 경고', () => {
+    const result = computeAttendancePeriod({ ...base, announceDate: '추후공고' })
+    expect(result.effectiveStart).toBeNull()
+    expect(result.warnings).toContain(ATTENDANCE_PERIOD_WARNINGS.ANNOUNCE_DATE_INVALID)
+  })
+
+  it('participationStart가 없으면(NULL) 공고일을 상속한다 — 공고일이 나중에 바뀌면 즉시 반영', () => {
+    const result = computeAttendancePeriod({ ...base, announceDate: '2026-06-20' })
+    expect(result.effectiveStart).toBe('2026-06-20')
+    expect(result.warnings).not.toContain(ATTENDANCE_PERIOD_WARNINGS.ANNOUNCE_DATE_MISSING)
+  })
+
+  it('participationEnd가 없으면(NULL) 면접일을 상속한다 — 면접일이 나중에 입력되면 즉시 반영', () => {
+    const result = computeAttendancePeriod({ ...base, interviewDate: '2026-08-01' })
+    expect(result.effectiveEnd).toBe('2026-08-01')
+  })
 })
 
 describe('isDateWithinAttendancePeriod', () => {

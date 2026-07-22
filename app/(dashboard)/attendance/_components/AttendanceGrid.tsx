@@ -156,13 +156,17 @@ export default function AttendanceGrid({
                             style={{
                               ...base,
                               borderLeft,
-                              background: present ? '#d9d9d9' : eligible ? '#fff' : '#f4f4f2',
+                              background: present ? '#facc15' : eligible ? '#fff' : '#f4f4f2',
+                              color: present ? '#78350a' : undefined,
+                              fontWeight: present ? 700 : undefined,
                               cursor: clickable ? 'pointer' : 'default',
                               opacity: pending ? 0.5 : 1,
                             }}
                             onClick={clickable ? () => onToggleCell(participant, project, d.dateStr) : undefined}
                             title={!eligible ? '체크 가능 기간이 아닙니다' : undefined}
-                          />
+                          >
+                            {present ? '✓' : ''}
+                          </td>
                         )
                       })}
                       <td style={totalCell}>{total > 0 ? total : ''}</td>

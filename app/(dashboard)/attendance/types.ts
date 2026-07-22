@@ -9,6 +9,7 @@ export interface AttendanceProjectRow {
   name: string
   announce_date: string | null
   interview_date: string | null
+  bid_date: string | null
   status: string
   director: string
   staff_arch: string

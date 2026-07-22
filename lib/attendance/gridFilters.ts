@@ -10,10 +10,15 @@ export interface ProjectForGridFilter {
   name: string
   announce_date: string | null
   interview_date: string | null
+  bid_date: string | null // 개찰일 — 지난 회계기간에 대해서는 더 이상 "겹침"으로 보지 않는다(사용자 지시)
   status: string
 }
 
-/** 프로젝트의 공고일~면접일이 조회 중인 회계기간과 겹치는지. 면접일 없으면 계속 겹치는 것으로 본다. */
+/**
+ * 프로젝트의 공고일~면접일이 조회 중인 회계기간과 겹치는지. 면접일 없으면 계속 겹치는 것으로 본다 —
+ * 다만 개찰일(bid_date)이 그 회계기간 시작보다 이전이면, 면접일이 없어도 이미 개찰이 끝난 사업이므로
+ * 더 이상 겹치는 것으로 보지 않는다(사용자 지시 — 개찰이 끝난 사업은 출근부에 계속 남지 않게 함).
+ */
 export function projectOverlapsPeriod(
   project: ProjectForGridFilter,
   periodStart: string,
@@ -22,6 +27,7 @@ export function projectOverlapsPeriod(
   if (!project.announce_date) return false
   if (project.announce_date > periodEnd) return false
   if (project.interview_date && project.interview_date < periodStart) return false
+  if (project.bid_date && project.bid_date < periodStart) return false
   return true
 }
 
@@ -70,6 +76,9 @@ export function filterVisibleProjects<P extends ProjectForGridFilter>(
 ): P[] {
   const q = input.search.trim().toLowerCase()
   return input.projects.filter(p => {
+    // 취소된 프로젝트는 기본적으로 출근부에 포함하지 않는다(사용자 지시) — 다만 상태 필터에서
+    // 사용자가 명시적으로 '취소'를 선택했을 때는(과거 확인 목적) 그대로 보여준다.
+    if (p.status === '취소' && input.statusFilter !== '취소') return false
     const relevant =
       projectOverlapsPeriod(p, input.periodStart, input.periodEnd) ||
       input.projectIdsWithActiveParticipants.has(p.id) ||
