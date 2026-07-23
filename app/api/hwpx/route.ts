@@ -74,10 +74,86 @@ function removeLinesegarray(node: any): void {
   for (const el of items) el.parentNode?.removeChild(el)
 }
 
+// ── 발주예상 Project 표 채우기 (8열: 연번/Project/발주청/단장/사업비(억)/발주(월)/용역비(억)/내용, 템플릿 고정 2행) ──
+function fillExpectedTable(doc: any, expected: any[]): void {
+  const tbls: any[] = Array.from(doc.getElementsByTagNameNS(HP_NS, 'tbl') as any[])
+  const tbl = tbls[1]
+  if (!tbl) return
+  const rows: any[] = Array.from(tbl.getElementsByTagNameNS(HP_NS, 'tr') as any[])
+  const dataRows = rows.slice(1).map(r => getTcs(r)) // 헤더 행 제외
+  const IDX = { num: 0, name: 1, client: 2, chief: 3, cost: 4, month: 5, fee: 6, note: 7 }
+
+  for (let i = 0; i < dataRows.length; i++) {
+    const dtcs = dataRows[i]
+    if (i < expected.length) {
+      const e = expected[i]
+      setText(dtcs[IDX.num],    String(i + 1))
+      setText(dtcs[IDX.name],   e.name || '')
+      setText(dtcs[IDX.client], e.client || '')
+      setText(dtcs[IDX.chief],  e.director || '')
+      setText(dtcs[IDX.cost],   e.project_cost || '')
+      setText(dtcs[IDX.month],  e.order_month || '')
+      setText(dtcs[IDX.fee],    e.fee || '')
+      setTextMultiLine(dtcs[IDX.note], e.note || '')
+    } else {
+      for (const dtc of dtcs) clearCell(dtc)
+    }
+  }
+}
+
+// ── 교육참가자(OSG팀) 문단 채우기 — 책임 1줄 + 분야별(건축/토목/안전/기계, 값 있는 항목만) N줄 ──────────
+const EDU_LABELS: Record<string, string> = { edu_arch: '건축', edu_civil: '토목', edu_safety: '안전', edu_mech: '기계' }
+const EDU_FIELD_ORDER = ['edu_arch', 'edu_civil', 'edu_safety', 'edu_mech']
+
+function splitNames(v: any): string[] {
+  return String(v || '').split(',').map(s => s.trim()).filter(Boolean)
+}
+
+function updateEducationSection(doc: any, meta: any): void {
+  const paras: any[] = Array.from(doc.getElementsByTagNameNS(HP_NS, 'p') as any[])
+  const chiefIdx = paras.findIndex((p: any) =>
+    Array.from(p.getElementsByTagNameNS(HP_NS, 't') as any[]).some((t: any) => (t.textContent || '').includes('책  임 기술자'))
+  )
+  if (chiefIdx < 0) return
+
+  // 책임 기술자
+  const chiefPara = paras[chiefIdx]
+  const chiefRuns: any[] = Array.from(chiefPara.childNodes || []).filter((n: any) => n.nodeType === 1 && n.localName === 'run')
+  const chiefNames = splitNames(meta?.edu_chief)
+  const t0 = chiefRuns[0]?.getElementsByTagNameNS(HP_NS, 't')[0]
+  if (t0) t0.textContent = `   - 책  임 기술자 : ${chiefNames.join(', ')}`
+  const t1 = chiefRuns[1]?.getElementsByTagNameNS(HP_NS, 't')[0]
+  if (t1) t1.textContent = chiefNames.length ? ` - ${chiefNames.length}명` : ''
+
+  // 분야별 기술자 — 템플릿에는 예시 2줄이 고정돼 있으나, 값이 있는 분야 수만큼 줄을 새로 구성
+  const firstFieldPara = paras[chiefIdx + 1]
+  const secondFieldPara = paras[chiefIdx + 2]
+  const anchor = paras[chiefIdx + 3] // 다음 여백 문단 — 이 앞에 새 줄들을 삽입
+  const parent = firstFieldPara.parentNode
+
+  const lines = EDU_FIELD_ORDER
+    .map(key => ({ label: EDU_LABELS[key], names: splitNames(meta?.[key]) }))
+    .filter(g => g.names.length > 0)
+    .map((g, i) => {
+      const prefix = i === 0 ? '   - 분야별 기술자 : ' : '                     '
+      return `${prefix}${g.names.join(', ')} – ${g.label} ${g.names.length}명`
+    })
+
+  for (const lineText of lines) {
+    const clone = firstFieldPara.cloneNode(true)
+    const run = Array.from(clone.childNodes || []).find((n: any) => n.nodeType === 1 && n.localName === 'run')
+    const t = run?.getElementsByTagNameNS(HP_NS, 't')[0]
+    if (t) t.textContent = lineText
+    parent.insertBefore(clone, anchor)
+  }
+  parent.removeChild(firstFieldPara)
+  parent.removeChild(secondFieldPara)
+}
+
 // ── Weekly HWPX 생성 ──────────────────────────────────────────────────────────
 async function generateWeekly(
   templatePath: string,
-  data: { week: string; performing: any[]; meta: any }
+  data: { week: string; performing: any[]; expected: any[]; meta: any }
 ): Promise<Buffer> {
   const AdmZip = (await import('adm-zip')).default
   const { DOMParser, XMLSerializer } = await import('@xmldom/xmldom')
@@ -135,6 +211,8 @@ async function generateWeekly(
 
   fillSection(gaeyalRows,   gaeyalProjects)
   fillSection(jinhaengRows, jinhaengProjects)
+  fillExpectedTable(doc, data.expected || [])
+  updateEducationSection(doc, data.meta)
 
   // 헤더 날짜 → 해당 주 월~금
   const [yearStr, wStr] = data.week.split('-W')
@@ -249,7 +327,7 @@ export async function POST(req: NextRequest) {
     if (type === 'monthly') {
       buffer = await generateMonthly(templatePath, { week, performing })
     } else {
-      buffer = await generateWeekly(templatePath, { week, performing, meta })
+      buffer = await generateWeekly(templatePath, { week, performing, expected, meta })
     }
 
     const today = new Date()
