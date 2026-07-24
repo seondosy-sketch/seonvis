@@ -14,6 +14,7 @@ import {
   computeProjectStatus,
   categorizeProject,
 } from '@/lib/projectStatus'
+import { validateWeeklyCapacity, validateMonthlyCapacity, formatCapacityViolations } from '@/lib/hwpx/capacity'
 
 function weekLabel(week: string): string {
   const [year, w] = week.split('-W')
@@ -270,6 +271,18 @@ export default function Dashboard() {
   }
 
   const download = async (type: 'weekly' | 'monthly') => {
+    // 월간은 아직 고정 출력 공간(11건) 제한이 있어 여기서 막는다. 주간은 개찰/진행중/발주예상
+    // 행을 서버가 동적으로 재구성하므로 고정 건수 제한이 없다 — status 값 이상 여부만 방어적으로
+    // 확인하고, 실제 페이지 높이 예산 판정은 서버(app/api/hwpx/route.ts)가 최종 판정자다. 계속
+    // 진행할지 묻는 confirm은 쓰지 않는다(누락된 문서가 정상 문서처럼 유통되는 걸 막는 게 목적).
+    const violations = type === 'monthly'
+      ? validateMonthlyCapacity(performing)
+      : validateWeeklyCapacity(performing)
+    if (violations.length > 0) {
+      alert(`문서를 생성할 수 없습니다.\n\n${formatCapacityViolations(violations)}`)
+      return
+    }
+
     setDownloading(type)
     try {
       const res = await fetch('/api/hwpx', {
