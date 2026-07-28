@@ -328,6 +328,223 @@ function assertLabelCellSpan(tr: any, label: string): void {
   }
 }
 
+// ── 표 wrapper 오버헤드 실측 ─────────────────────────────────────────────────
+//
+// 표가 실제 차지하는 세로 공간은 표의 hp:sz(행 높이 합)보다 크다. 실측 분해:
+//   wrapper 문단 lineseg.vertsize = 표 hp:sz + outMargin(top+bottom)  ← 정확히 일치 확인
+//   wrapper 문단 실제 점유        = vertsize + lineseg.spacing
+// 따라서 예산에는 hp:sz 외에 outMargin과 wrapper spacing을 각각 한 번씩만 더해야 한다.
+// vertsize를 그대로 쓰면 hp:sz·outMargin이 중복되므로 여기서는 아예 읽지 않는다.
+// inMargin은 셀 내부 여백이라 행 높이에 이미 반영되어 있어 더하지 않는다.
+//
+// 값은 반드시 "해당 표의 직계 outMargin"과 "그 표를 직접 담은 wrapper 문단"에서만 읽는다
+// (descendant 탐색 금지 — 셀 안에 중첩 표가 있으면 다른 표의 값을 읽게 된다).
+
+/** 표의 직계 hp:outMargin에서 top+bottom을 읽는다. */
+function readTableOutMargins(tbl: XmlElement, label: string): number {
+  const om = findDirectChild(tbl, 'outMargin')
+  if (!om) {
+    throw new TemplateStructureError(
+      `weekly.hwpx 템플릿 구조가 예상과 다릅니다: ${label}에 직계 hp:outMargin이 없습니다.`,
+      'MISSING_TABLE_OUT_MARGIN'
+    )
+  }
+  const raw = { top: om.getAttribute('top'), bottom: om.getAttribute('bottom') }
+  const parsed = { top: Number(raw.top), bottom: Number(raw.bottom) }
+  for (const side of ['top', 'bottom'] as const) {
+    const v = parsed[side]
+    if (raw[side] == null || !Number.isInteger(v) || v < 0) {
+      throw new TemplateStructureError(
+        `weekly.hwpx 템플릿 구조가 예상과 다릅니다: ${label}의 outMargin ${side} 값(${raw[side]})이 0 이상 정수가 아닙니다.`,
+        'INVALID_TABLE_OUT_MARGIN'
+      )
+    }
+  }
+  return parsed.top + parsed.bottom
+}
+
+/** 표를 hp:run 직계로 담은 wrapper 문단을 찾는다 — 정확히 1개여야 한다. */
+function findTableWrapperParagraph(doc: XmlDocument, tbl: XmlElement, label: string): XmlElement {
+  const candidates = elementsOf(doc, 'p').filter((p) =>
+    getDirectChildren(p, 'run').some((run) => getDirectChildren(run, 'tbl').includes(tbl))
+  )
+  if (candidates.length !== 1) {
+    throw new TemplateStructureError(
+      `weekly.hwpx 템플릿 구조가 예상과 다릅니다: ${label}을 직접 담은 문단을 정확히 하나 찾아야 하는데 ${candidates.length}개 발견했습니다.`,
+      'AMBIGUOUS_TABLE_WRAPPER'
+    )
+  }
+  return candidates[0]
+}
+
+/** wrapper 문단의 직계 linesegarray/lineseg에서 spacing을 읽는다. */
+function readWrapperSpacing(wrapper: XmlElement, label: string): number {
+  const lsa = findDirectChild(wrapper, 'linesegarray')
+  if (!lsa) {
+    throw new TemplateStructureError(
+      `weekly.hwpx 템플릿 구조가 예상과 다릅니다: ${label}의 wrapper 문단에 hp:linesegarray가 없습니다.`,
+      'MISSING_WRAPPER_LINESEG'
+    )
+  }
+  const segs = getDirectChildren(lsa, 'lineseg')
+  if (segs.length === 0) {
+    throw new TemplateStructureError(
+      `weekly.hwpx 템플릿 구조가 예상과 다릅니다: ${label}의 wrapper 문단에 hp:lineseg가 없습니다.`,
+      'MISSING_WRAPPER_LINESEG'
+    )
+  }
+  // 표를 담은 문단은 한 줄(=표 한 덩어리)이므로 첫 lineseg의 spacing이 그 문단의 줄간격이다.
+  const raw = segs[0].getAttribute('spacing')
+  const spacing = Number(raw)
+  if (raw == null || !Number.isInteger(spacing) || spacing < 0) {
+    throw new TemplateStructureError(
+      `weekly.hwpx 템플릿 구조가 예상과 다릅니다: ${label}의 wrapper spacing 값(${raw})이 0 이상 정수가 아닙니다.`,
+      'INVALID_WRAPPER_SPACING'
+    )
+  }
+  return spacing
+}
+
+// ── 마지막 문단(문서 하단 판정용) ────────────────────────────────────────────
+//
+// lineseg.spacing은 "그 줄 아래쪽 여백"이다. 중간 문단에서는 다음 문단을 실제로 밀어내지만
+// (실측: 다음 문단 vertpos = 이전 vertsize + spacing 정확 일치), 문서 마지막 문단의 spacing은
+// 밀어낼 대상이 없어 페이지에 들어갈 필요가 없다. 그래서 문서 하단은 그만큼 위다.
+// 고정값을 쓰지 않고 매번 템플릿에서 실측한다.
+
+/** 표 안에 들어 있지 않은(=문단 흐름에 노출된) 마지막 문단. */
+function findTrailingOuterParagraph(doc: XmlDocument): XmlElement | null {
+  const tbls = elementsOf(doc, 'tbl')
+  const insideAnyTable = (p: XmlElement) => tbls.some((t) => elementsOf(t, 'p').includes(p))
+  const outer = elementsOf(doc, 'p').filter((p) => !insideAnyTable(p))
+  return outer[outer.length - 1] ?? null
+}
+
+/** 마지막 문단의 마지막 lineseg.spacing을 읽는다. */
+function readTrailingParagraphSpacing(doc: XmlDocument): { paragraph: XmlElement; spacing: number } {
+  const para = findTrailingOuterParagraph(doc)
+  if (!para) {
+    throw new TemplateStructureError(
+      `weekly.hwpx 템플릿 구조가 예상과 다릅니다: 표 밖 마지막 문단을 찾지 못했습니다.`,
+      'MISSING_TRAILING_PARAGRAPH'
+    )
+  }
+  const lsa = findDirectChild(para, 'linesegarray')
+  if (!lsa) {
+    throw new TemplateStructureError(
+      `weekly.hwpx 템플릿 구조가 예상과 다릅니다: 마지막 문단에 hp:linesegarray가 없습니다.`,
+      'MISSING_TRAILING_LINESEG'
+    )
+  }
+  const segs = getDirectChildren(lsa, 'lineseg')
+  if (segs.length === 0) {
+    throw new TemplateStructureError(
+      `weekly.hwpx 템플릿 구조가 예상과 다릅니다: 마지막 문단에 hp:lineseg가 없습니다.`,
+      'MISSING_TRAILING_LINESEG'
+    )
+  }
+  // 여러 줄이면 "마지막 줄"의 아래 여백만 문서 하단 밖에 있다.
+  const raw = segs[segs.length - 1].getAttribute('spacing')
+  const spacing = Number(raw)
+  if (raw == null || !Number.isInteger(spacing) || spacing < 0) {
+    throw new TemplateStructureError(
+      `weekly.hwpx 템플릿 구조가 예상과 다릅니다: 마지막 문단의 spacing 값(${raw})이 0 이상 정수가 아닙니다.`,
+      'INVALID_TRAILING_SPACING'
+    )
+  }
+  return { paragraph: para, spacing }
+}
+
+// 생성이 끝난 뒤에도 그 문단이 여전히 문서의 마지막 표 밖 문단인지 확인한다. 교육참가자 블록
+// 재구성은 anchor 앞에 삽입하므로 순서가 유지되지만, 나중에 생성 로직이 바뀌어 마지막 뒤에
+// 문단이 추가되면 예산 판정 근거가 무너지므로 계약으로 못박아 둔다.
+function assertTrailingParagraphStillLast(doc: XmlDocument, expected: XmlElement): void {
+  const actual = findTrailingOuterParagraph(doc)
+  if (actual !== expected) {
+    throw new TemplateStructureError(
+      `생성 결과가 예상과 다릅니다: 예산 계산 기준으로 삼은 마지막 문단이 더 이상 문서의 마지막 문단이 아닙니다.`,
+      'INVALID_TRAILING_PARAGRAPH_POSITION'
+    )
+  }
+}
+
+// ── 발주예상 데이터 행의 2줄 필요 높이 ───────────────────────────────────────
+//
+// HWP는 cellSz height를 "최소 높이"로만 쓰고 내용이 넘치면 행을 자동으로 늘린다. 발주처명이
+// 6~8자면 발주청 열(약 5자 폭)에서 2줄이 되어 선언 높이 1,700을 넘어 확장되는데, 선언 높이만
+// 세던 예산은 이 확장을 보지 못해 실제로는 2페이지인 조합을 통과시켰다(UAT 확인).
+//
+// 여기서는 UAT가 입증한 "2줄 확장"만 실측한다 — 문자폭 추정이나 줄 수 계산은 하지 않는다.
+// 2줄 필요 높이 = 2×본문높이(vertsize) + 1×줄간격(spacing). 마지막 줄의 아래 여백은 점유하지
+// 않는다(문단 레벨 trailingParagraphSpacing과 동일한 규칙 — 템플릿 캐시 좌표로 확인).
+//
+// 특정 셀 하나에 의존하지 않는다: 데이터 행의 rowSpan=1 셀을 전부 검사해 하나라도 구조가
+// 어긋나면 던지고, 행 높이는 셀 중 가장 큰 값이 결정하므로 최댓값을 쓴다. 셀마다 줄간격이
+// 다르므로(실측: 120% / 130% 혼재) 최댓값이 곧 그 행의 2줄 필요 높이다.
+const EXPECTED_ROW_BUDGET_LINE_COUNT = 2
+
+function measureExpectedRowTwoLineHeight(expDataRows: readonly XmlElement[]): number {
+  let maxHeight = 0
+  let inspected = 0
+
+  expDataRows.forEach((tr, rowIdx) => {
+    const cells = getDirectChildren(tr, 'tc').filter((tc) => {
+      const span = findDirectChild(tc, 'cellSpan')
+      return !span || Number(span.getAttribute('rowSpan') || 1) === 1
+    })
+    cells.forEach((tc, colIdx) => {
+      const label = `발주예상 표 ${rowIdx}번째 데이터 행 ${colIdx}열`
+      const subList = findDirectChild(tc, 'subList')
+      const para = subList ? getDirectChildren(subList, 'p')[0] ?? null : null
+      const lsa = para ? findDirectChild(para, 'linesegarray') : null
+      const seg = lsa ? getDirectChildren(lsa, 'lineseg')[0] ?? null : null
+      if (!seg) {
+        throw new TemplateStructureError(
+          `weekly.hwpx 템플릿 구조가 예상과 다릅니다: ${label}에서 줄 높이를 읽을 hp:lineseg를 찾지 못했습니다.`,
+          'MISSING_EXPECTED_ROW_LINESEG'
+        )
+      }
+      const rawVert = seg.getAttribute('vertsize')
+      const vertsize = Number(rawVert)
+      if (rawVert == null || !Number.isInteger(vertsize) || vertsize <= 0) {
+        throw new TemplateStructureError(
+          `weekly.hwpx 템플릿 구조가 예상과 다릅니다: ${label}의 vertsize 값(${rawVert})이 양의 정수가 아닙니다.`,
+          'INVALID_EXPECTED_ROW_LINE_HEIGHT'
+        )
+      }
+      const rawSpacing = seg.getAttribute('spacing')
+      const spacing = Number(rawSpacing)
+      if (rawSpacing == null || !Number.isInteger(spacing) || spacing < 0) {
+        throw new TemplateStructureError(
+          `weekly.hwpx 템플릿 구조가 예상과 다릅니다: ${label}의 spacing 값(${rawSpacing})이 0 이상 정수가 아닙니다.`,
+          'INVALID_EXPECTED_ROW_LINE_SPACING'
+        )
+      }
+      const needed =
+        EXPECTED_ROW_BUDGET_LINE_COUNT * vertsize +
+        (EXPECTED_ROW_BUDGET_LINE_COUNT - 1) * spacing
+      if (needed > maxHeight) maxHeight = needed
+      inspected++
+    })
+  })
+
+  if (inspected === 0) {
+    throw new TemplateStructureError(
+      `weekly.hwpx 템플릿 구조가 예상과 다릅니다: 발주예상 표 데이터 행에서 줄 높이를 읽을 셀을 찾지 못했습니다.`,
+      'MISSING_EXPECTED_ROW_LINESEG'
+    )
+  }
+  return maxHeight
+}
+
+/** 표 하나의 예산 보정 항목(outMargin 합, wrapper spacing)을 함께 뽑는다. */
+function measureTableWrapperOverhead(doc: XmlDocument, tbl: XmlElement, label: string): { outMargins: number; wrapperSpacing: number } {
+  const outMargins = readTableOutMargins(tbl, label)
+  const wrapper = findTableWrapperParagraph(doc, tbl, label)
+  const wrapperSpacing = readWrapperSpacing(wrapper, label)
+  return { outMargins, wrapperSpacing }
+}
+
 // weekly.hwpx의 실제 구조를 코드가 가정한 것과 대조한다. 표 개수/열 수/기준 문구/복제용 행
 // 확보 가능 여부 중 하나라도 어긋나면 데이터를 채우거나 행을 조작하지 않고 즉시 던진다
 // (TemplateStructureError) — 개찰·진행중·발주예상 데이터 행 수는 이제 동적으로 맞추므로
@@ -463,16 +680,31 @@ function assertWeeklyTemplateStructure(doc: any) {
   }
   const usableHeight = Number(pagePr.getAttribute('height')) - Number(margin.getAttribute('top')) - Number(margin.getAttribute('bottom'))
 
+  // 표 wrapper 오버헤드 — 표 hp:sz만으로는 빠지는 outMargin과 wrapper 줄간격을 실측한다.
+  // 고정 상수를 쓰지 않고 템플릿 XML에서 직접 뽑으므로, 템플릿 서식을 바꾸면 예산도 함께 따라간다.
+  const perfOverhead = measureTableWrapperOverhead(doc, perfTbl, '수행 프로젝트 표')
+  const expOverhead = measureTableWrapperOverhead(doc, expTbl, '발주예상 표')
+
+  // 문서 하단 판정용 — 마지막 문단의 줄 아래 여백은 페이지에 들어갈 필요가 없다.
+  const trailing = readTrailingParagraphSpacing(doc)
+
   return {
     perfTbl, expTbl,
     gaeyalLabelRow, gaeyalAdditionalRows, gaeyalMiddleRow, gaeyalLastRow,
     jinhaengLabelRow, jinhaengAdditionalRows, jinhaengRow,
     expDataRowNodes,
     paras, chiefIdx, reportPeriodNode: dateMatches[0],
+    trailingParagraph: trailing.paragraph,
     measurements: {
       usableHeight, fixedContentHeight, eduLineHeight,
       perfHeaderHeight, gaeyalMiddleRowHeight, gaeyalLastRowHeight, jinhaengRowHeight,
       expHeaderHeight, expRowHeight,
+      expectedRowTwoLineHeight: measureExpectedRowTwoLineHeight(expDataRowNodes),
+      performingOutMargins: perfOverhead.outMargins,
+      expectedOutMargins: expOverhead.outMargins,
+      performingWrapperSpacing: perfOverhead.wrapperSpacing,
+      expectedWrapperSpacing: expOverhead.wrapperSpacing,
+      trailingParagraphSpacing: trailing.spacing,
     },
   }
 }
@@ -527,7 +759,13 @@ async function generateWeekly(
     perfJinhaengRowCount: jinhaengProjects.length,
     expHeaderHeight: structure.measurements.expHeaderHeight,
     expRowHeight: structure.measurements.expRowHeight,
+    expectedRowTwoLineHeight: structure.measurements.expectedRowTwoLineHeight,
     expRowCount: expectedProjects.length,
+    performingOutMargins: structure.measurements.performingOutMargins,
+    expectedOutMargins: structure.measurements.expectedOutMargins,
+    performingWrapperSpacing: structure.measurements.performingWrapperSpacing,
+    expectedWrapperSpacing: structure.measurements.expectedWrapperSpacing,
+    trailingParagraphSpacing: structure.measurements.trailingParagraphSpacing,
   } satisfies WeeklyPageBudgetInput)
   if (!budget.fitsHeightBudget) {
     // 상세 수치는 사용자 응답(PAGE_BUDGET_EXCEEDED_MESSAGE)에는 넣지 않고 서버 로그에만 남긴다
@@ -599,6 +837,10 @@ async function generateWeekly(
   const newDateStr = `(${fmt(weekStart)} ~ ${fmt(weekEnd)})`
 
   structure.reportPeriodNode.textContent = newDateStr
+
+  // 예산 판정의 근거였던 "마지막 문단"이 생성 후에도 여전히 마지막인지 확인한다 —
+  // 아니면 contentBottom 계산이 무효해지므로 문서를 내보내지 않는다.
+  assertTrailingParagraphStillLast(doc, structure.trailingParagraph)
 
   removeLinesegarray(doc)
 

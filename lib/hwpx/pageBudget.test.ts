@@ -14,7 +14,17 @@ const baseInput: WeeklyPageBudgetInput = {
   perfJinhaengRowCount: 1,
   expHeaderHeight: 3098,
   expRowHeight: 1992,
+  // 이 기본 입력은 공식 산술을 검증하기 위한 것이라, 2줄 필요 높이를 선언 높이와 같게 두어
+  // effectiveExpectedRowHeight = 선언 높이가 되게 한다(자동 확장 없는 상태).
+  expectedRowTwoLineHeight: 1992,
   expRowCount: 1,
+  // 표 wrapper 오버헤드 실측값(weekly.hwpx) — 수행표 282+720, 발주예상표 566+720
+  performingOutMargins: 282,
+  expectedOutMargins: 566,
+  performingWrapperSpacing: 720,
+  expectedWrapperSpacing: 720,
+  // 표 밖 마지막 문단("4) 기 타")의 줄 아래 여백 — 페이지 적합 판정에서 제외되는 값
+  trailingParagraphSpacing: 720,
 }
 
 describe('estimateWeeklyPageBudget', () => {
@@ -24,24 +34,16 @@ describe('estimateWeeklyPageBudget', () => {
     expect(result.requiredHeight).toBeLessThanOrEqual(result.usableHeight)
   })
 
-  it('경계값 — requiredHeight가 usableHeight와 정확히 같으면 예산 안에 든다(포함 경계)', () => {
+  it('경계값 — contentBottom이 usableHeight와 정확히 같으면 예산 안에 든다(포함 경계)', () => {
     const probe = estimateWeeklyPageBudget(baseInput)
-    const input: WeeklyPageBudgetInput = {
-      ...baseInput,
-      usableHeight: probe.requiredHeight, // 정확히 같게 맞춤
-    }
-    const result = estimateWeeklyPageBudget(input)
-    expect(result.requiredHeight).toBe(result.usableHeight)
+    const result = estimateWeeklyPageBudget({ ...baseInput, usableHeight: probe.contentBottom })
+    expect(result.contentBottom).toBe(result.usableHeight)
     expect(result.fitsHeightBudget).toBe(true)
   })
 
-  it('경계값 — requiredHeight가 usableHeight를 1이라도 넘으면 초과로 판정한다', () => {
+  it('경계값 — contentBottom이 usableHeight를 1이라도 넘으면 초과로 판정한다', () => {
     const probe = estimateWeeklyPageBudget(baseInput)
-    const input: WeeklyPageBudgetInput = {
-      ...baseInput,
-      usableHeight: probe.requiredHeight - 1,
-    }
-    const result = estimateWeeklyPageBudget(input)
+    const result = estimateWeeklyPageBudget({ ...baseInput, usableHeight: probe.contentBottom - 1 })
     expect(result.fitsHeightBudget).toBe(false)
   })
 
@@ -88,17 +90,309 @@ describe('estimateWeeklyPageBudget', () => {
       result.gaeyalRowsHeight +
       result.jinhaengRowsHeight +
       result.expectedHeaderHeight +
-      result.expectedRowsHeight
+      result.expectedRowsHeight +
+      result.tableOutMarginsHeight +
+      result.tableWrapperSpacingHeight
     expect(sum).toBe(result.requiredHeight)
   })
 
-  it('overflowHeight는 requiredHeight - usableHeight와 정확히 같다(초과 시 양수, 여유 시 음수)', () => {
+  it('overflowHeight는 contentBottom - usableHeight와 정확히 같다(초과 시 양수, 여유 시 음수)', () => {
     const over = estimateWeeklyPageBudget({ ...baseInput, perfGaeyalRowCount: 30, perfJinhaengRowCount: 30, expRowCount: 30 })
-    expect(over.overflowHeight).toBe(over.requiredHeight - over.usableHeight)
+    expect(over.overflowHeight).toBe(over.contentBottom - over.usableHeight)
     expect(over.overflowHeight).toBeGreaterThan(0)
 
     const under = estimateWeeklyPageBudget(baseInput)
-    expect(under.overflowHeight).toBe(under.requiredHeight - under.usableHeight)
+    expect(under.overflowHeight).toBe(under.contentBottom - under.usableHeight)
     expect(under.overflowHeight).toBeLessThanOrEqual(0)
+  })
+})
+
+// ── 표 wrapper 오버헤드 보정 ──────────────────────────────────────────────────
+//
+// 배경: hp:sz(행 높이 합)만 세면 표의 outMargin과 wrapper 문단 줄간격이 빠진다. 실측 결과
+// 수행표 1,002(282+720) + 발주예상표 1,286(566+720) = 2,288이 누락되어, 예산이 "통과"로
+// 판정한 4/6/4 + 교육 3줄이 한글에서 실제 2페이지가 되는 것을 수동 검증으로 확인했다.
+describe('표 wrapper 오버헤드가 예산에 정확히 한 번씩 반영된다', () => {
+  it('현재 템플릿 실측값 기준 wrapper overhead 합계는 2,288이다', () => {
+    const r = estimateWeeklyPageBudget(baseInput)
+    expect(r.tableOutMarginsHeight).toBe(282 + 566)
+    expect(r.tableWrapperSpacingHeight).toBe(720 + 720)
+    expect(r.tableOutMarginsHeight + r.tableWrapperSpacingHeight).toBe(2288)
+  })
+
+  it('수행표 overhead = 1,002 / 발주예상표 overhead = 1,286', () => {
+    expect(baseInput.performingOutMargins + baseInput.performingWrapperSpacing).toBe(1002)
+    expect(baseInput.expectedOutMargins + baseInput.expectedWrapperSpacing).toBe(1286)
+  })
+
+  it('outMargin을 +100 하면 requiredHeight가 정확히 +100 된다', () => {
+    const base = estimateWeeklyPageBudget(baseInput)
+    const perf = estimateWeeklyPageBudget({ ...baseInput, performingOutMargins: baseInput.performingOutMargins + 100 })
+    expect(perf.requiredHeight - base.requiredHeight).toBe(100)
+    const exp = estimateWeeklyPageBudget({ ...baseInput, expectedOutMargins: baseInput.expectedOutMargins + 100 })
+    expect(exp.requiredHeight - base.requiredHeight).toBe(100)
+  })
+
+  it('wrapper spacing을 +100 하면 requiredHeight가 정확히 +100 된다', () => {
+    const base = estimateWeeklyPageBudget(baseInput)
+    const perf = estimateWeeklyPageBudget({ ...baseInput, performingWrapperSpacing: baseInput.performingWrapperSpacing + 100 })
+    expect(perf.requiredHeight - base.requiredHeight).toBe(100)
+    const exp = estimateWeeklyPageBudget({ ...baseInput, expectedWrapperSpacing: baseInput.expectedWrapperSpacing + 100 })
+    expect(exp.requiredHeight - base.requiredHeight).toBe(100)
+  })
+
+  it('네 항목을 모두 0으로 두면 보정 이전 공식과 정확히 같아진다(중복 가산 없음)', () => {
+    const withOverhead = estimateWeeklyPageBudget(baseInput)
+    const without = estimateWeeklyPageBudget({
+      ...baseInput,
+      performingOutMargins: 0, expectedOutMargins: 0,
+      performingWrapperSpacing: 0, expectedWrapperSpacing: 0,
+    })
+    expect(withOverhead.requiredHeight - without.requiredHeight).toBe(2288)
+  })
+
+  it('wrapper vertsize 전체(표 hp:sz + outMargin)를 중복 가산하지 않는다', () => {
+    // 목표 조합(4/6/4 + 교육 4줄) 기준. 표 높이는 헤더+행 합으로만 계상되어야 하고,
+    // wrapper vertsize(=36,536 / 7,648)가 추가로 들어가면 아래 합과 어긋난다.
+    const r = estimateWeeklyPageBudget({
+      ...baseInput, fixedContentHeight: 21060, eduLineCount: 4,
+      perfGaeyalRowCount: 4, perfJinhaengRowCount: 6, expRowCount: 4,
+    })
+    const perfTableHeight = r.performingHeaderHeight + r.gaeyalRowsHeight + r.jinhaengRowsHeight
+    const expTableHeight = r.expectedHeaderHeight + r.expectedRowsHeight
+    expect(perfTableHeight).toBe(36254) // 표 hp:sz와 동일 — outMargin이 섞이지 않았다
+    expect(expTableHeight).toBe(11066)
+    expect(r.requiredHeight).toBe(21060 + 6400 + 36254 + 11066 + 848 + 1440)
+    expect(r.requiredHeight).toBe(77068)
+  })
+
+  it('실제로 2페이지였던 조합들이 보정 후 초과로 판정된다', () => {
+    // 4/6/4 + 교육 3줄 — 보정 전 73,180(통과) → 보정 후 75,468(초과 1,200)
+    const t3 = estimateWeeklyPageBudget({
+      ...baseInput, fixedContentHeight: 21060, eduLineCount: 3,
+      perfGaeyalRowCount: 4, perfJinhaengRowCount: 6, expRowCount: 4,
+    })
+    expect(t3.requiredHeight).toBe(75468)
+    expect(t3.contentBottom).toBe(74748) // 75,468 - 마지막 문단 여백 720
+    expect(t3.fitsHeightBudget).toBe(false)
+    expect(t3.overflowHeight).toBe(480)
+
+    // 4/6/3 + 교육 4줄 — 보정 전 72,788(통과) → 보정 후 75,076(초과 808)
+    const e3 = estimateWeeklyPageBudget({
+      ...baseInput, fixedContentHeight: 21060, eduLineCount: 4,
+      perfGaeyalRowCount: 4, perfJinhaengRowCount: 6, expRowCount: 3,
+    })
+    expect(e3.requiredHeight).toBe(75076)
+    expect(e3.contentBottom).toBe(74356)
+    expect(e3.fitsHeightBudget).toBe(false)
+
+    // 보정 항목을 빼면 둘 다 통과로 잘못 판정된다는 사실도 함께 고정한다.
+    for (const input of [
+      { eduLineCount: 3, expRowCount: 4 },
+      { eduLineCount: 4, expRowCount: 3 },
+    ]) {
+      const wrong = estimateWeeklyPageBudget({
+        ...baseInput, fixedContentHeight: 21060,
+        perfGaeyalRowCount: 4, perfJinhaengRowCount: 6, ...input,
+        performingOutMargins: 0, expectedOutMargins: 0,
+        performingWrapperSpacing: 0, expectedWrapperSpacing: 0,
+      })
+      expect(wrong.fitsHeightBudget).toBe(true) // ← 보정 전 공식의 오판
+    }
+  })
+})
+
+// ── 마지막 문단 여백(trailingParagraphSpacing) 보정 ────────────────────────────
+//
+// 배경: lineseg.spacing은 "줄 아래 여백"이라 중간 문단에서는 다음 문단을 밀어내지만, 문서
+// 마지막 문단의 여백은 밀어낼 대상이 없어 페이지에 들어갈 필요가 없다. 실측(weekly.hwpx
+// linesegarray)에서 마지막 문단 "4) 기 타"의 vertpos+vertsize = 70,764이고 전체 점유 합은
+// 71,484로, 차이가 정확히 그 문단의 spacing(720)이었다.
+//
+// 이 값을 빼지 않으면 실제로는 1페이지인 조합을 차단한다 — 6/6/2 + 교육 1줄이 그 사례
+// (2,288 보정만으로는 534 초과 예측이었으나 한글에서 1페이지 확인, 교육 2줄은 2페이지 확인).
+describe('마지막 문단 여백은 contentBottom에서 제외된다', () => {
+  const at = (g: number, j: number, e: number, edu: number) => estimateWeeklyPageBudget({
+    ...baseInput, fixedContentHeight: 21060, eduLineCount: edu,
+    perfGaeyalRowCount: g, perfJinhaengRowCount: j, expRowCount: e,
+  })
+
+  it('현재 템플릿 실측 trailingParagraphSpacing은 720이다', () => {
+    expect(baseInput.trailingParagraphSpacing).toBe(720)
+    expect(estimateWeeklyPageBudget(baseInput).trailingParagraphSpacing).toBe(720)
+  })
+
+  it('contentBottom = requiredHeight - trailingParagraphSpacing', () => {
+    const r = at(4, 6, 4, 4)
+    expect(r.contentBottom).toBe(r.requiredHeight - r.trailingParagraphSpacing)
+    expect(r.requiredHeight).toBe(77068)
+    expect(r.contentBottom).toBe(76348)
+  })
+
+  it('trailingParagraphSpacing을 +100 하면 contentBottom이 정확히 -100 된다', () => {
+    const base = estimateWeeklyPageBudget(baseInput)
+    const more = estimateWeeklyPageBudget({ ...baseInput, trailingParagraphSpacing: baseInput.trailingParagraphSpacing + 100 })
+    expect(more.contentBottom - base.contentBottom).toBe(-100)
+    expect(more.requiredHeight).toBe(base.requiredHeight) // 점유 합 자체는 그대로
+  })
+
+  it('trailingParagraphSpacing이 0이면 contentBottom = requiredHeight', () => {
+    const r = estimateWeeklyPageBudget({ ...baseInput, trailingParagraphSpacing: 0 })
+    expect(r.contentBottom).toBe(r.requiredHeight)
+  })
+
+  // 한글 수동 검증으로 확인된 8개 관찰과 모델이 모두 일치해야 한다.
+  it('실측 관찰과 판정이 전부 일치한다', () => {
+    const cases: Array<[string, ReturnType<typeof at>, boolean]> = [
+      ['템플릿 원본 5/5/2 교육3 (1페이지)', at(5, 5, 2, 3), true],
+      ['6/6/2 교육1 (1페이지)', at(6, 6, 2, 1), true],
+      ['6/6/2 교육2 (2페이지)', at(6, 6, 2, 2), false],
+      ['4/6/4 교육3 training3 (2페이지)', at(4, 6, 4, 3), false],
+      ['4/6/4 교육4 training4 (2페이지)', at(4, 6, 4, 4), false],
+      ['4/6/4 교육5 training5 (2페이지)', at(4, 6, 4, 5), false],
+    ]
+    for (const [label, r, expected] of cases) {
+      expect(r.fitsHeightBudget, label).toBe(expected)
+    }
+    // 경계 수치 고정
+    expect(at(6, 6, 2, 1).contentBottom).toBe(74082) // 여유 186
+    expect(at(6, 6, 2, 2).contentBottom).toBe(75682) // 초과 1,414
+    expect(at(5, 5, 2, 3).contentBottom).toBe(70764) // 템플릿 실측 하단과 일치
+  })
+
+  it('2,288 overhead 보정과 마지막 문단 보정은 서로 독립이다', () => {
+    const full = at(6, 6, 2, 1)
+    const noOverhead = estimateWeeklyPageBudget({
+      ...baseInput, fixedContentHeight: 21060, eduLineCount: 1,
+      perfGaeyalRowCount: 6, perfJinhaengRowCount: 6, expRowCount: 2,
+      performingOutMargins: 0, expectedOutMargins: 0,
+      performingWrapperSpacing: 0, expectedWrapperSpacing: 0,
+    })
+    expect(full.contentBottom - noOverhead.contentBottom).toBe(2288)
+  })
+})
+
+// ── 발주예상 데이터 행의 2줄 자동 확장 반영 ────────────────────────────────────
+//
+// HWP는 cellSz height를 최소 높이로만 쓰고 내용이 넘치면 행을 자동으로 늘린다. 발주처명이
+// 6~8자면 발주청 열(약 5자 폭)에서 2줄이 되어 선언 높이 1,700을 넘어 2,416으로 확장된다.
+// 선언 높이만 세던 기존 계산은 이 확장을 보지 못해, 예산이 통과시킨 조합이 한글에서 2페이지가
+// 됐다(11행/발주4, 10행/발주5 — UAT 확인). 아래는 그 보정을 고정한다.
+//
+// B안 템플릿 실측값: fixedContentHeight 19,460 / eduLineHeight 1,400 / 수행 헤더 3,664 /
+// 수행 데이터행 3,259 / 발주예상 헤더 3,098 / 발주예상 선언 1,700 / 2줄 필요 2,416 /
+// outMargin·wrapper spacing 0 / trailingParagraphSpacing 720
+const B_PLAN: Omit<WeeklyPageBudgetInput, 'eduLineCount' | 'perfGaeyalRowCount' | 'perfJinhaengRowCount' | 'expRowCount'> = {
+  usableHeight: 74268,
+  fixedContentHeight: 19460,
+  eduLineHeight: 1400,
+  perfHeaderHeight: 3664,
+  perfGaeyalMiddleRowHeight: 3259,
+  perfGaeyalLastRowHeight: 3259,
+  perfJinhaengRowHeight: 3259,
+  expHeaderHeight: 3098,
+  expRowHeight: 1700,
+  expectedRowTwoLineHeight: 2416,
+  performingOutMargins: 0,
+  expectedOutMargins: 0,
+  performingWrapperSpacing: 0,
+  expectedWrapperSpacing: 0,
+  trailingParagraphSpacing: 720,
+}
+const atB = (gaeyal: number, jinhaeng: number, exp: number, edu: number) =>
+  estimateWeeklyPageBudget({
+    ...B_PLAN, eduLineCount: edu,
+    perfGaeyalRowCount: gaeyal, perfJinhaengRowCount: jinhaeng, expRowCount: exp,
+  })
+
+describe('발주예상 데이터 행의 2줄 자동 확장이 예산에 반영된다', () => {
+  it('2줄 필요 높이가 선언 높이보다 크면 실효 높이로 2줄 높이를 쓴다', () => {
+    const r = atB(4, 6, 4, 4)
+    expect(r.declaredExpectedRowHeight).toBe(1700)
+    expect(r.expectedRowTwoLineHeight).toBe(2416)
+    expect(r.effectiveExpectedRowHeight).toBe(2416)
+  })
+
+  it('선언 높이가 2줄 높이보다 크면 선언 높이를 쓴다', () => {
+    const r = estimateWeeklyPageBudget({
+      ...B_PLAN, expRowHeight: 3000, eduLineCount: 4,
+      perfGaeyalRowCount: 4, perfJinhaengRowCount: 6, expRowCount: 4,
+    })
+    expect(r.effectiveExpectedRowHeight).toBe(3000)
+  })
+
+  it('두 값이 같으면 그 값을 쓴다(경계)', () => {
+    const r = estimateWeeklyPageBudget({
+      ...B_PLAN, expRowHeight: 2416, eduLineCount: 4,
+      perfGaeyalRowCount: 4, perfJinhaengRowCount: 6, expRowCount: 4,
+    })
+    expect(r.effectiveExpectedRowHeight).toBe(2416)
+  })
+
+  it('2줄 필요 높이에 마지막 줄 spacing은 포함되지 않는다 (2×1,050 + 1×316 = 2,416)', () => {
+    // 모든 spacing을 더하면 2,732가 되어 실측(UAT로 역산한 2,116~2,644)을 벗어난다.
+    expect(2 * 1050 + 1 * 316).toBe(2416)
+    expect(2 * 1050 + 2 * 316).toBe(2732)
+    expect(atB(4, 6, 4, 4).expectedRowTwoLineHeight).toBe(2416)
+  })
+
+  it('발주예상 행 수만큼 확장량이 누적된다 (행당 716)', () => {
+    const growthPerRow = 2416 - 1700
+    expect(growthPerRow).toBe(716)
+    for (const n of [1, 2, 3, 4, 5]) {
+      const withExpansion = atB(4, 6, n, 4)
+      const withoutExpansion = estimateWeeklyPageBudget({
+        ...B_PLAN, expectedRowTwoLineHeight: 0, eduLineCount: 4,
+        perfGaeyalRowCount: 4, perfJinhaengRowCount: 6, expRowCount: n,
+      })
+      expect(withExpansion.requiredHeight - withoutExpansion.requiredHeight).toBe(growthPerRow * n)
+    }
+  })
+
+  it('행 수가 0이어도 최소 1행분 실효 높이가 반영된다', () => {
+    expect(atB(4, 6, 0, 4).expectedRowsHeight).toBe(atB(4, 6, 1, 4).expectedRowsHeight)
+    expect(atB(4, 6, 0, 4).expectedRowsHeight).toBe(2416)
+  })
+
+  // UAT 실측 3건 — 이 보정이 세 결과를 모두 설명해야 한다.
+  it('UAT 3건과 판정이 일치한다', () => {
+    const target = atB(4, 6, 4, 4)   // 수행 10행 / 발주 4 / 교육 4 → 1페이지
+    expect(target.requiredHeight).toBe(74076)
+    expect(target.contentBottom).toBe(73356)
+    expect(target.fitsHeightBudget).toBe(true)
+    expect(target.usableHeight - target.contentBottom).toBe(912)
+
+    const eleven = atB(5, 6, 4, 4)   // 수행 11행 / 발주 4 / 교육 4 → 2페이지
+    expect(eleven.requiredHeight).toBe(77335)
+    expect(eleven.contentBottom).toBe(76615)
+    expect(eleven.fitsHeightBudget).toBe(false)
+    expect(eleven.overflowHeight).toBe(2347)
+
+    const fiveExp = atB(4, 6, 5, 4)  // 수행 10행 / 발주 5 / 교육 4 → 2페이지
+    expect(fiveExp.requiredHeight).toBe(76492)
+    expect(fiveExp.contentBottom).toBe(75772)
+    expect(fiveExp.fitsHeightBudget).toBe(false)
+    expect(fiveExp.overflowHeight).toBe(1504)
+  })
+
+  it('보정 없이는 세 조합이 모두 통과로 오판된다(보정이 필요했다는 증거)', () => {
+    for (const [g, j, e] of [[4, 6, 4], [5, 6, 4], [4, 6, 5]] as const) {
+      const wrong = estimateWeeklyPageBudget({
+        ...B_PLAN, expectedRowTwoLineHeight: 0, eduLineCount: 4,
+        perfGaeyalRowCount: g, perfJinhaengRowCount: j, expRowCount: e,
+      })
+      expect(wrong.fitsHeightBudget, `${g}/${j}/${e}`).toBe(true)
+    }
+  })
+
+  it('진단 세부 내역의 합이 requiredHeight와 일치한다(실효 높이 반영 후에도)', () => {
+    const r = atB(4, 6, 4, 4)
+    const sum =
+      r.fixedContentHeight + r.educationHeight +
+      r.performingHeaderHeight + r.gaeyalRowsHeight + r.jinhaengRowsHeight +
+      r.expectedHeaderHeight + r.expectedRowsHeight +
+      r.tableOutMarginsHeight + r.tableWrapperSpacingHeight
+    expect(sum).toBe(r.requiredHeight)
+    expect(r.expectedRowsHeight).toBe(4 * r.effectiveExpectedRowHeight)
   })
 })
