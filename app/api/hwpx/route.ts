@@ -16,6 +16,8 @@ import {
 } from '@/lib/hwpx/monthlyHeaderFingerprint'
 import {
   estimateMonthlyPageBudget, MONTHLY_PAGE_BUDGET_EXCEEDED_MESSAGE, MONTHLY_RENDER_SAFETY_RESERVE,
+  MONTHLY_VERIFIED_MAX_PROJECT_COUNT, MONTHLY_MAX_PROJECT_COUNT_EXCEEDED_CODE,
+  formatMonthlyMaxProjectCountExceededMessage,
   type MonthlyPageBudgetInput,
 } from '@/lib/hwpx/monthlyPageBudget'
 
@@ -37,6 +39,13 @@ class TemplateStructureError extends Error {
 // 산술 예산을 넘을 때 던진다. "1페이지를 보장한다"는 뜻이 아니라 "이 상태로는 안전하게 생성을
 // 시도하지 않는다"는 뜻이다 — 실제 페이지 수는 한글 프로그램으로 열어봐야만 확정된다.
 class PageBudgetExceededError extends Error {}
+
+// 월간 입력 건수가 "사람이 한글로 직접 열어 확인한 최대 건수"를 넘을 때 던진다.
+// PageBudgetExceededError와 의도적으로 별개다 — 산술 예산은 통과하더라도 검증되지 않은
+// 범위의 문서를 만들지 않겠다는 정책이기 때문이다(둘 중 어느 쪽에 걸렸는지 구분 가능해야 한다).
+class MonthlyProjectCountExceededError extends Error {
+  code = MONTHLY_MAX_PROJECT_COUNT_EXCEEDED_CODE
+}
 
 function getTcs(tr: any): any[] {
   return Array.from((tr.childNodes as any) || []).filter(
@@ -620,10 +629,12 @@ interface XmlElement extends XmlNode {
   appendChild(child: XmlElement): XmlElement
   removeChild(child: XmlElement): XmlElement
   cloneNode(deep: boolean): XmlElement
+  ownerDocument: XmlDocument
 }
 
 interface XmlDocument {
   getElementsByTagNameNS(namespaceURI: string, localName: string): ArrayLike<XmlElement>
+  createElementNS(namespaceURI: string, qualifiedName: string): XmlElement
 }
 
 /** 프로젝트 표의 행(<hp:tr>) 하나. */
@@ -640,7 +651,8 @@ function isXmlElement(node: XmlNode): node is XmlElement {
 function toXmlDocument(parsed: unknown): XmlDocument {
   if (
     typeof parsed !== 'object' || parsed === null ||
-    typeof (parsed as { getElementsByTagNameNS?: unknown }).getElementsByTagNameNS !== 'function'
+    typeof (parsed as { getElementsByTagNameNS?: unknown }).getElementsByTagNameNS !== 'function' ||
+    typeof (parsed as { createElementNS?: unknown }).createElementNS !== 'function'
   ) {
     throw new TemplateStructureError(
       `montly.hwpx 템플릿 구조가 예상과 다릅니다: 본문 XML(Contents/section0.xml)을 문서로 해석할 수 없습니다.`,
@@ -668,22 +680,152 @@ function elementsOf(scope: XmlDocument | XmlElement, localName: string): XmlElem
   return Array.from(scope.getElementsByTagNameNS(HP_NS, localName))
 }
 
+// ── Monthly 전용 셀 텍스트 읽기/쓰기 ─────────────────────────────────────────────
+//
+// 기존 공용 setText()는 대상 셀에 hp:t도 hp:run도 없으면 "아무 일도 하지 않고" 조용히 끝난다.
+// Weekly는 검증이 끝난 고정 템플릿 셀만 다루므로 지금까지 문제가 없었지만, Monthly는 데이터
+// 행을 복제해 임의 개수로 늘리기 때문에 복제 원본 구조가 어긋나면 값이 조용히 빠질 수 있다.
+// 그래서 Monthly는 전용 기록 함수를 쓰고, 기록 실패를 반드시 예외로 드러낸다.
+// (Weekly가 쓰는 setText/setTextMultiLine/clearCell의 동작은 그대로 두었다.)
+
+/** 셀의 문단별 텍스트를 순서대로 읽는다. 첫 hp:t만 보지 않고 문단 안의 모든 hp:t를 이어붙인다. */
+function readMonthlyCellLines(tc: XmlElement): string[] {
+  const subList = findDirectChild(tc, 'subList')
+  if (!subList) return []
+  return getDirectChildren(subList, 'p').map((p) =>
+    elementsOf(p, 't').map((t) => t.textContent ?? '').join('')
+  )
+}
+
+/** 셀 전체 텍스트. 여러 문단은 개행으로 이어 붙인다(기록 시의 multiline 정책과 대칭). */
+function readMonthlyCellText(tc: XmlElement): string {
+  return readMonthlyCellLines(tc).join('\n')
+}
+
+/** 문단 하나를 "첫 run + hp:t 1개"로 정규화하고 텍스트를 기록한다. 잔존 hp:t는 모두 제거한다. */
+function writeMonthlyParagraphText(para: XmlElement, text: string, cellLabel: string): void {
+  const runs = getDirectChildren(para, 'run')
+  if (runs.length === 0) {
+    throw new TemplateStructureError(
+      `montly.hwpx 셀 구조가 예상과 다릅니다: ${cellLabel}의 문단에 hp:run이 없어 텍스트를 기록할 수 없습니다.`,
+      'INVALID_CELL_TEXT_CONTAINER'
+    )
+  }
+  // 첫 run 외의 run에 남아 있는 텍스트 노드를 모두 제거한다(서식용 run 자체는 남긴다).
+  for (const run of runs.slice(1)) {
+    for (const t of getDirectChildren(run, 't')) run.removeChild(t)
+  }
+  const firstRun = runs[0]
+  const texts = getDirectChildren(firstRun, 't')
+  for (const extra of texts.slice(1)) firstRun.removeChild(extra)
+
+  let target = texts[0] ?? null
+  if (!target) {
+    target = para.ownerDocument.createElementNS(HP_NS, 'hp:t')
+    firstRun.appendChild(target)
+  }
+  target.textContent = text
+}
+
+// 셀 텍스트를 value로 완전히 교체한다. 빈 문자열을 넣는 경우에도 기존 텍스트가 남지 않는다.
+// 기록 후 셀 전체 텍스트가 기대값과 정확히 같은지 스스로 확인하고, 다르면 던진다 — 예상 못 한
+// 중첩 구조(예: 더 깊은 곳의 hp:t) 때문에 값이 어긋나는 경우까지 여기서 걸러진다.
+function replaceMonthlyCellText(tc: XmlElement, value: string, cellLabel: string): void {
+  const subList = findDirectChild(tc, 'subList')
+  if (!subList) {
+    throw new TemplateStructureError(
+      `montly.hwpx 셀 구조가 예상과 다릅니다: ${cellLabel}에 hp:subList가 없어 텍스트를 기록할 수 없습니다.`,
+      'INVALID_CELL_TEXT_CONTAINER'
+    )
+  }
+  const paras = getDirectChildren(subList, 'p')
+  if (paras.length === 0) {
+    throw new TemplateStructureError(
+      `montly.hwpx 셀 구조가 예상과 다릅니다: ${cellLabel}에 문단(hp:p)이 없어 텍스트를 기록할 수 없습니다.`,
+      'INVALID_CELL_TEXT_CONTAINER'
+    )
+  }
+
+  const basePara = paras[0]
+  // 첫 문단만 남기고 나머지는 제거 — 이전 값이 다른 문단에 잔존하지 않게 한다.
+  for (const p of paras.slice(1)) subList.removeChild(p)
+
+  const lines = value.split('\n')
+  writeMonthlyParagraphText(basePara, lines[0], cellLabel)
+  for (let i = 1; i < lines.length; i++) {
+    const clone = basePara.cloneNode(true)
+    writeMonthlyParagraphText(clone, lines[i], cellLabel)
+    subList.appendChild(clone)
+  }
+
+  const written = readMonthlyCellText(tc)
+  if (written !== value) {
+    throw new TemplateStructureError(
+      `montly.hwpx 셀 기록 결과가 기대값과 다릅니다: ${cellLabel} 실제=${JSON.stringify(written)} 기대=${JSON.stringify(value)}.`,
+      'CELL_TEXT_WRITE_MISMATCH'
+    )
+  }
+}
+
+// cellAddr/cellSpan/cellSz는 hp:tc의 직계 자식이다. descendant 검색을 쓰면 셀 안에 중첩 표가
+// 있을 때 그 표의 셀 속성을 잘못 읽으므로 반드시 직계로만 찾는다.
 function getCellAddr(tc: XmlElement): { rowAddr: number; colAddr: number } | null {
-  const a = elementsOf(tc, 'cellAddr')[0]
+  const a = findDirectChild(tc, 'cellAddr')
   if (!a) return null
   return { rowAddr: Number(a.getAttribute('rowAddr')), colAddr: Number(a.getAttribute('colAddr')) }
 }
 
 function getCellSpanOf(tc: XmlElement): { colSpan: number; rowSpan: number } | null {
-  const s = elementsOf(tc, 'cellSpan')[0]
+  const s = findDirectChild(tc, 'cellSpan')
   if (!s) return null
   return { colSpan: Number(s.getAttribute('colSpan') || 1), rowSpan: Number(s.getAttribute('rowSpan') || 1) }
 }
 
 function getCellHeightOf(tc: XmlElement): number | null {
-  const sz = elementsOf(tc, 'cellSz')[0]
+  const sz = findDirectChild(tc, 'cellSz')
   if (!sz) return null
   return Number(sz.getAttribute('height'))
+}
+
+// ── Monthly 전용 행 주소·높이 갱신 ────────────────────────────────────────────────
+//
+// 공용 renumberRowAddr/sumRowSpan1Heights/setTableHeight는 hp:tr을 descendant로 훑는다.
+// Weekly 템플릿에는 중첩 표가 없어 문제가 없지만, Monthly는 "셀 안에 중첩 표가 생겨도 직계
+// tr/tc 계산이 유지되어야 한다"는 계약을 갖는다(Codex P2-2). 그래서 Monthly는 아래 직계 전용
+// 버전을 쓴다 — 공용 헬퍼와 Weekly 동작은 건드리지 않는다.
+function monthlyRowHeight(tr: ProjectRowElement): number {
+  const cells = getDirectChildren(tr, 'tc')
+  if (cells.length === 0) return 0
+  // 행 높이 균일성은 assertUniformRowHeight가 이미 강제하므로 첫 셀 값을 그대로 쓸 수 있다.
+  return getCellHeightOf(cells[0]) ?? 0
+}
+
+function sumMonthlyRowHeights(tbl: XmlElement): number {
+  return getDirectChildren(tbl, 'tr').reduce((sum, tr) => sum + monthlyRowHeight(tr), 0)
+}
+
+function setMonthlyTableHeight(tbl: XmlElement, height: number): void {
+  const sz = findDirectChild(tbl, 'sz')
+  if (!sz) {
+    throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 표에 hp:sz가 없습니다.`, 'INVALID_TABLE_HEIGHT')
+  }
+  sz.setAttribute('height', String(height))
+}
+
+function renumberMonthlyRowAddr(tbl: XmlElement): void {
+  getDirectChildren(tbl, 'tr').forEach((tr, rowIdx) => {
+    getDirectChildren(tr, 'tc').forEach((tc, colIdx) => {
+      const addr = findDirectChild(tc, 'cellAddr')
+      if (!addr) {
+        throw new TemplateStructureError(
+          `montly.hwpx 템플릿 구조가 예상과 다릅니다: ${rowIdx}행 ${colIdx}열에 cellAddr가 없습니다.`,
+          'INVALID_ROW_ADDRESS'
+        )
+      }
+      addr.setAttribute('rowAddr', String(rowIdx))
+      addr.setAttribute('colAddr', String(colIdx))
+    })
+  })
 }
 
 // 표 하나(tr 전체)의 셀 높이가 예외 없이 완전히 동일한지 검증한다. 첫 셀 대표값·다수결·허용
@@ -858,6 +1000,12 @@ function assertMonthlyCalendarTableContract(calTbl: XmlElement): MonthlyCalendar
       const addr = getCellAddr(tc)
       if (!addr || addr.rowAddr !== rowIdx || addr.colAddr !== colIdx) {
         throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 달력 표 ${rowIdx}행 ${colIdx}열의 rowAddr/colAddr이 위치와 일치하지 않습니다.`, 'INVALID_ROW_ADDRESS')
+      }
+      // 달력도 프로젝트 표와 같은 1x1 계약을 요구한다 — 병합 셀이 생기면 행 높이 합산으로
+      // 계산한 calendarHeight가 실제 렌더 높이와 어긋나고, 그 값을 page budget이 그대로 쓴다.
+      const span = getCellSpanOf(tc)
+      if (!span || span.colSpan !== 1 || span.rowSpan !== 1) {
+        throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 달력 표 ${rowIdx}행 ${colIdx}열의 cellSpan이 1x1이 아닙니다.`, 'INVALID_CELL_SPAN')
       }
     })
   })
@@ -1067,27 +1215,38 @@ function normalizeMonthlyProjects(performing: unknown): MonthlyProjectRow[] {
   })
 }
 
-function fillMonthlyProjectRows(dataRows: readonly ProjectRowCells[], projects: readonly MonthlyProjectRow[]): void {
+// 한 데이터 행의 12개 열에 들어갈 값을 확정한다. 기록(fill)과 사후 검증(postcondition)이 둘 다
+// 이 함수 하나만 쓰기 때문에 "쓴 값"과 "검사하는 값"이 어긋날 수 없다.
+// project가 undefined면(0건 정책의 빈 행) 12칸 모두 빈 문자열이다.
+// 의도적으로 빈 열: 발주처·기간(개월)·쪽수·과업설명도서열람·현장조사 — 현재 입력 폼에 대응하는
+// 항목이 없어 비워 둔다. 월간 표에는 연번(번호) 열이 아예 없다(헤더 12칸 실측 확인).
+function expectedMonthlyRowTexts(project: MonthlyProjectRow | undefined): string[] {
   const IDX = MONTHLY_PROJECT_IDX
+  const values: string[] = Array.from({ length: 12 }, () => '')
+  if (!project) return values
+  values[IDX.name] = project.name
+  values[IDX.chief] = project.director
+  values[IDX.fee] = project.fee
+  values[IDX.submit] = project.submitDate
+  values[IDX.interview] = project.interviewDate
+  values[IDX.bid] = project.resultDate
+  values[IDX.note] = project.note
+  return values
+}
+
+function fillMonthlyProjectRows(dataRows: readonly ProjectRowCells[], projects: readonly MonthlyProjectRow[]): void {
   for (let i = 0; i < dataRows.length; i++) {
-    const dtcs = dataRows[i]
-    const p = projects[i]
-    if (p) {
-      setText(dtcs[IDX.name],      p.name)
-      setText(dtcs[IDX.client],    '')
-      setText(dtcs[IDX.chief],     p.director)
-      setText(dtcs[IDX.fee],       p.fee)
-      setText(dtcs[IDX.period],    '')
-      setText(dtcs[IDX.pages],     '')
-      setText(dtcs[IDX.taskDesc],  '')
-      setText(dtcs[IDX.siteCheck], '')
-      setText(dtcs[IDX.submit],    p.submitDate)
-      setText(dtcs[IDX.interview], p.interviewDate)
-      setText(dtcs[IDX.bid],       p.resultDate)
-      setTextMultiLine(dtcs[IDX.note], p.note)
-    } else {
-      for (const dtc of dtcs) clearCell(dtc)
+    const cells = dataRows[i]
+    if (cells.length !== 12) {
+      throw new TemplateStructureError(
+        `montly.hwpx 템플릿 구조가 예상과 다릅니다: ${i}번째 데이터 행의 셀 수가 12가 아니라 ${cells.length}입니다.`,
+        'INVALID_TABLE_LAYOUT'
+      )
     }
+    const values = expectedMonthlyRowTexts(projects[i])
+    cells.forEach((tc, colIdx) => {
+      replaceMonthlyCellText(tc, values[colIdx], `${i}번째 데이터 행 ${colIdx}열`)
+    })
   }
 }
 
@@ -1129,7 +1288,7 @@ function assertMonthlyPostcondition(projTbl: XmlElement, projects: readonly Mont
   if (dataHeights.some((h) => Number.isNaN(h)) || new Set(dataHeights).size > 1) {
     throw new TemplateStructureError(`생성된 문서의 데이터 행 높이가 균일하지 않습니다(실제: [${dataHeights.join(', ')}]).`, 'INVALID_POSTCONDITION')
   }
-  const headerHeight: number = rowHeight(rows[0])
+  const headerHeight = monthlyRowHeight(rows[0])
   const computedHeight = headerHeight + dataHeights.reduce((s, h) => s + h, 0)
   const sz = findDirectChild(projTbl, 'sz')
   const declaredHeight = Number(sz?.getAttribute('height'))
@@ -1137,19 +1296,22 @@ function assertMonthlyPostcondition(projTbl: XmlElement, projects: readonly Mont
     throw new TemplateStructureError(`생성된 문서의 hp:sz(${declaredHeight})가 실제 행 높이 합(${computedHeight})과 다릅니다.`, 'INVALID_POSTCONDITION')
   }
 
+  // 프로젝트명만 보지 않고 12개 직계 셀 전체 텍스트를 기대값과 정확히 비교한다.
+  // readMonthlyCellText는 문단 안의 모든 hp:t를 이어붙이고 여러 문단은 개행으로 잇기 때문에,
+  // 첫 hp:t만 갱신되고 뒤에 잔존 텍스트가 남은 경우도 여기서 불일치로 드러난다.
+  // 빈 행(0건 정책)도 12칸 전부 빈 값인지 같은 방식으로 확인한다.
   dataRows.forEach((tr, i) => {
     const cells = getDirectChildren(tr, 'tc')
-    const project = projects[i]
-    if (project) {
-      if (getText(cells[MONTHLY_PROJECT_IDX.name]) !== project.name) {
-        throw new TemplateStructureError(`생성된 문서의 ${i}번째 데이터 행 프로젝트명이 입력 순서와 일치하지 않습니다.`, 'INVALID_POSTCONDITION')
+    const expected = expectedMonthlyRowTexts(projects[i])
+    cells.forEach((tc, colIdx) => {
+      const actual = readMonthlyCellText(tc)
+      if (actual !== expected[colIdx]) {
+        throw new TemplateStructureError(
+          `생성된 문서의 ${i}번째 데이터 행 ${colIdx}열 텍스트가 기대값과 다릅니다: 실제=${JSON.stringify(actual)} 기대=${JSON.stringify(expected[colIdx])}.`,
+          'INVALID_POSTCONDITION'
+        )
       }
-    } else {
-      const allEmpty = cells.every((tc) => getText(tc).trim() === '')
-      if (!allEmpty) {
-        throw new TemplateStructureError(`생성된 문서의 ${i}번째 빈 데이터 행에 값이 남아 있습니다.`, 'INVALID_POSTCONDITION')
-      }
-    }
+    })
   })
 }
 
@@ -1161,8 +1323,10 @@ interface MonthlyGenerationRequest {
   asOfDate?: unknown
 }
 
+// 템플릿을 경로가 아니라 이미 읽은 버퍼로 받는다 — 호출자(POST)가 파일 읽기를 담당하므로
+// 테스트가 변형된 템플릿을 주입할 때 실제 파일을 건드릴 필요가 없다(Weekly는 기존 경로 방식 유지).
 async function generateMonthly(
-  templatePath: string,
+  templateBuffer: Buffer,
   data: MonthlyGenerationRequest
 ): Promise<Buffer> {
   // 날짜 계약 해석과 입력 정규화는 ZIP을 열기 전에 먼저 한다 — 요청 자체가 잘못됐다면 템플릿을
@@ -1172,18 +1336,30 @@ async function generateMonthly(
   })
   const projects: MonthlyProjectRow[] = normalizeMonthlyProjects(data.performing)
 
+  // 제한 1 — 수동 검증된 최대 건수. 아래 page budget 검사와 별개이며 먼저 판정한다.
+  // 산술 예산에는 들어도(예: renderSafetyReserve를 줄이면 24건도 계산상 들어간다) 사람이 한글로
+  // 확인하지 않은 범위의 문서는 만들지 않는다. 템플릿을 읽기도 전에 걸러낸다.
+  if (projects.length > MONTHLY_VERIFIED_MAX_PROJECT_COUNT) {
+    console.error('[Monthly HWPX Max Project Count Exceeded]', {
+      code: MONTHLY_MAX_PROJECT_COUNT_EXCEEDED_CODE,
+      actual: projects.length, verifiedMax: MONTHLY_VERIFIED_MAX_PROJECT_COUNT,
+    })
+    throw new MonthlyProjectCountExceededError(formatMonthlyMaxProjectCountExceededMessage(projects.length))
+  }
+
   const AdmZip = (await import('adm-zip')).default
   const { DOMParser, XMLSerializer } = await import('@xmldom/xmldom')
 
-  const zip = new AdmZip(templatePath)
+  const zip = new AdmZip(templateBuffer)
   const xml = zip.readAsText('Contents/section0.xml')
   const doc = toXmlDocument(new DOMParser().parseFromString(xml, 'text/xml'))
 
   const structure = assertMonthlyTemplateStructure(doc)
 
-  // 자동 문서 높이 예산 확인 — 행을 실제로 만들거나 데이터를 채우기 전에 먼저 판정한다.
-  // renderSafetyReserve는 한글 수동 경계 검증(0/13/20/23건)으로 확정된 값이다 —
-  // 근거는 lib/hwpx/monthlyPageBudget.ts의 MONTHLY_RENDER_SAFETY_RESERVE 주석 참고.
+  // 제한 2 — 템플릿 실측치 기반 높이 예산. 위 최대 건수 정책과 합치지 않는다: 최대 건수 이내라도
+  // 템플릿이 바뀌어(고정 콘텐츠 증가 등) 예산이 안 맞으면 여기서 별도 사유로 거절해야 한다.
+  // 행을 실제로 만들거나 데이터를 채우기 전에 판정한다. renderSafetyReserve는 한글 수동 경계
+  // 검증(0/13/20/23건)으로 확정된 값 — 근거는 lib/hwpx/monthlyPageBudget.ts 주석 참고.
   const budget = estimateMonthlyPageBudget({
     pageHeight: structure.measurements.pageHeight,
     topMargin: structure.measurements.topMargin,
@@ -1204,9 +1380,9 @@ async function generateMonthly(
 
   // 프로젝트 표를 실제 건수에 맞춰 재구성 — rowAddr·rowCnt·표 높이까지 함께 갱신.
   const newDataRows = rebuildMonthlyProjectRows(structure.projTbl, structure.dataRows, structure.dataRowTemplate, projects.length)
-  renumberRowAddr(structure.projTbl)
+  renumberMonthlyRowAddr(structure.projTbl)
   structure.projTbl.setAttribute('rowCnt', String(getDirectChildren(structure.projTbl, 'tr').length))
-  setTableHeight(structure.projTbl, sumRowSpan1Heights(structure.projTbl))
+  setMonthlyTableHeight(structure.projTbl, sumMonthlyRowHeights(structure.projTbl))
 
   fillMonthlyProjectRows(newDataRows, projects)
 
@@ -1254,7 +1430,7 @@ export async function POST(req: NextRequest) {
     let reportDateForFilename: MonthlyReportDate | null = null
     try {
       if (type === 'monthly') {
-        buffer = await generateMonthly(templatePath, { performing, reportYear, reportMonth, asOfDate })
+        buffer = await generateMonthly(fs.readFileSync(templatePath), { performing, reportYear, reportMonth, asOfDate })
         reportDateForFilename = parseMonthlyReportDate({ reportYear, reportMonth, asOfDate })
       } else {
         buffer = await generateWeekly(templatePath, { week, performing, expected, meta })
@@ -1269,6 +1445,11 @@ export async function POST(req: NextRequest) {
           { error: '문서 양식이 예상 구조와 달라 생성할 수 없습니다. 관리자에게 문의하세요.' },
           { status: 500 }
         )
+      }
+      // 최대 건수 정책 위반과 높이 예산 초과는 둘 다 400이지만 사유가 다르다 — 코드를 함께
+      // 실어 클라이언트·로그에서 구분할 수 있게 한다.
+      if (err instanceof MonthlyProjectCountExceededError) {
+        return NextResponse.json({ error: err.message, code: err.code }, { status: 400 })
       }
       if (err instanceof PageBudgetExceededError) {
         return NextResponse.json({ error: err.message }, { status: 400 })

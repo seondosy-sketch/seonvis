@@ -1,12 +1,17 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- route.ts 자체가 @ts-nocheck로 처리하는
    xmldom(타입 미비 라이브러리) DOM 순회를 그대로 검증하는 테스트라 동일하게 any를 쓴다. */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeAll, afterEach, afterAll } from 'vitest'
 import path from 'node:path'
+import fs from 'node:fs'
 import AdmZip from 'adm-zip'
-import { DOMParser } from '@xmldom/xmldom'
+import { DOMParser, XMLSerializer } from '@xmldom/xmldom'
 import { POST } from './route'
 import { PAGE_BUDGET_EXCEEDED_MESSAGE } from '@/lib/hwpx/pageBudget'
-import { MONTHLY_PAGE_BUDGET_EXCEEDED_MESSAGE, MONTHLY_VERIFIED_MAX_PROJECT_COUNT } from '@/lib/hwpx/monthlyPageBudget'
+import {
+  MONTHLY_PAGE_BUDGET_EXCEEDED_MESSAGE, MONTHLY_VERIFIED_MAX_PROJECT_COUNT,
+  MONTHLY_MAX_PROJECT_COUNT_EXCEEDED_CODE, formatMonthlyMaxProjectCountExceededMessage,
+  estimateMonthlyPageBudget,
+} from '@/lib/hwpx/monthlyPageBudget'
 
 // route.ts는 POST()만 export한다(불필요한 내부 함수 export를 피하기 위해). 이 테스트는 실제
 // 프로덕션 핸들러를 최소 mock request로 직접 호출해서 검증한다 — Next 서버를 띄울 필요가 없다.
@@ -156,24 +161,35 @@ function getMonthlyProjectTable(doc: any): any {
 // 데이터 행 수가 max(count,1)과 일치, 각 셀 1x1 span, hp:sz height가 실측 행 높이 합과 일치.
 function assertMonthlyDynamicXmlContract(doc: any, expectedCount: number) {
   const projTbl = getMonthlyProjectTable(doc)
-  const rows: any[] = Array.from(projTbl.getElementsByTagNameNS(HP_NS, 'tr') as any[])
+  // 직계 자식 tr만 센다 — 셀 안에 중첩 표가 있어도 바깥 표의 행 수 계약이 유지되는지 확인해야
+  // 하므로, descendant 검색(getElementsByTagNameNS)을 쓰면 안 된다.
+  const rows: any[] = Array.from(projTbl.childNodes || []).filter((n: any) => n.nodeType === 1 && n.localName === 'tr')
   expect(Number(projTbl.getAttribute('rowCnt'))).toBe(rows.length)
   expect(rows.length - 1).toBe(Math.max(expectedCount, 1))
+
+  // cellAddr/cellSpan/cellSz도 반드시 직계 자식으로 찾는다. 실측 확인 결과 hp:tc의 자식 순서는
+  // subList가 cellAddr보다 앞이므로, descendant 검색을 쓰면 셀 안 중첩 표의 cellAddr을 먼저
+  // 집어 잘못된 값을 읽는다(프로덕션 코드도 같은 이유로 직계 검색만 쓴다).
+  const directChild = (parent: any, localName: string): any =>
+    Array.from(parent.childNodes || []).find((n: any) => n.nodeType === 1 && n.localName === localName)
 
   rows.forEach((tr, rowIdx) => {
     const tcs = getTcs(tr)
     expect(tcs.length).toBe(12)
     tcs.forEach((tc: any, colIdx: number) => {
-      const addr = tc.getElementsByTagNameNS(HP_NS, 'cellAddr')[0]
+      const addr = directChild(tc, 'cellAddr')
       expect(Number(addr.getAttribute('rowAddr'))).toBe(rowIdx)
       expect(Number(addr.getAttribute('colAddr'))).toBe(colIdx)
-      const span = tc.getElementsByTagNameNS(HP_NS, 'cellSpan')[0]
+      const span = directChild(tc, 'cellSpan')
       expect(Number(span.getAttribute('colSpan'))).toBe(1)
       expect(Number(span.getAttribute('rowSpan'))).toBe(1)
     })
   })
 
-  const sum = rows.reduce((s, tr) => s + rowHeight(tr), 0)
+  const sum = rows.reduce(
+    (s, tr) => s + Number(directChild(getTcs(tr)[0], 'cellSz').getAttribute('height')),
+    0
+  )
   expect(tableSzHeight(projTbl)).toBe(sum)
 }
 
@@ -490,10 +506,10 @@ describe('POST /api/hwpx — 월간 동적 행 재구성 (프로젝트 표)', ()
     expect(all).not.toContain('건설사업관리용역')
   })
 
-  it('프로젝트 수가 계속 늘어나면 어느 지점부터는 반드시 예산을 초과해 400을 반환한다(경계 존재 확인)', async () => {
+  it('프로젝트 수가 계속 늘어나면 어느 지점부터는 반드시 400을 반환한다(경계 존재 확인)', async () => {
     let lastOk = -1
     let firstFail = -1
-    for (let n = 1; n <= 60; n++) {
+    for (let n = 1; n <= 30; n++) {
       const performing = Array.from({ length: n }, (_, i) => perfItem('개찰', `월${i + 1}`))
       const res: any = await POST(mockRequest(monthlyReq(performing)))
       if (res.status === 200) {
@@ -505,38 +521,67 @@ describe('POST /api/hwpx — 월간 동적 행 재구성 (프로젝트 표)', ()
     }
     // 원래 템플릿 용량(11건)은 반드시 통과해야 한다 — 그 이하에서 막히면 회귀.
     expect(lastOk).toBeGreaterThanOrEqual(11)
-    expect(firstFail).toBeGreaterThan(lastOk)
+    expect(lastOk).toBe(MONTHLY_VERIFIED_MAX_PROJECT_COUNT)
+    expect(firstFail).toBe(MONTHLY_VERIFIED_MAX_PROJECT_COUNT + 1)
+  })
+})
+
+// ── P1-1: 최대 건수 정책이 실제 요청 경로에 고정되어 있는지 ─────────────────────────────
+describe('POST /api/hwpx — 월간 최대 건수 정책(수동 검증 범위)', () => {
+  const make = (n: number) => Array.from({ length: n }, (_, i) => perfItem('개찰', `월${i + 1}`))
+
+  it(`${MONTHLY_VERIFIED_MAX_PROJECT_COUNT}건은 최대 건수 정책과 페이지 예산을 모두 통과해 생성된다`, async () => {
+    const res: any = await POST(mockRequest(monthlyReq(make(MONTHLY_VERIFIED_MAX_PROJECT_COUNT))))
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('application/zip')
+    const { doc } = await toZipDoc(res)
+    assertMonthlyDynamicXmlContract(doc, MONTHLY_VERIFIED_MAX_PROJECT_COUNT)
+    const all = getAllText(doc).join('|')
+    for (let i = 1; i <= MONTHLY_VERIFIED_MAX_PROJECT_COUNT; i++) expect(all).toContain(`월${i}`)
   })
 
-  it('예산을 초과하면 문서를 생성하지 않고 400과 월간 전용 예산 초과 메시지를 반환한다', async () => {
-    const performing = Array.from({ length: 60 }, (_, i) => perfItem('개찰', `월${i + 1}`))
-    const res: any = await POST(mockRequest(monthlyReq(performing)))
+  it(`${MONTHLY_VERIFIED_MAX_PROJECT_COUNT + 1}건은 최대 건수 정책으로 400이며 ZIP이 아니다`, async () => {
+    const res: any = await POST(mockRequest(monthlyReq(make(MONTHLY_VERIFIED_MAX_PROJECT_COUNT + 1))))
     expect(res.status).toBe(400)
     const contentType = res.headers.get('content-type') || ''
     expect(contentType).toContain('application/json')
     expect(contentType).not.toContain('application/zip')
-    const json = await res.json()
-    expect(json.error).toBe(MONTHLY_PAGE_BUDGET_EXCEEDED_MESSAGE)
+    const buf = Buffer.from(await res.arrayBuffer())
+    expect(buf.subarray(0, 2).toString('latin1')).not.toBe('PK') // ZIP 시그니처 없음
   })
 
-  // 수동 한글 검증으로 확정된 경계 잠금 — manual-review/monthly-dynamic-23.hwpx를 한글에서
-  // 열어 "한 페이지 유지 / 달력 같은 페이지 유지"까지 정상 확인한 값이 23건이다.
-  it(`확정된 최대 건수(${MONTHLY_VERIFIED_MAX_PROJECT_COUNT}건)는 생성되고, 1건 더(${MONTHLY_VERIFIED_MAX_PROJECT_COUNT + 1}건) 넣으면 차단된다`, async () => {
-    const make = (n: number) => Array.from({ length: n }, (_, i) => perfItem('개찰', `월${i + 1}`))
+  it('최대 건수 초과 응답은 예산 초과 응답과 코드·메시지로 구분된다', async () => {
+    const res: any = await POST(mockRequest(monthlyReq(make(MONTHLY_VERIFIED_MAX_PROJECT_COUNT + 1))))
+    const json = await res.json()
+    expect(json.code).toBe(MONTHLY_MAX_PROJECT_COUNT_EXCEEDED_CODE)
+    expect(json.error).toBe(formatMonthlyMaxProjectCountExceededMessage(MONTHLY_VERIFIED_MAX_PROJECT_COUNT + 1))
+    expect(json.error).toContain(`최대 프로젝트 수 ${MONTHLY_VERIFIED_MAX_PROJECT_COUNT}건을 초과`)
+    // 예산 초과 메시지와 반드시 다른 문구여야 한다(두 제한이 합쳐지지 않았다는 증거).
+    expect(json.error).not.toBe(MONTHLY_PAGE_BUDGET_EXCEEDED_MESSAGE)
+  })
 
-    const ok: any = await POST(mockRequest(monthlyReq(make(MONTHLY_VERIFIED_MAX_PROJECT_COUNT))))
-    expect(ok.status).toBe(200)
-    expect(ok.headers.get('content-type')).toContain('application/zip')
-    const { doc } = await toZipDoc(ok)
-    assertMonthlyDynamicXmlContract(doc, MONTHLY_VERIFIED_MAX_PROJECT_COUNT)
-    const all = getAllText(doc).join('|')
-    for (let i = 1; i <= MONTHLY_VERIFIED_MAX_PROJECT_COUNT; i++) expect(all).toContain(`월${i}`)
+  // 두 제한이 독립임을 보이는 핵심 테스트: renderSafetyReserve를 0으로 낮추면 24건은 산술
+  // 예산상 "들어간다". 그래도 요청 경로는 최대 건수 정책으로 막는다.
+  it('페이지 예산상으로는 24건이 들어가는 설정이어도, 최대 건수 정책이 독립적으로 차단한다', async () => {
+    const budgetAt24WithoutReserve = estimateMonthlyPageBudget({
+      pageHeight: 84188, topMargin: 2835, bottomMargin: 1417,
+      fixedContentHeight: 4604, projectHeaderHeight: 2502, projectRowHeight: 1818,
+      projectRowCount: MONTHLY_VERIFIED_MAX_PROJECT_COUNT + 1,
+      calendarHeight: 25014, objectMargins: 848, calendarVertOffset: 474,
+      renderSafetyReserve: 0,
+    })
+    expect(budgetAt24WithoutReserve.fits).toBe(true) // 예산 단독으로는 24건이 통과하는 조건
 
-    const over: any = await POST(mockRequest(monthlyReq(make(MONTHLY_VERIFIED_MAX_PROJECT_COUNT + 1))))
-    expect(over.status).toBe(400)
-    expect(over.headers.get('content-type')).toContain('application/json')
-    expect(over.headers.get('content-type')).not.toContain('application/zip')
-    expect((await over.json()).error).toBe(MONTHLY_PAGE_BUDGET_EXCEEDED_MESSAGE)
+    const res: any = await POST(mockRequest(monthlyReq(make(MONTHLY_VERIFIED_MAX_PROJECT_COUNT + 1))))
+    expect(res.status).toBe(400)
+    expect((await res.json()).code).toBe(MONTHLY_MAX_PROJECT_COUNT_EXCEEDED_CODE)
+  })
+
+  it('최대 건수를 크게 넘는 60건도 최대 건수 정책으로 차단되고 파일이 생성되지 않는다', async () => {
+    const res: any = await POST(mockRequest(monthlyReq(make(60))))
+    expect(res.status).toBe(400)
+    expect(res.headers.get('content-type')).toContain('application/json')
+    expect((await res.json()).code).toBe(MONTHLY_MAX_PROJECT_COUNT_EXCEEDED_CODE)
   })
 })
 
@@ -705,5 +750,505 @@ describe('weekly.hwpx / montly.hwpx 템플릿 구조 계약', () => {
     const calendarTbl: any = tbls[1]
     expect(Number(calendarTbl.getAttribute('rowCnt'))).toBe(4)
     expect(Number(calendarTbl.getAttribute('colCnt'))).toBe(7)
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════════
+// montly.hwpx Template Contract 통합 검증 (Codex 감사 P1-2 / P2-1 / P2-2)
+//
+// 실제 montly.hwpx의 section0.xml을 메모리에서 변형해 프로덕션 POST 경로에 그대로 통과시킨다.
+// 변형본은 fs.readFileSync를 가로채 주입한다 — 커밋된 템플릿 파일을 절대 건드리지 않으므로
+// 테스트가 중간에 끊겨도 리포지토리가 오염되지 않고, 병렬 실행 경쟁 상태도 생기지 않는다.
+// (라우트는 Monthly 템플릿을 fs.readFileSync로 읽어 버퍼로 넘기므로 이 지점이 유일한 경계다.)
+// ════════════════════════════════════════════════════════════════════════════════
+describe('montly.hwpx Template Contract 통합 검증 (변형 템플릿 주입)', () => {
+  const templatePath = path.join(process.cwd(), 'lib', 'templates', 'montly.hwpx')
+  let originalTemplate: Buffer
+
+  beforeAll(() => { originalTemplate = fs.readFileSync(templatePath) })
+  afterEach(() => { vi.restoreAllMocks() })
+  afterAll(() => { vi.restoreAllMocks() })
+
+  function directChildren(parent: any, localName: string): any[] {
+    return Array.from(parent.childNodes || []).filter((n: any) => n.nodeType === 1 && n.localName === localName)
+  }
+  function projectTableOf(doc: any): any {
+    return Array.from(doc.getElementsByTagNameNS(HP_NS, 'tbl') as any[])
+      .find((t: any) => Number(t.getAttribute('colCnt')) === 12)
+  }
+  function calendarTableOf(doc: any): any {
+    return Array.from(doc.getElementsByTagNameNS(HP_NS, 'tbl') as any[])
+      .find((t: any) => Number(t.getAttribute('colCnt')) === 7)
+  }
+  function firstDataRowCell(doc: any, colIdx: number): any {
+    const rows = directChildren(projectTableOf(doc), 'tr')
+    return directChildren(rows[1], 'tc')[colIdx]
+  }
+  function cellSubList(tc: any): any {
+    return directChildren(tc, 'subList')[0]
+  }
+
+  // 변형된 템플릿 버퍼를 만든다(디스크에 쓰지 않는다).
+  function buildMutatedTemplate(mutate: (doc: any) => void): Buffer {
+    const zip = new AdmZip(originalTemplate)
+    const doc: any = new DOMParser().parseFromString(zip.readAsText('Contents/section0.xml'), 'text/xml')
+    mutate(doc)
+    zip.updateFile('Contents/section0.xml', Buffer.from(new XMLSerializer().serializeToString(doc), 'utf8'))
+    return zip.toBuffer()
+  }
+
+  // 라우트가 월간 템플릿을 읽는 fs.readFileSync 호출만 변형본으로 바꿔치기한다.
+  // 다른 경로의 readFileSync는 원래 동작을 그대로 위임한다.
+  function injectMutatedTemplate(mutate: (doc: any) => void): void {
+    const mutated = buildMutatedTemplate(mutate)
+    const realReadFileSync = fs.readFileSync
+    vi.spyOn(fs, 'readFileSync').mockImplementation(((p: any, ...rest: any[]) => {
+      if (typeof p === 'string' && path.resolve(p) === path.resolve(templatePath)) return mutated
+      return (realReadFileSync as any)(p, ...rest)
+    }) as any)
+  }
+
+  async function postWithMutatedTemplate(mutate: (doc: any) => void, body?: any) {
+    injectMutatedTemplate(mutate)
+    return (await POST(mockRequest(body ?? monthlyReq([perfItem('개찰', 'A용역')])))) as any
+  }
+
+  // 구조 위반은 전부 "500 + JSON + ZIP 아님 + HWPX 일부 바이트 미반환"이어야 한다.
+  async function expectStructureRejection(res: any) {
+    expect(res.status).toBe(500)
+    const contentType = res.headers.get('content-type') || ''
+    expect(contentType).toContain('application/json')
+    expect(contentType).not.toContain('application/zip')
+    const buf = Buffer.from(await res.arrayBuffer())
+    expect(buf.subarray(0, 2).toString('latin1')).not.toBe('PK')
+    expect(buf.length).toBeLessThan(1024)
+    expect(JSON.parse(buf.toString('utf8')).error)
+      .toBe('문서 양식이 예상 구조와 달라 생성할 수 없습니다. 관리자에게 문의하세요.')
+  }
+
+  it('하베스 정상 동작 확인: 변형 없이 주입하면 200 ZIP', async () => {
+    const res = await postWithMutatedTemplate(() => {})
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('application/zip')
+  })
+
+  // ── 표 식별: 후보 0개 / 2개 / 순서 역전 / 중첩 표 ──────────────────────────────
+  it('프로젝트 표 후보 0개(헤더 fingerprint 훼손) → 거절', async () => {
+    await expectStructureRejection(await postWithMutatedTemplate((doc) => {
+      const header = directChildren(projectTableOf(doc), 'tr')[0]
+      directChildren(header, 'tc')[0].getElementsByTagNameNS(HP_NS, 't')[0].textContent = '전혀 다른 헤더'
+    }))
+  })
+
+  it('프로젝트 표 후보 2개(같은 표 복제) → 거절', async () => {
+    await expectStructureRejection(await postWithMutatedTemplate((doc) => {
+      const projTbl = projectTableOf(doc)
+      projTbl.parentNode.appendChild(projTbl.cloneNode(true))
+    }))
+  })
+
+  it('달력 표 후보 0개(요일 헤더 훼손) → 거절', async () => {
+    await expectStructureRejection(await postWithMutatedTemplate((doc) => {
+      const header = directChildren(calendarTableOf(doc), 'tr')[0]
+      directChildren(header, 'tc')[0].getElementsByTagNameNS(HP_NS, 't')[0].textContent = 'XX'
+    }))
+  })
+
+  it('달력 표 후보 2개(같은 표 복제) → 거절', async () => {
+    await expectStructureRejection(await postWithMutatedTemplate((doc) => {
+      const calTbl = calendarTableOf(doc)
+      calTbl.parentNode.appendChild(calTbl.cloneNode(true))
+    }))
+  })
+
+  it('프로젝트 표와 달력 표의 문서 순서가 역전되면 → 거절', async () => {
+    await expectStructureRejection(await postWithMutatedTemplate((doc) => {
+      const calTbl = calendarTableOf(doc)
+      const projWrapperRun = projectTableOf(doc).parentNode
+      calTbl.parentNode.removeChild(calTbl)
+      projWrapperRun.insertBefore(calTbl, projectTableOf(doc))
+    }))
+  })
+
+  it('데이터 행 셀 안에 중첩 표가 있어도 직계 tr/tc 계산이 유지되어 정상 생성된다', async () => {
+    const res = await postWithMutatedTemplate((doc) => {
+      // 복제 원본이 되는 첫 데이터 행의 첫 셀에 1x1 중첩 표를 심는다. descendant 검색이라면
+      // 행·셀 수와 rowAddr 재부여가 오염되지만, 직계 전용 계산이면 영향이 없어야 한다.
+      const subList = cellSubList(firstDataRowCell(doc, 0))
+      const nested = doc.createElementNS(HP_NS, 'hp:tbl')
+      nested.setAttribute('rowCnt', '1')
+      nested.setAttribute('colCnt', '1')
+      const ntr = doc.createElementNS(HP_NS, 'hp:tr')
+      const ntc = doc.createElementNS(HP_NS, 'hp:tc')
+      const naddr = doc.createElementNS(HP_NS, 'hp:cellAddr')
+      naddr.setAttribute('rowAddr', '0')
+      naddr.setAttribute('colAddr', '0')
+      ntc.appendChild(naddr)
+      ntr.appendChild(ntc)
+      nested.appendChild(ntr)
+      directChildren(subList, 'p')[0].appendChild(nested)
+    }, monthlyReq([perfItem('개찰', 'A용역'), perfItem('개찰', 'B용역')]))
+
+    expect(res.status).toBe(200)
+    const { doc } = await toZipDoc(res)
+    // 바깥 프로젝트 표의 직계 행/셀 수와 주소가 정상이어야 한다.
+    assertMonthlyDynamicXmlContract(doc, 2)
+    const all = getAllText(doc).join('|')
+    expect(all).toContain('A용역')
+    expect(all).toContain('B용역')
+  })
+
+  // ── 프로젝트 표 계약 위반 ────────────────────────────────────────────────────
+  it('프로젝트 표 rowCnt 불일치 → 거절', async () => {
+    await expectStructureRejection(await postWithMutatedTemplate((doc) => {
+      projectTableOf(doc).setAttribute('rowCnt', '99')
+    }))
+  })
+
+  it('프로젝트 표 rowAddr 불일치 → 거절', async () => {
+    await expectStructureRejection(await postWithMutatedTemplate((doc) => {
+      firstDataRowCell(doc, 0).getElementsByTagNameNS(HP_NS, 'cellAddr')[0].setAttribute('rowAddr', '7')
+    }))
+  })
+
+  it('프로젝트 표 colAddr 불일치 → 거절', async () => {
+    await expectStructureRejection(await postWithMutatedTemplate((doc) => {
+      firstDataRowCell(doc, 3).getElementsByTagNameNS(HP_NS, 'cellAddr')[0].setAttribute('colAddr', '9')
+    }))
+  })
+
+  it('프로젝트 표 cellSpan 불일치(colSpan=2) → 거절', async () => {
+    await expectStructureRejection(await postWithMutatedTemplate((doc) => {
+      firstDataRowCell(doc, 0).getElementsByTagNameNS(HP_NS, 'cellSpan')[0].setAttribute('colSpan', '2')
+    }))
+  })
+
+  it('프로젝트 표 cellSpan 불일치(rowSpan=2) → 거절', async () => {
+    await expectStructureRejection(await postWithMutatedTemplate((doc) => {
+      firstDataRowCell(doc, 0).getElementsByTagNameNS(HP_NS, 'cellSpan')[0].setAttribute('rowSpan', '2')
+    }))
+  })
+
+  it('프로젝트 데이터 행 안에서 셀 높이가 하나만 달라도 → 거절', async () => {
+    await expectStructureRejection(await postWithMutatedTemplate((doc) => {
+      firstDataRowCell(doc, 5).getElementsByTagNameNS(HP_NS, 'cellSz')[0].setAttribute('height', '1234')
+    }))
+  })
+
+  it('프로젝트 데이터 행끼리 높이가 다르면 → 거절', async () => {
+    await expectStructureRejection(await postWithMutatedTemplate((doc) => {
+      const rows = directChildren(projectTableOf(doc), 'tr')
+      for (const tc of directChildren(rows[2], 'tc')) {
+        tc.getElementsByTagNameNS(HP_NS, 'cellSz')[0].setAttribute('height', '2222')
+      }
+    }))
+  })
+
+  it('프로젝트 표 pageBreak 변경 → 거절', async () => {
+    await expectStructureRejection(await postWithMutatedTemplate((doc) => {
+      projectTableOf(doc).setAttribute('pageBreak', 'TABLE')
+    }))
+  })
+
+  it('프로젝트 표 treatAsChar 변경 → 거절', async () => {
+    await expectStructureRejection(await postWithMutatedTemplate((doc) => {
+      directChildren(projectTableOf(doc), 'pos')[0].setAttribute('treatAsChar', '0')
+    }))
+  })
+
+  // ── 달력 표 계약 위반 (P2-1: cellSpan 포함) ───────────────────────────────────
+  it('달력 헤더 셀 colSpan 변경 → 거절', async () => {
+    await expectStructureRejection(await postWithMutatedTemplate((doc) => {
+      const header = directChildren(calendarTableOf(doc), 'tr')[0]
+      directChildren(header, 'tc')[0].getElementsByTagNameNS(HP_NS, 'cellSpan')[0].setAttribute('colSpan', '2')
+    }))
+  })
+
+  it('달력 날짜 셀 rowSpan 변경 → 거절', async () => {
+    await expectStructureRejection(await postWithMutatedTemplate((doc) => {
+      const rows = directChildren(calendarTableOf(doc), 'tr')
+      directChildren(rows[2], 'tc')[3].getElementsByTagNameNS(HP_NS, 'cellSpan')[0].setAttribute('rowSpan', '2')
+    }))
+  })
+
+  it('달력 표 rowCnt 불일치 → 거절', async () => {
+    await expectStructureRejection(await postWithMutatedTemplate((doc) => {
+      calendarTableOf(doc).setAttribute('rowCnt', '5')
+    }))
+  })
+
+  it('달력 표 rowAddr 불일치 → 거절', async () => {
+    await expectStructureRejection(await postWithMutatedTemplate((doc) => {
+      const rows = directChildren(calendarTableOf(doc), 'tr')
+      directChildren(rows[1], 'tc')[2].getElementsByTagNameNS(HP_NS, 'cellAddr')[0].setAttribute('rowAddr', '3')
+    }))
+  })
+
+  it('달력 표 vertOffset 변경 → 거절', async () => {
+    await expectStructureRejection(await postWithMutatedTemplate((doc) => {
+      directChildren(calendarTableOf(doc), 'pos')[0].setAttribute('vertOffset', '999')
+    }))
+  })
+
+  it('달력 표 pageBreak 변경 → 거절', async () => {
+    await expectStructureRejection(await postWithMutatedTemplate((doc) => {
+      calendarTableOf(doc).setAttribute('pageBreak', 'CELL')
+    }))
+  })
+
+  it('달력 표 treatAsChar 변경 → 거절', async () => {
+    await expectStructureRejection(await postWithMutatedTemplate((doc) => {
+      directChildren(calendarTableOf(doc), 'pos')[0].setAttribute('treatAsChar', '0')
+    }))
+  })
+
+  it('달력 표 hp:sz가 검증된 행 높이 합과 다르면 → 거절', async () => {
+    await expectStructureRejection(await postWithMutatedTemplate((doc) => {
+      directChildren(calendarTableOf(doc), 'sz')[0].setAttribute('height', '1')
+    }))
+  })
+
+  it('달력 날짜 행 높이가 실측값과 다르면 → 거절', async () => {
+    await expectStructureRejection(await postWithMutatedTemplate((doc) => {
+      const rows = directChildren(calendarTableOf(doc), 'tr')
+      for (const tc of directChildren(rows[1], 'tc')) {
+        tc.getElementsByTagNameNS(HP_NS, 'cellSz')[0].setAttribute('height', '7000')
+      }
+    }))
+  })
+
+  // ── P1-2: 프로젝트명 "외" 열의 기록 실패가 조용히 넘어가지 않는지 ──────────────────
+  // 이전 postcondition은 프로젝트명만 비교했기 때문에 정확히 이 열들의 누락을 놓쳤다.
+  const DIRECTOR_COL = 2
+
+  it('프로젝트명 외 셀의 hp:run을 제거하면 조용히 넘어가지 않고 거절된다', async () => {
+    await expectStructureRejection(await postWithMutatedTemplate((doc) => {
+      const para = directChildren(cellSubList(firstDataRowCell(doc, DIRECTOR_COL)), 'p')[0]
+      for (const run of directChildren(para, 'run')) para.removeChild(run)
+    }))
+  })
+
+  it('프로젝트명 외 셀의 hp:t와 hp:run을 모두 제거하면 거절된다', async () => {
+    await expectStructureRejection(await postWithMutatedTemplate((doc) => {
+      const para = directChildren(cellSubList(firstDataRowCell(doc, DIRECTOR_COL)), 'p')[0]
+      for (const run of directChildren(para, 'run')) {
+        for (const t of directChildren(run, 't')) run.removeChild(t)
+        para.removeChild(run)
+      }
+    }))
+  })
+
+  it('프로젝트명 외 셀의 문단(hp:p)을 모두 제거하면 거절된다', async () => {
+    await expectStructureRejection(await postWithMutatedTemplate((doc) => {
+      const subList = cellSubList(firstDataRowCell(doc, DIRECTOR_COL))
+      for (const p of directChildren(subList, 'p')) subList.removeChild(p)
+    }))
+  })
+
+  it('프로젝트명 외 셀의 hp:subList를 제거하면 거절된다', async () => {
+    await expectStructureRejection(await postWithMutatedTemplate((doc) => {
+      const tc = firstDataRowCell(doc, DIRECTOR_COL)
+      tc.removeChild(cellSubList(tc))
+    }))
+  })
+
+  it('프로젝트명 외 셀에 두 번째 hp:t가 있어도 기록 시 제거되어 잔존 텍스트가 남지 않는다', async () => {
+    const res = await postWithMutatedTemplate((doc) => {
+      const run = directChildren(directChildren(cellSubList(firstDataRowCell(doc, DIRECTOR_COL)), 'p')[0], 'run')[0]
+      const extra = doc.createElementNS(HP_NS, 'hp:t')
+      extra.textContent = '잔존텍스트XYZ'
+      run.appendChild(extra)
+    })
+    expect(res.status).toBe(200)
+    const { doc } = await toZipDoc(res)
+    expect(getAllText(doc).join('|')).not.toContain('잔존텍스트XYZ')
+  })
+
+  it('프로젝트명 외 셀에 추가 run 텍스트가 있어도 기록 시 제거된다', async () => {
+    const res = await postWithMutatedTemplate((doc) => {
+      const para = directChildren(cellSubList(firstDataRowCell(doc, DIRECTOR_COL)), 'p')[0]
+      const extraRun = directChildren(para, 'run')[0].cloneNode(true)
+      const t = extraRun.getElementsByTagNameNS(HP_NS, 't')[0]
+      if (t) t.textContent = '추가run잔존ABC'
+      para.appendChild(extraRun)
+    })
+    expect(res.status).toBe(200)
+    const { doc } = await toZipDoc(res)
+    expect(getAllText(doc).join('|')).not.toContain('추가run잔존ABC')
+  })
+
+  it('프로젝트명 외 셀에 추가 문단이 있어도 기록 시 제거된다', async () => {
+    const res = await postWithMutatedTemplate((doc) => {
+      const subList = cellSubList(firstDataRowCell(doc, DIRECTOR_COL))
+      const clone = directChildren(subList, 'p')[0].cloneNode(true)
+      const t = clone.getElementsByTagNameNS(HP_NS, 't')[0]
+      if (t) t.textContent = '추가문단잔존QQQ'
+      subList.appendChild(clone)
+    })
+    expect(res.status).toBe(200)
+    const { doc } = await toZipDoc(res)
+    expect(getAllText(doc).join('|')).not.toContain('추가문단잔존QQQ')
+  })
+
+  // ── 실패는 항상 ZIP 갱신 이전에 일어난다 (spy 확인) ────────────────────────────
+  //
+  // adm-zip의 updateFile은 prototype이 아니라 인스턴스 속성이라 직접 spy할 수 없다(확인함).
+  // 대신 프로덕션 경로가 `zip.updateFile('Contents/section0.xml', Buffer.from(new
+  // XMLSerializer().serializeToString(doc)))` 형태이므로, serializeToString이 아예 호출되지
+  // 않았다면 updateFile도 문서 내용으로 호출된 적이 없다는 뜻이다 — 이걸 주입 경계로 쓴다.
+  // (템플릿 변형은 spy 설치 전에 끝내 하베스 자신의 호출이 섞이지 않게 한다.)
+  async function expectNoSerializationDuringPost(mutate: (doc: any) => void) {
+    injectMutatedTemplate(mutate) // 변형본 생성은 spy 설치 전에 끝난다
+    const serializeSpy = vi.spyOn(XMLSerializer.prototype, 'serializeToString')
+    try {
+      const res: any = await POST(mockRequest(monthlyReq([perfItem('개찰', 'A용역')])))
+      await expectStructureRejection(res)
+      expect(serializeSpy).not.toHaveBeenCalled()
+    } finally {
+      serializeSpy.mockRestore()
+    }
+  }
+
+  it('구조 위반 시 문서 직렬화(=ZIP 갱신) 이전에 중단된다', async () => {
+    await expectNoSerializationDuringPost((doc) => {
+      projectTableOf(doc).setAttribute('rowCnt', '99')
+    })
+  })
+
+  it('달력 cellSpan 위반 시에도 문서 직렬화 이전에 중단된다', async () => {
+    await expectNoSerializationDuringPost((doc) => {
+      const header = directChildren(calendarTableOf(doc), 'tr')[0]
+      directChildren(header, 'tc')[0].getElementsByTagNameNS(HP_NS, 'cellSpan')[0].setAttribute('colSpan', '2')
+    })
+  })
+
+  it('셀 기록 실패 시에도 문서 직렬화 이전에 중단된다', async () => {
+    await expectNoSerializationDuringPost((doc) => {
+      const para = directChildren(cellSubList(firstDataRowCell(doc, DIRECTOR_COL)), 'p')[0]
+      for (const run of directChildren(para, 'run')) para.removeChild(run)
+    })
+  })
+
+  it('정상 요청에서는 문서 직렬화가 실제로 일어난다(위 not.toHaveBeenCalled가 무의미하지 않음을 확인)', async () => {
+    injectMutatedTemplate(() => {})
+    const serializeSpy = vi.spyOn(XMLSerializer.prototype, 'serializeToString')
+    try {
+      const res: any = await POST(mockRequest(monthlyReq([perfItem('개찰', 'A용역')])))
+      expect(res.status).toBe(200)
+      expect(serializeSpy).toHaveBeenCalled()
+    } finally {
+      serializeSpy.mockRestore()
+    }
+  })
+
+  it('변형 템플릿 주입은 디스크의 실제 템플릿 파일을 건드리지 않는다', async () => {
+    await postWithMutatedTemplate((doc) => { projectTableOf(doc).setAttribute('rowCnt', '99') })
+    vi.restoreAllMocks()
+    expect(fs.readFileSync(templatePath).equals(originalTemplate)).toBe(true)
+  })
+})
+
+// ── P1-2: 12개 셀 전체 postcondition이 실제로 전 필드를 비교하는지 (정상 경로 확인) ────
+describe('POST /api/hwpx — 월간 12개 셀 전체 값 검증', () => {
+  const IDX = {
+    name: 0, client: 1, chief: 2, fee: 3, period: 4, pages: 5,
+    taskDesc: 6, siteCheck: 7, submit: 8, interview: 9, bid: 10, note: 11,
+  }
+
+  function cellLines(tc: any): string[] {
+    const subList = Array.from(tc.childNodes || []).find((n: any) => n.nodeType === 1 && n.localName === 'subList') as any
+    if (!subList) return []
+    return (Array.from(subList.childNodes || []).filter((n: any) => n.nodeType === 1 && n.localName === 'p') as any[])
+      .map((p: any) => Array.from(p.getElementsByTagNameNS(HP_NS, 't') as any[]).map((t: any) => t.textContent ?? '').join(''))
+  }
+  const cellText = (tc: any) => cellLines(tc).join('\n')
+
+  function dataRowCells(doc: any): any[][] {
+    const projTbl = Array.from(doc.getElementsByTagNameNS(HP_NS, 'tbl') as any[])
+      .find((t: any) => Number(t.getAttribute('colCnt')) === 12)
+    const rows = Array.from(projTbl.childNodes || []).filter((n: any) => n.nodeType === 1 && n.localName === 'tr') as any[]
+    return rows.slice(1).map((tr: any) => getTcs(tr))
+  }
+
+  it('모든 필드가 12개 셀에 정확히 기록된다(빈 열은 정확히 빈 값)', async () => {
+    const performing = [{
+      status: '개찰', name: '가나다 사업', director: '김단장', fee: 12.5,
+      submit_date: '5.19', interview_date: '5.20', result_date: '5.22', note: '비고내용',
+    }]
+    const res: any = await POST(mockRequest(monthlyReq(performing)))
+    expect(res.status).toBe(200)
+    const { doc } = await toZipDoc(res)
+    const cells = dataRowCells(doc)[0]
+
+    expect(cells.length).toBe(12)
+    expect(cellText(cells[IDX.name])).toBe('가나다 사업')
+    expect(cellText(cells[IDX.chief])).toBe('김단장')
+    expect(cellText(cells[IDX.fee])).toBe('12.5')
+    expect(cellText(cells[IDX.submit])).toBe('5.19')
+    expect(cellText(cells[IDX.interview])).toBe('5.20')
+    expect(cellText(cells[IDX.bid])).toBe('5.22')
+    expect(cellText(cells[IDX.note])).toBe('비고내용')
+    // 의도적으로 빈 열 — 템플릿 예시 텍스트가 잔존하지 않아야 한다.
+    for (const col of [IDX.client, IDX.period, IDX.pages, IDX.taskDesc, IDX.siteCheck]) {
+      expect(cellText(cells[col])).toBe('')
+    }
+  })
+
+  it('multiline note는 문단으로 나뉘고 전체 텍스트가 입력과 일치한다', async () => {
+    const performing = [{
+      status: '개찰', name: 'A용역', director: '김단장', fee: 1,
+      submit_date: '', interview_date: '', result_date: '', note: '첫째 줄\n둘째 줄\n셋째 줄',
+    }]
+    const res: any = await POST(mockRequest(monthlyReq(performing)))
+    expect(res.status).toBe(200)
+    const { doc } = await toZipDoc(res)
+    const cells = dataRowCells(doc)[0]
+    expect(cellLines(cells[IDX.note])).toEqual(['첫째 줄', '둘째 줄', '셋째 줄'])
+    expect(cellText(cells[IDX.note])).toBe('첫째 줄\n둘째 줄\n셋째 줄')
+  })
+
+  it('값이 없는 필드는 빈 문자열로 기록되고 템플릿 예시 텍스트가 남지 않는다', async () => {
+    const performing = [{ status: '개찰', name: 'A용역' }]
+    const res: any = await POST(mockRequest(monthlyReq(performing)))
+    expect(res.status).toBe(200)
+    const { doc } = await toZipDoc(res)
+    const cells = dataRowCells(doc)[0]
+    expect(cellText(cells[IDX.name])).toBe('A용역')
+    for (const col of [IDX.client, IDX.chief, IDX.fee, IDX.period, IDX.pages,
+      IDX.taskDesc, IDX.siteCheck, IDX.submit, IDX.interview, IDX.bid, IDX.note]) {
+      expect(cellText(cells[col])).toBe('')
+    }
+  })
+
+  it('0건이면 빈 데이터 행의 12개 셀이 모두 정확히 빈 값이다', async () => {
+    const res: any = await POST(mockRequest(monthlyReq([])))
+    expect(res.status).toBe(200)
+    const { doc } = await toZipDoc(res)
+    const rows = dataRowCells(doc)
+    expect(rows.length).toBe(1)
+    expect(rows[0].length).toBe(12)
+    for (const tc of rows[0]) expect(cellText(tc)).toBe('')
+  })
+
+  it('여러 건이 입력 순서대로 각 행 12개 셀에 기록된다', async () => {
+    const performing = [1, 2, 3].map((n) => ({
+      status: '개찰', name: `사업${n}`, director: `단장${n}`, fee: n,
+      submit_date: `5.1${n}`, interview_date: `5.2${n}`, result_date: `5.3${n}`, note: `비고${n}`,
+    }))
+    const res: any = await POST(mockRequest(monthlyReq(performing)))
+    expect(res.status).toBe(200)
+    const { doc } = await toZipDoc(res)
+    const rows = dataRowCells(doc)
+    expect(rows.length).toBe(3)
+    rows.forEach((cells, i) => {
+      const n = i + 1
+      expect(cellText(cells[IDX.name])).toBe(`사업${n}`)
+      expect(cellText(cells[IDX.chief])).toBe(`단장${n}`)
+      expect(cellText(cells[IDX.fee])).toBe(String(n))
+      expect(cellText(cells[IDX.submit])).toBe(`5.1${n}`)
+      expect(cellText(cells[IDX.interview])).toBe(`5.2${n}`)
+      expect(cellText(cells[IDX.bid])).toBe(`5.3${n}`)
+      expect(cellText(cells[IDX.note])).toBe(`비고${n}`)
+    })
   })
 })

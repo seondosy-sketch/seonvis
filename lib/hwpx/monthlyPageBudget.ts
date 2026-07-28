@@ -119,3 +119,13 @@ export const MONTHLY_RENDER_SAFETY_RESERVE_CONFIRMED = true
 // 23건은 한글에서 직접 확인해 정상 판정을 받았고, 24건은 requiredHeight 80074 >
 // usableHeight 79936(초과 138)로 생성 자체가 차단된다.
 export const MONTHLY_VERIFIED_MAX_PROJECT_COUNT = 23
+
+// "수동 검증된 최대 건수 초과"는 "템플릿 높이 예산 초과"와 다른 사유다 — 전자는 사람이 한글로
+// 확인한 범위를 넘었다는 뜻이고, 후자는 산술 예산 자체가 안 맞는다는 뜻이다. 둘을 합치면
+// 나중에 템플릿이 바뀌어 예산 한계가 23건보다 낮아졌을 때 원인을 구분할 수 없다. 그래서
+// 오류 코드와 메시지를 분리해 둔다.
+export const MONTHLY_MAX_PROJECT_COUNT_EXCEEDED_CODE = 'MONTHLY_MAX_PROJECT_COUNT_EXCEEDED'
+
+export function formatMonthlyMaxProjectCountExceededMessage(actualCount: number): string {
+  return `수동 검증된 최대 프로젝트 수 ${MONTHLY_VERIFIED_MAX_PROJECT_COUNT}건을 초과했습니다(입력 ${actualCount}건).`
+}
