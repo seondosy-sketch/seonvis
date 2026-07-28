@@ -6,6 +6,7 @@ import AdmZip from 'adm-zip'
 import { DOMParser } from '@xmldom/xmldom'
 import { POST } from './route'
 import { PAGE_BUDGET_EXCEEDED_MESSAGE } from '@/lib/hwpx/pageBudget'
+import { MONTHLY_PAGE_BUDGET_EXCEEDED_MESSAGE, MONTHLY_VERIFIED_MAX_PROJECT_COUNT } from '@/lib/hwpx/monthlyPageBudget'
 
 // route.ts는 POST()만 export한다(불필요한 내부 함수 export를 피하기 위해). 이 테스트는 실제
 // 프로덕션 핸들러를 최소 mock request로 직접 호출해서 검증한다 — Next 서버를 띄울 필요가 없다.
@@ -140,6 +141,42 @@ function extractPerfRowNumbers(doc: any): string[] {
   return numbers
 }
 
+// 월간 요청 바디 — 기본값은 2026년 5월, 기준일 2026-05-22(실제 템플릿 예시 캡션과 동일한 달).
+function monthlyReq(performing: any[], overrides: Record<string, unknown> = {}) {
+  return { type: 'monthly', performing, reportYear: 2026, reportMonth: 5, asOfDate: '2026-05-22', ...overrides }
+}
+
+// 월간 프로젝트 표(첫 번째 12열 표)를 찾아 헤더 제외 데이터 행을 돌려준다.
+function getMonthlyProjectTable(doc: any): any {
+  const tbls: any[] = Array.from(doc.getElementsByTagNameNS(HP_NS, 'tbl') as any[])
+  return tbls.find((t: any) => Number(t.getAttribute('colCnt')) === 12)
+}
+
+// 월간 프로젝트 표 재구성 계약을 전부 검증한다: rowCnt===실제 tr 개수, rowAddr/colAddr 연속,
+// 데이터 행 수가 max(count,1)과 일치, 각 셀 1x1 span, hp:sz height가 실측 행 높이 합과 일치.
+function assertMonthlyDynamicXmlContract(doc: any, expectedCount: number) {
+  const projTbl = getMonthlyProjectTable(doc)
+  const rows: any[] = Array.from(projTbl.getElementsByTagNameNS(HP_NS, 'tr') as any[])
+  expect(Number(projTbl.getAttribute('rowCnt'))).toBe(rows.length)
+  expect(rows.length - 1).toBe(Math.max(expectedCount, 1))
+
+  rows.forEach((tr, rowIdx) => {
+    const tcs = getTcs(tr)
+    expect(tcs.length).toBe(12)
+    tcs.forEach((tc: any, colIdx: number) => {
+      const addr = tc.getElementsByTagNameNS(HP_NS, 'cellAddr')[0]
+      expect(Number(addr.getAttribute('rowAddr'))).toBe(rowIdx)
+      expect(Number(addr.getAttribute('colAddr'))).toBe(colIdx)
+      const span = tc.getElementsByTagNameNS(HP_NS, 'cellSpan')[0]
+      expect(Number(span.getAttribute('colSpan'))).toBe(1)
+      expect(Number(span.getAttribute('rowSpan'))).toBe(1)
+    })
+  })
+
+  const sum = rows.reduce((s, tr) => s + rowHeight(tr), 0)
+  expect(tableSzHeight(projTbl)).toBe(sum)
+}
+
 describe('POST /api/hwpx — 기본 생성', () => {
   it('주간 데이터가 모두 빈 경우 200과 zip 바이너리를 반환한다', async () => {
     const res: any = await POST(mockRequest({
@@ -184,15 +221,15 @@ describe('POST /api/hwpx — 기본 생성', () => {
   }
 
   it('월간: 프로젝트가 없어도 200과 zip 바이너리를 반환한다', async () => {
-    const res: any = await POST(mockRequest({ type: 'monthly', week: '2026-W22', performing: [] }))
+    const res: any = await POST(mockRequest(monthlyReq([])))
     expect(res.status).toBe(200)
     const { zip } = await toZipDoc(res)
     expect(zip.getEntry('Contents/section0.xml')).not.toBeNull()
   })
 
-  it('월간: 프로젝트 11건(현재 문서 양식의 출력 공간과 정확히 일치)이면 200과 zip 바이너리를 반환한다', async () => {
+  it('월간: 프로젝트 11건(원래 템플릿 용량과 정확히 일치)이면 200과 zip 바이너리를 반환한다', async () => {
     const performing = Array.from({ length: 11 }, (_, i) => perfItem('개찰', `월간${i + 1}`))
-    const res: any = await POST(mockRequest({ type: 'monthly', week: '2026-W22', performing }))
+    const res: any = await POST(mockRequest(monthlyReq(performing)))
     expect(res.status).toBe(200)
     const { doc } = await toZipDoc(res)
     const all = getAllText(doc).join('|')
@@ -200,13 +237,23 @@ describe('POST /api/hwpx — 기본 생성', () => {
     expect(all).toContain('월간11')
   })
 
-  it('월간: 프로젝트 12건이면 400과 구체적인 오류 메시지를 반환한다(월간은 이번 단계에서 고정 11건 유지)', async () => {
+  it('월간: 프로젝트 12건(원래 템플릿 고정 용량을 넘음)도 200과 zip 바이너리를 반환한다(더 이상 고정 11건 제한이 없음)', async () => {
     const performing = Array.from({ length: 12 }, (_, i) => perfItem('개찰', `월간${i + 1}`))
-    const res: any = await POST(mockRequest({ type: 'monthly', week: '2026-W22', performing }))
+    const res: any = await POST(mockRequest(monthlyReq(performing)))
+    expect(res.status).toBe(200)
+    const { doc } = await toZipDoc(res)
+    const all = getAllText(doc).join('|')
+    expect(all).toContain('월간12')
+  })
+
+  it('월간: reportYear/reportMonth가 없으면 400과 날짜 계약 오류를 반환한다', async () => {
+    const res: any = await POST(mockRequest({ type: 'monthly', performing: [] }))
     expect(res.status).toBe(400)
-    const json = await res.json()
-    expect(json.error).toContain('출력 공간은 11건')
-    expect(json.error).toContain('12건이 입력되어')
+  })
+
+  it('월간: reportMonth가 13처럼 범위를 벗어나면 400을 반환한다', async () => {
+    const res: any = await POST(mockRequest(monthlyReq([], { reportMonth: 13 })))
+    expect(res.status).toBe(400)
   })
 
   it('알 수 없는 status 값이 섞여 있으면 400으로 명확히 실패한다(조용히 무시하지 않음)', async () => {
@@ -404,6 +451,126 @@ describe('POST /api/hwpx — 주간 동적 행 재구성 (개찰/진행중/발�
   })
 })
 
+describe('POST /api/hwpx — 월간 동적 행 재구성 (프로젝트 표)', () => {
+  const counts = [0, 1, 5, 11, 13, 20]
+
+  for (const count of counts) {
+    it(`프로젝트 ${count}건 → 200, XML 계약 통과(rowCnt/rowAddr/colAddr/hp:sz), 데이터 누락 없음`, async () => {
+      const performing = Array.from({ length: count }, (_, i) => perfItem('개찰', `월${i + 1}`))
+      const res: any = await POST(mockRequest(monthlyReq(performing)))
+      expect(res.status).toBe(200)
+      const { doc } = await toZipDoc(res)
+
+      assertMonthlyDynamicXmlContract(doc, count)
+
+      const all = getAllText(doc).join('|')
+      for (let i = 1; i <= count; i++) expect(all).toContain(`월${i}`)
+    })
+  }
+
+  it('0건이면 헤더는 유지되고 데이터 행 1개가 전부 공백(기존 템플릿 예시 텍스트 잔존 없음)으로 남는다', async () => {
+    const res: any = await POST(mockRequest(monthlyReq([])))
+    expect(res.status).toBe(200)
+    const { doc } = await toZipDoc(res)
+    const projTbl = getMonthlyProjectTable(doc)
+    const rows: any[] = Array.from(projTbl.getElementsByTagNameNS(HP_NS, 'tr') as any[])
+    expect(rows.length).toBe(2) // 헤더 1 + 빈 데이터 행 1
+    for (const tc of getTcs(rows[1])) expect(getCellText(tc).trim()).toBe('')
+  })
+
+  it('새로 복제된 행(원래 템플릿 용량을 넘는 13번째 항목)에도 프로젝트명 정제가 적용된다', async () => {
+    const performing = Array.from({ length: 13 }, (_, i) =>
+      perfItem('개찰', i === 12 ? '○○센터 신축공사 건설사업관리용역' : `월${i + 1}`)
+    )
+    const res: any = await POST(mockRequest(monthlyReq(performing)))
+    expect(res.status).toBe(200)
+    const { doc } = await toZipDoc(res)
+    const all = getAllText(doc).join('|')
+    expect(all).toContain('○○센터')
+    expect(all).not.toContain('건설사업관리용역')
+  })
+
+  it('프로젝트 수가 계속 늘어나면 어느 지점부터는 반드시 예산을 초과해 400을 반환한다(경계 존재 확인)', async () => {
+    let lastOk = -1
+    let firstFail = -1
+    for (let n = 1; n <= 60; n++) {
+      const performing = Array.from({ length: n }, (_, i) => perfItem('개찰', `월${i + 1}`))
+      const res: any = await POST(mockRequest(monthlyReq(performing)))
+      if (res.status === 200) {
+        lastOk = n
+      } else {
+        firstFail = n
+        break
+      }
+    }
+    // 원래 템플릿 용량(11건)은 반드시 통과해야 한다 — 그 이하에서 막히면 회귀.
+    expect(lastOk).toBeGreaterThanOrEqual(11)
+    expect(firstFail).toBeGreaterThan(lastOk)
+  })
+
+  it('예산을 초과하면 문서를 생성하지 않고 400과 월간 전용 예산 초과 메시지를 반환한다', async () => {
+    const performing = Array.from({ length: 60 }, (_, i) => perfItem('개찰', `월${i + 1}`))
+    const res: any = await POST(mockRequest(monthlyReq(performing)))
+    expect(res.status).toBe(400)
+    const contentType = res.headers.get('content-type') || ''
+    expect(contentType).toContain('application/json')
+    expect(contentType).not.toContain('application/zip')
+    const json = await res.json()
+    expect(json.error).toBe(MONTHLY_PAGE_BUDGET_EXCEEDED_MESSAGE)
+  })
+
+  // 수동 한글 검증으로 확정된 경계 잠금 — manual-review/monthly-dynamic-23.hwpx를 한글에서
+  // 열어 "한 페이지 유지 / 달력 같은 페이지 유지"까지 정상 확인한 값이 23건이다.
+  it(`확정된 최대 건수(${MONTHLY_VERIFIED_MAX_PROJECT_COUNT}건)는 생성되고, 1건 더(${MONTHLY_VERIFIED_MAX_PROJECT_COUNT + 1}건) 넣으면 차단된다`, async () => {
+    const make = (n: number) => Array.from({ length: n }, (_, i) => perfItem('개찰', `월${i + 1}`))
+
+    const ok: any = await POST(mockRequest(monthlyReq(make(MONTHLY_VERIFIED_MAX_PROJECT_COUNT))))
+    expect(ok.status).toBe(200)
+    expect(ok.headers.get('content-type')).toContain('application/zip')
+    const { doc } = await toZipDoc(ok)
+    assertMonthlyDynamicXmlContract(doc, MONTHLY_VERIFIED_MAX_PROJECT_COUNT)
+    const all = getAllText(doc).join('|')
+    for (let i = 1; i <= MONTHLY_VERIFIED_MAX_PROJECT_COUNT; i++) expect(all).toContain(`월${i}`)
+
+    const over: any = await POST(mockRequest(monthlyReq(make(MONTHLY_VERIFIED_MAX_PROJECT_COUNT + 1))))
+    expect(over.status).toBe(400)
+    expect(over.headers.get('content-type')).toContain('application/json')
+    expect(over.headers.get('content-type')).not.toContain('application/zip')
+    expect((await over.json()).error).toBe(MONTHLY_PAGE_BUDGET_EXCEEDED_MESSAGE)
+  })
+})
+
+describe('POST /api/hwpx — 월간 날짜 계약(연/월/기준일)', () => {
+  it('제목과 파일명은 reportYear/reportMonth를 반영하고, 기준일 캡션은 asOfDate를 반영한다', async () => {
+    const res: any = await POST(mockRequest(monthlyReq([], { reportYear: 2027, reportMonth: 3, asOfDate: '2027-03-10' })))
+    expect(res.status).toBe(200)
+    const { doc } = await toZipDoc(res)
+    const texts = getAllText(doc)
+
+    expect(texts.some(t => t.trim() === '2027년')).toBe(true)
+    expect(texts.some(t => t.trim() === '3월')).toBe(true)
+    expect(texts.some(t => t.trim().endsWith('3월 10일 현재'))).toBe(true)
+
+    const disposition = res.headers.get('content-disposition') || ''
+    expect(disposition).toContain(encodeURIComponent('202703'))
+  })
+
+  it('asOfDate를 생략하면 서버가 Asia/Seoul 오늘 날짜로 기준일을 채운다(응답이 항상 200)', async () => {
+    const res: any = await POST(mockRequest({ type: 'monthly', performing: [], reportYear: 2026, reportMonth: 5 }))
+    expect(res.status).toBe(200)
+  })
+
+  it('asOfDate가 reportYear/reportMonth와 다른 달이어도 각각 독립적으로 반영된다', async () => {
+    // 예: 5월 보고서를 6월 1일 기준으로 작성하는 경우 — 제목은 5월, 기준일 캡션은 6월 1일.
+    const res: any = await POST(mockRequest(monthlyReq([], { reportYear: 2026, reportMonth: 5, asOfDate: '2026-06-01' })))
+    expect(res.status).toBe(200)
+    const { doc } = await toZipDoc(res)
+    const texts = getAllText(doc)
+    expect(texts.some(t => t.trim() === '5월')).toBe(true)
+    expect(texts.some(t => t.trim().endsWith('6월 1일 현재'))).toBe(true)
+  })
+})
+
 describe('POST /api/hwpx — 날짜 오염 회귀 테스트', () => {
   it('note에 보고기간과 같은 패턴의 날짜가 있어도 note는 그대로 유지되고, 보고기간 표시 위치만 갱신된다', async () => {
     const week = '2026-W23'
@@ -429,12 +596,11 @@ describe('POST /api/hwpx — 날짜 오염 회귀 테스트', () => {
     expect(noteWasOverwritten).toBe(false)
   })
 
-  it('월간: note에 기준일과 같은 패턴("N월 N일 현재")이 있어도 note는 그대로 유지되고, 기준일 표시 위치만 갱신된다', async () => {
-    const today = new Date()
-    const expectedMonthStr = `${today.getMonth() + 1}월 ${today.getDate()}일 현재`
+  it('월간: note에 기준일과 같은 패턴("N월 N일 현재")이 있어도 note는 그대로 유지되고, 기준일 표시 위치만 asOfDate로 갱신된다', async () => {
+    const expectedCaption = '7월 15일 현재'
     const pollutedNote = '이 사업은 4월 3일 현재 설계 진행 중'
     const performing = [{ ...perfItem('개찰', 'A용역'), note: pollutedNote }]
-    const res: any = await POST(mockRequest({ type: 'monthly', week: '2026-W22', performing }))
+    const res: any = await POST(mockRequest(monthlyReq(performing, { reportYear: 2026, reportMonth: 7, asOfDate: '2026-07-15' })))
     expect(res.status).toBe(200)
     const { doc } = await toZipDoc(res)
     const texts = getAllText(doc)
@@ -442,11 +608,11 @@ describe('POST /api/hwpx — 날짜 오염 회귀 테스트', () => {
     // 1) 사용자가 입력한 note 전체가 그대로 유지된다
     expect(texts).toContain(pollutedNote)
 
-    // 2) 기준일은 지정된 위치에서 오늘 날짜로 정확히 하나만 바뀐다
-    const dateMatches = texts.filter(t => t.trim() === expectedMonthStr)
+    // 2) 기준일은 지정된 위치에서 요청한 asOfDate로 정확히 하나만 바뀐다
+    const dateMatches = texts.filter(t => t.trim() === expectedCaption)
     expect(dateMatches.length).toBe(1)
 
-    // 3) note 안의 "4월 3일 현재" 문자열은 오늘 날짜로 바뀌지 않는다(오염되지 않는다)
+    // 3) note 안의 "4월 3일 현재" 문자열은 asOfDate로 바뀌지 않는다(오염되지 않는다)
     const stillHasPollutedDate = texts.some(t => t.includes('4월 3일 현재'))
     expect(stillHasPollutedDate).toBe(true)
   })
@@ -473,7 +639,7 @@ describe('POST /api/hwpx — 출력용 프로젝트명 정제가 실제로 적�
 
   it('월간 프로젝트 표에도 정제된 이름이 출력된다', async () => {
     const performing = [perfItem('개찰', '화성동탄(1) M1-1-2블럭 건설사업관리용역')]
-    const res: any = await POST(mockRequest({ type: 'monthly', week: '2026-W22', performing }))
+    const res: any = await POST(mockRequest(monthlyReq(performing)))
     expect(res.status).toBe(200)
     const { doc } = await toZipDoc(res)
     const texts = getAllText(doc)

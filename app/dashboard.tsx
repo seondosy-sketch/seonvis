@@ -14,7 +14,7 @@ import {
   computeProjectStatus,
   categorizeProject,
 } from '@/lib/projectStatus'
-import { validateWeeklyCapacity, validateMonthlyCapacity, formatCapacityViolations } from '@/lib/hwpx/capacity'
+import { validateWeeklyCapacity, formatCapacityViolations } from '@/lib/hwpx/capacity'
 
 function weekLabel(week: string): string {
   const [year, w] = week.split('-W')
@@ -38,6 +38,18 @@ const EMPTY_EXPECTED = (order: number, week: string): ExpectedProject => ({
   name: '', client: '', director: '', project_cost: '',
   order_month: '', fee: '', note: '', sort_order: order, week
 })
+
+// 월간 보고 화면에 별도 월 선택 UI가 없어, 현재 선택된 ISO 주(week)의 월요일이 속한 연·월을
+// 그대로 월간 보고 대상 연·월로 쓴다. weekLabel/shiftWeek와 동일한 ISO 주→그레고리력 계산이다.
+function weekToReportYearMonth(week: string): { reportYear: number; reportMonth: number } {
+  const [year, w] = week.split('-W')
+  const jan4 = new Date(parseInt(year), 0, 4)
+  const startOfWeek1 = new Date(jan4)
+  startOfWeek1.setDate(jan4.getDate() - jan4.getDay() + 1)
+  const start = new Date(startOfWeek1)
+  start.setDate(start.getDate() + (parseInt(w) - 1) * 7)
+  return { reportYear: start.getFullYear(), reportMonth: start.getMonth() + 1 }
+}
 
 function shiftWeek(week: string, delta: number): string {
   const [year, w] = week.split('-W')
@@ -271,24 +283,29 @@ export default function Dashboard() {
   }
 
   const download = async (type: 'weekly' | 'monthly') => {
-    // 월간은 아직 고정 출력 공간(11건) 제한이 있어 여기서 막는다. 주간은 개찰/진행중/발주예상
-    // 행을 서버가 동적으로 재구성하므로 고정 건수 제한이 없다 — status 값 이상 여부만 방어적으로
-    // 확인하고, 실제 페이지 높이 예산 판정은 서버(app/api/hwpx/route.ts)가 최종 판정자다. 계속
-    // 진행할지 묻는 confirm은 쓰지 않는다(누락된 문서가 정상 문서처럼 유통되는 걸 막는 게 목적).
-    const violations = type === 'monthly'
-      ? validateMonthlyCapacity(performing)
-      : validateWeeklyCapacity(performing)
-    if (violations.length > 0) {
-      alert(`문서를 생성할 수 없습니다.\n\n${formatCapacityViolations(violations)}`)
-      return
+    // 주간은 개찰/진행중/발주예상 행을 서버가 동적으로 재구성하므로 고정 건수 제한이 없다 —
+    // status 값 이상 여부만 방어적으로 확인하고, 실제 페이지 높이 예산 판정은 서버
+    // (app/api/hwpx/route.ts)가 최종 판정자다. 월간도 이제 고정 11건 제한이 없다(서버의
+    // 날짜 계약 검증 + page budget 검증이 그 역할을 대신함) — 그래서 사전 건수 검증은 주간만
+    // 남는다. 계속 진행할지 묻는 confirm은 쓰지 않는다(누락된 문서가 정상 문서처럼 유통되는
+    // 걸 막는 게 목적).
+    if (type === 'weekly') {
+      const violations = validateWeeklyCapacity(performing)
+      if (violations.length > 0) {
+        alert(`문서를 생성할 수 없습니다.\n\n${formatCapacityViolations(violations)}`)
+        return
+      }
     }
 
     setDownloading(type)
     try {
+      const body = type === 'monthly'
+        ? { type, performing, ...weekToReportYearMonth(week) }
+        : { type, week, performing, expected, meta }
       const res = await fetch('/api/hwpx', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type, week, performing, expected, meta }),
+        body: JSON.stringify(body),
       })
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
@@ -298,10 +315,11 @@ export default function Dashboard() {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      const today = new Date()
-      a.download = type === 'monthly'
-        ? `미래사업팀_월간업무_${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}.hwpx`
-        : `미래사업팀_주간업무_${week}.hwpx`
+      // 파일명은 서버가 응답 헤더로 알려준 값을 그대로 쓴다(서버의 날짜 계약이 유일한 기준 —
+      // 클라이언트 로컬 시계로 별도 계산하지 않는다).
+      const disposition = res.headers.get('content-disposition') || ''
+      const match = /filename\*=UTF-8''([^;]+)/.exec(disposition)
+      a.download = match ? decodeURIComponent(match[1]) : `${type}.hwpx`
       a.click()
       URL.revokeObjectURL(url)
     } catch (e: any) {

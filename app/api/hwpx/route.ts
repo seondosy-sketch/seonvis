@@ -2,20 +2,40 @@
 import { NextRequest, NextResponse } from 'next/server'
 import path from 'node:path'
 import fs from 'node:fs'
-import { validateWeeklyCapacity, validateMonthlyCapacity, formatCapacityViolations } from '@/lib/hwpx/capacity'
+import { validateWeeklyCapacity, formatCapacityViolations } from '@/lib/hwpx/capacity'
 import { formatProjectNameForReport } from '@/lib/hwpx/projectName'
 import { estimateWeeklyPageBudget, PAGE_BUDGET_EXCEEDED_MESSAGE, type WeeklyPageBudgetInput } from '@/lib/hwpx/pageBudget'
+import {
+  parseMonthlyReportDate, InvalidMonthlyReportDateError,
+  formatMonthlyAsOfCaption, formatMonthlyFilename,
+  type MonthlyReportDate,
+} from '@/lib/hwpx/monthlyReportDate'
+import {
+  matchesHeaderFingerprint,
+  MONTHLY_PROJECT_HEADER_FINGERPRINT, MONTHLY_CALENDAR_HEADER_FINGERPRINT,
+} from '@/lib/hwpx/monthlyHeaderFingerprint'
+import {
+  estimateMonthlyPageBudget, MONTHLY_PAGE_BUDGET_EXCEEDED_MESSAGE, MONTHLY_RENDER_SAFETY_RESERVE,
+  type MonthlyPageBudgetInput,
+} from '@/lib/hwpx/monthlyPageBudget'
 
 const HP_NS = 'http://www.hancom.co.kr/hwpml/2011/paragraph'
 
 // 템플릿(weekly.hwpx/montly.hwpx)의 실제 구조가 코드가 가정한 표 개수·열 수·행 수·기준 문구와
 // 다를 때 던진다. 이 예외는 데이터를 절반만 채운 문서를 만들지 않기 위한 것 — 조용히 진행하지 않고
-// 여기서 멈춘다.
-class TemplateStructureError extends Error {}
+// 여기서 멈춘다. code는 선택적 내부 진단 코드(예: 'INVALID_TABLE_LAYOUT') — 사용자 응답에는
+// 노출하지 않고 서버 로그·자동 테스트에서만 쓴다.
+class TemplateStructureError extends Error {
+  code?: string
+  constructor(message: string, code?: string) {
+    super(message)
+    this.code = code
+  }
+}
 
-// 주간 입력량이 lib/hwpx/pageBudget.ts의 산술 예산(현재 서식을 전혀 줄이지 않은 기준)을 넘을 때
-// 던진다. "1페이지를 보장한다"는 뜻이 아니라 "이 상태로는 안전하게 생성을 시도하지 않는다"는
-// 뜻이다 — 실제 페이지 수는 한글 프로그램으로 열어봐야만 확정된다.
+// 주간/월간 입력량이 각자의 page budget 계산기(lib/hwpx/pageBudget.ts, lib/hwpx/monthlyPageBudget.ts)
+// 산술 예산을 넘을 때 던진다. "1페이지를 보장한다"는 뜻이 아니라 "이 상태로는 안전하게 생성을
+// 시도하지 않는다"는 뜻이다 — 실제 페이지 수는 한글 프로그램으로 열어봐야만 확정된다.
 class PageBudgetExceededError extends Error {}
 
 function getTcs(tr: any): any[] {
@@ -578,87 +598,626 @@ async function generateWeekly(
   return zip.toBuffer()
 }
 
+// ── Monthly 전용 로컬 XML 타입 ────────────────────────────────────────────────
+//
+// @xmldom/xmldom은 표준 DOM lib 타입과 호환되지 않는 자체 구현체다(이 파일 최상단의
+// @ts-nocheck와 Weekly 코드의 광범위한 any가 그 흔적이다). 아래 타입은 라이브러리 전체를
+// 타이핑하려는 게 아니라, Monthly 코드가 실제로 호출하는 멤버만 최소한으로 기술한
+// 구조적(structural) 계약이다 — 새 코드로 any가 번지지 않게 막는 좁은 경계다.
+// Weekly가 쓰는 기존 헬퍼(getTcs/setText/rowHeight 등)의 시그니처는 이번 범위 밖이라
+// 그대로 둔다.
+interface XmlNode {
+  nodeType: number
+  localName: string | null
+  textContent: string | null
+  childNodes: ArrayLike<XmlNode>
+}
+
+interface XmlElement extends XmlNode {
+  getAttribute(name: string): string | null
+  setAttribute(name: string, value: string): void
+  getElementsByTagNameNS(namespaceURI: string, localName: string): ArrayLike<XmlElement>
+  appendChild(child: XmlElement): XmlElement
+  removeChild(child: XmlElement): XmlElement
+  cloneNode(deep: boolean): XmlElement
+}
+
+interface XmlDocument {
+  getElementsByTagNameNS(namespaceURI: string, localName: string): ArrayLike<XmlElement>
+}
+
+/** 프로젝트 표의 행(<hp:tr>) 하나. */
+type ProjectRowElement = XmlElement
+/** 프로젝트 표 한 행의 셀(<hp:tc>) 배열 — 계약상 항상 12칸. */
+type ProjectRowCells = XmlElement[]
+
+// 이 파일에서 unknown → XmlNode/XmlElement로 좁히는 유일한 두 지점이다(요구사항 8).
+// 여기서 검사에 실패하면 any를 흘리는 대신 즉시 멈춘다.
+function isXmlElement(node: XmlNode): node is XmlElement {
+  return node.nodeType === 1
+}
+
+function toXmlDocument(parsed: unknown): XmlDocument {
+  if (
+    typeof parsed !== 'object' || parsed === null ||
+    typeof (parsed as { getElementsByTagNameNS?: unknown }).getElementsByTagNameNS !== 'function'
+  ) {
+    throw new TemplateStructureError(
+      `montly.hwpx 템플릿 구조가 예상과 다릅니다: 본문 XML(Contents/section0.xml)을 문서로 해석할 수 없습니다.`,
+      'INVALID_XML_DOCUMENT'
+    )
+  }
+  return parsed as XmlDocument
+}
+
+// ── Monthly 전용 헬퍼 — 직계 자식만 훑는다(getElementsByTagNameNS의 descendant 검색과 달리
+// 셀 내부에 중첩 표가 생겨도 바깥 표의 행·셀 수 계산에 포함되지 않는다). Weekly는 이미 동작
+// 검증이 끝난 기존 방식(getTcs 등, descendant 검색)을 그대로 쓰므로 건드리지 않는다.
+function getDirectChildren(parent: XmlElement, localName: string): XmlElement[] {
+  return Array.from(parent.childNodes ?? [])
+    .filter(isXmlElement)
+    .filter((el) => el.localName === localName)
+}
+
+function findDirectChild(parent: XmlElement, localName: string): XmlElement | null {
+  return getDirectChildren(parent, localName)[0] ?? null
+}
+
+/** descendant 검색(getElementsByTagNameNS)을 타입 있는 배열로 감싼다. */
+function elementsOf(scope: XmlDocument | XmlElement, localName: string): XmlElement[] {
+  return Array.from(scope.getElementsByTagNameNS(HP_NS, localName))
+}
+
+function getCellAddr(tc: XmlElement): { rowAddr: number; colAddr: number } | null {
+  const a = elementsOf(tc, 'cellAddr')[0]
+  if (!a) return null
+  return { rowAddr: Number(a.getAttribute('rowAddr')), colAddr: Number(a.getAttribute('colAddr')) }
+}
+
+function getCellSpanOf(tc: XmlElement): { colSpan: number; rowSpan: number } | null {
+  const s = elementsOf(tc, 'cellSpan')[0]
+  if (!s) return null
+  return { colSpan: Number(s.getAttribute('colSpan') || 1), rowSpan: Number(s.getAttribute('rowSpan') || 1) }
+}
+
+function getCellHeightOf(tc: XmlElement): number | null {
+  const sz = elementsOf(tc, 'cellSz')[0]
+  if (!sz) return null
+  return Number(sz.getAttribute('height'))
+}
+
+// 표 하나(tr 전체)의 셀 높이가 예외 없이 완전히 동일한지 검증한다. 첫 셀 대표값·다수결·허용
+// 오차를 전혀 쓰지 않는다 — 기준 파일에 셀별로 서로 다른 높이가 실제로 존재함을 확인했기
+// 때문에(대표값 방식은 그 불일치를 조용히 숨긴다), 하나라도 다르면 즉시 던진다.
+function assertUniformRowHeight(tr: ProjectRowElement, rowLabel: string): number {
+  const cells = getDirectChildren(tr, 'tc')
+  const heights: (number | null)[] = cells.map((tc) => getCellHeightOf(tc))
+  if (heights.some((h) => h == null)) {
+    throw new TemplateStructureError(
+      `montly.hwpx 템플릿 구조가 예상과 다릅니다: ${rowLabel}의 일부 셀에 cellSz height가 없습니다.`,
+      'INVALID_ROW_HEIGHT'
+    )
+  }
+  const known: number[] = heights.filter((h): h is number => h != null)
+  const unique = [...new Set(known)]
+  if (unique.length !== 1) {
+    throw new TemplateStructureError(
+      `montly.hwpx 템플릿 구조가 예상과 다릅니다: ${rowLabel}의 셀 높이가 균일하지 않습니다(실제: [${known.join(', ')}]).`,
+      'INVALID_ROW_HEIGHT'
+    )
+  }
+  return unique[0]
+}
+
+function findWrapperParagraph(doc: XmlDocument, tbl: XmlElement): XmlElement | null {
+  return elementsOf(doc, 'p').find((p) => elementsOf(p, 'tbl').includes(tbl)) ?? null
+}
+
+function isEarlierInDocumentOrder(doc: XmlDocument, earlierTbl: XmlElement, laterTbl: XmlElement): boolean {
+  const paras = elementsOf(doc, 'p')
+  const earlierPara = findWrapperParagraph(doc, earlierTbl)
+  const laterPara = findWrapperParagraph(doc, laterTbl)
+  if (!earlierPara || !laterPara) return false
+  return paras.indexOf(laterPara) > paras.indexOf(earlierPara)
+}
+
+// 후보가 정확히 1개가 아니면(0개든 2개 이상이든) 위치 기반으로 임의로 하나를 고르지 않고
+// 즉시 던진다 — Codex 감사 P1-1: "첫 번째 12열 표" 같은 위치 추정은 표가 삽입/삭제되면
+// 조용히 잘못된 표를 고른다.
+function assertExactlyOneCandidate<T>(candidates: readonly T[], label: string, code: string): T {
+  if (candidates.length === 0) {
+    throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: ${label} 후보를 찾지 못했습니다.`, code)
+  }
+  if (candidates.length > 1) {
+    throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: ${label} 후보가 ${candidates.length}개 발견되어 특정할 수 없습니다.`, code)
+  }
+  return candidates[0]
+}
+
+function findMonthlyProjectTableCandidates(doc: XmlDocument): XmlElement[] {
+  return elementsOf(doc, 'tbl').filter((tbl) => {
+    if (Number(tbl.getAttribute('colCnt')) !== 12) return false
+    const rows = getDirectChildren(tbl, 'tr')
+    if (rows.length < 1) return false
+    const headerCells = getDirectChildren(rows[0], 'tc')
+    if (headerCells.length !== 12) return false
+    const headerTexts = headerCells.map((tc) => getText(tc))
+    return matchesHeaderFingerprint(headerTexts, MONTHLY_PROJECT_HEADER_FINGERPRINT)
+  })
+}
+
+function findMonthlyCalendarTableCandidates(doc: XmlDocument, projTbl: XmlElement): XmlElement[] {
+  return elementsOf(doc, 'tbl').filter((tbl) => {
+    if (tbl === projTbl) return false
+    if (Number(tbl.getAttribute('colCnt')) !== 7) return false
+    const rows = getDirectChildren(tbl, 'tr')
+    if (rows.length !== 4) return false
+    const headerCells = getDirectChildren(rows[0], 'tc')
+    if (headerCells.length !== 7) return false
+    const headerTexts = headerCells.map((tc) => getText(tc))
+    if (!matchesHeaderFingerprint(headerTexts, MONTHLY_CALENDAR_HEADER_FINGERPRINT)) return false
+    if (!isEarlierInDocumentOrder(doc, projTbl, tbl)) return false
+    return true
+  })
+}
+
+// 프로젝트 표의 Template Contract 전체를 검증한다: 열/행 수 일치, 병합 없음(1x1 고정),
+// rowAddr/colAddr 연속성, treatAsChar/pageBreak, 헤더·데이터 행 높이 균일성.
+// (반환값의 dataRowHeight/headerHeight/computedHeight는 이후 rebuild·page budget이 그대로 쓴다.
+// 기존 hp:sz@height 값 자체는 신뢰하지 않는다 — 어차피 재계산해 덮어쓸 값이라 여기서는
+// 실패 조건으로 쓰지 않는다.)
+interface MonthlyProjectTableContract {
+  rows: ProjectRowElement[]
+  headerRow: ProjectRowElement
+  dataRows: ProjectRowElement[]
+  dataRowTemplate: ProjectRowElement
+  headerHeight: number
+  dataRowHeight: number
+}
+
+function assertMonthlyProjectTableContract(projTbl: XmlElement): MonthlyProjectTableContract {
+  const rows = getDirectChildren(projTbl, 'tr')
+  if (rows.length < 2) {
+    throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 프로젝트 표에 헤더 외 데이터 행이 최소 1개 있어야 합니다.`, 'INVALID_ROW_COUNT')
+  }
+  const declaredRowCnt = Number(projTbl.getAttribute('rowCnt'))
+  if (declaredRowCnt !== rows.length) {
+    throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 프로젝트 표 rowCnt(${declaredRowCnt})가 실제 행 수(${rows.length})와 다릅니다.`, 'INVALID_ROW_COUNT')
+  }
+
+  const pos = findDirectChild(projTbl, 'pos')
+  if (!pos || pos.getAttribute('treatAsChar') !== '1') {
+    throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 프로젝트 표의 treatAsChar가 1이 아닙니다.`, 'INVALID_POSITIONING')
+  }
+  if (projTbl.getAttribute('pageBreak') !== 'CELL') {
+    throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 프로젝트 표의 pageBreak가 CELL이 아닙니다.`, 'INVALID_PAGE_BREAK')
+  }
+
+  rows.forEach((tr, rowIdx) => {
+    const cells = getDirectChildren(tr, 'tc')
+    if (cells.length !== 12) {
+      throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 프로젝트 표 ${rowIdx}행의 셀 수가 12가 아니라 ${cells.length}입니다.`, 'INVALID_TABLE_LAYOUT')
+    }
+    cells.forEach((tc, colIdx) => {
+      const span = getCellSpanOf(tc)
+      if (!span || span.colSpan !== 1 || span.rowSpan !== 1) {
+        throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 프로젝트 표 ${rowIdx}행 ${colIdx}열의 cellSpan이 1x1이 아닙니다.`, 'INVALID_CELL_SPAN')
+      }
+      const addr = getCellAddr(tc)
+      if (!addr || addr.rowAddr !== rowIdx || addr.colAddr !== colIdx) {
+        throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 프로젝트 표 ${rowIdx}행 ${colIdx}열의 rowAddr/colAddr이 위치와 일치하지 않습니다.`, 'INVALID_ROW_ADDRESS')
+      }
+    })
+  })
+
+  const headerHeight = assertUniformRowHeight(rows[0], '프로젝트 표 헤더 행')
+  const dataRowsNodes = rows.slice(1)
+  const dataRowHeights = dataRowsNodes.map((tr, i) => assertUniformRowHeight(tr, `프로젝트 표 ${i + 1}번째 데이터 행`))
+  const uniqueDataHeights = [...new Set(dataRowHeights)]
+  if (uniqueDataHeights.length !== 1) {
+    throw new TemplateStructureError(
+      `montly.hwpx 템플릿 구조가 예상과 다릅니다: 프로젝트 표 데이터 행들의 높이가 서로 다릅니다(실제: [${dataRowHeights.join(', ')}]).`,
+      'INVALID_ROW_HEIGHT'
+    )
+  }
+
+  return {
+    rows, headerRow: rows[0], dataRows: dataRowsNodes, dataRowTemplate: dataRowsNodes[0],
+    headerHeight, dataRowHeight: uniqueDataHeights[0],
+  }
+}
+
+const MONTHLY_CALENDAR_EXPECTED_HEADER_HEIGHT = 1680
+const MONTHLY_CALENDAR_EXPECTED_DATE_ROW_HEIGHT = 7778
+
+// 달력 표는 코드가 수정하지 않으므로(입력값에 따라 변하는 부분이 없음), 기존 hp:sz 값이
+// 검증된 실측 행 높이 합과 정확히 일치하는지까지 하드 실패 조건으로 검사한다 — 이 값을 그대로
+// page budget 계산에 쓰기 때문이다.
+interface MonthlyCalendarTableContract {
+  calendarHeight: number
+  calendarVertOffset: number
+  objectMarginsCalendar: number
+}
+
+function assertMonthlyCalendarTableContract(calTbl: XmlElement): MonthlyCalendarTableContract {
+  const rows = getDirectChildren(calTbl, 'tr')
+  if (rows.length !== 4) {
+    throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 달력 표의 행 수가 4가 아니라 ${rows.length}입니다.`, 'INVALID_ROW_COUNT')
+  }
+  const declaredRowCnt = Number(calTbl.getAttribute('rowCnt'))
+  if (declaredRowCnt !== 4) {
+    throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 달력 표 rowCnt가 4가 아니라 ${declaredRowCnt}입니다.`, 'INVALID_ROW_COUNT')
+  }
+
+  rows.forEach((tr, rowIdx) => {
+    const cells = getDirectChildren(tr, 'tc')
+    if (cells.length !== 7) {
+      throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 달력 표 ${rowIdx}행의 셀 수가 7이 아니라 ${cells.length}입니다.`, 'INVALID_TABLE_LAYOUT')
+    }
+    cells.forEach((tc, colIdx) => {
+      const addr = getCellAddr(tc)
+      if (!addr || addr.rowAddr !== rowIdx || addr.colAddr !== colIdx) {
+        throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 달력 표 ${rowIdx}행 ${colIdx}열의 rowAddr/colAddr이 위치와 일치하지 않습니다.`, 'INVALID_ROW_ADDRESS')
+      }
+    })
+  })
+
+  const pos = findDirectChild(calTbl, 'pos')
+  if (!pos || pos.getAttribute('treatAsChar') !== '1') {
+    throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 달력 표의 treatAsChar가 1이 아닙니다.`, 'INVALID_POSITIONING')
+  }
+  if (calTbl.getAttribute('pageBreak') !== 'NONE') {
+    throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 달력 표의 pageBreak가 NONE이 아닙니다.`, 'INVALID_PAGE_BREAK')
+  }
+  const vertOffset = Number(pos.getAttribute('vertOffset'))
+  if (vertOffset !== 474) {
+    throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 달력 표의 vertOffset이 474가 아니라 ${vertOffset}입니다.`, 'INVALID_POSITIONING')
+  }
+
+  const headerHeight = assertUniformRowHeight(rows[0], '달력 표 헤더 행')
+  if (headerHeight !== MONTHLY_CALENDAR_EXPECTED_HEADER_HEIGHT) {
+    throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 달력 표 헤더 행 높이가 ${MONTHLY_CALENDAR_EXPECTED_HEADER_HEIGHT}이 아니라 ${headerHeight}입니다.`, 'INVALID_ROW_HEIGHT')
+  }
+  const dateRowHeights = [1, 2, 3].map((i) => assertUniformRowHeight(rows[i], `달력 표 ${i}번째 날짜 행`))
+  const uniqueDateHeights = [...new Set(dateRowHeights)]
+  if (uniqueDateHeights.length !== 1 || uniqueDateHeights[0] !== MONTHLY_CALENDAR_EXPECTED_DATE_ROW_HEIGHT) {
+    throw new TemplateStructureError(
+      `montly.hwpx 템플릿 구조가 예상과 다릅니다: 달력 표 날짜 행 높이가 균일하게 ${MONTHLY_CALENDAR_EXPECTED_DATE_ROW_HEIGHT}이어야 하는데 실제는 [${dateRowHeights.join(', ')}]입니다.`,
+      'INVALID_ROW_HEIGHT'
+    )
+  }
+
+  const computedHeight = headerHeight + dateRowHeights.reduce((s, h) => s + h, 0)
+  const sz = findDirectChild(calTbl, 'sz')
+  const declaredHeight = Number(sz?.getAttribute('height'))
+  if (declaredHeight !== computedHeight) {
+    throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 달력 표 hp:sz(${declaredHeight})가 검증된 행 높이 합(${computedHeight})과 다릅니다.`, 'INVALID_TABLE_HEIGHT')
+  }
+
+  const outMargin = findDirectChild(calTbl, 'outMargin')
+  const objectMarginsCalendar = Number(outMargin?.getAttribute('top') || 0) + Number(outMargin?.getAttribute('bottom') || 0)
+
+  return { calendarHeight: computedHeight, calendarVertOffset: vertOffset, objectMarginsCalendar }
+}
+
 // "N월 N일 현재" 기준일 캡션 형식. generateMonthly는 이 패턴이 "사용자 데이터를 채우기 전"
 // 문서 전체에서 정확히 1곳에서만 발견될 때만 그 노드를 기준일 표시 위치로 확정한다 — 주간의
 // 보고기간 날짜와 동일한 이유(사용자 note에 우연히 같은 패턴이 있어도 덮어쓰지 않기 위해).
 const MONTHLY_DATE_REGEX = /\d+월\s*\d+일\s*현재/
 
 // montly.hwpx의 실제 구조를 코드가 가정한 것과 대조한다(파일명은 저장소의 실제 오탈자를 그대로 따름).
-function assertMonthlyTemplateStructure(doc: any) {
-  const tbls: any[] = Array.from(doc.getElementsByTagNameNS(HP_NS, 'tbl') as any[])
-  if (tbls.length < 2) {
-    throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 표가 최소 2개 있어야 하는데 ${tbls.length}개만 찾았습니다.`)
-  }
+// 표는 위치가 아니라 semantic fingerprint(헤더 텍스트)로 식별하고, 후보가 정확히 1개가 아니면
+// 즉시 던진다. 데이터 행 수는 더 이상 고정 11개를 요구하지 않는다(동적 생성 대상).
+/** page budget 계산에 넘길 실측치 — 전부 검증을 통과한 값만 담긴다. */
+interface MonthlyMeasurements {
+  pageHeight: number
+  topMargin: number
+  bottomMargin: number
+  fixedContentHeight: number
+  projectHeaderHeight: number
+  projectRowHeight: number
+  calendarHeight: number
+  objectMargins: number
+  calendarVertOffset: number
+}
 
-  const projTbl = tbls[0]
-  const colCnt = Number(projTbl.getAttribute('colCnt'))
-  if (colCnt !== 12) {
-    throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 프로젝트 표의 열 수가 12여야 하는데 ${colCnt}입니다.`)
-  }
+/** 구조 검증을 통과한 문서에서 이후 생성 단계가 재탐색 없이 그대로 쓰는 참조·수치 묶음. */
+interface MonthlyTemplateStructure {
+  projTbl: XmlElement
+  calTbl: XmlElement
+  dataRows: ProjectRowElement[]
+  dataRowTemplate: ProjectRowElement
+  yearNode: XmlElement
+  monthNode: XmlElement
+  asOfDateNode: XmlElement
+  measurements: MonthlyMeasurements
+}
 
-  const rows: any[] = Array.from(projTbl.getElementsByTagNameNS(HP_NS, 'tr') as any[])
-  const tcs = rows.map(r => getTcs(r))
-  const dataRows = tcs.slice(1) // 헤더 행 제외
-  if (dataRows.length !== 11) {
-    throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 데이터 행 11개를 찾지 못했습니다 (실제 ${dataRows.length}개).`)
-  }
+function assertMonthlyTemplateStructure(doc: XmlDocument): MonthlyTemplateStructure {
+  const projectCandidates = findMonthlyProjectTableCandidates(doc)
+  const projTbl = assertExactlyOneCandidate(projectCandidates, '프로젝트 표', 'INVALID_TABLE_LAYOUT')
+
+  const calendarCandidates = findMonthlyCalendarTableCandidates(doc, projTbl)
+  const calTbl = assertExactlyOneCandidate(calendarCandidates, '달력 표', 'INVALID_TABLE_LAYOUT')
+
+  const projectContract = assertMonthlyProjectTableContract(projTbl)
+  const calendarContract = assertMonthlyCalendarTableContract(calTbl)
 
   // 기준일 캡션 노드 — 사용자 데이터를 채우기 전 시점에 정확히 1곳이어야 한다.
-  const allTs: any[] = Array.from(doc.getElementsByTagNameNS(HP_NS, 't') as any[])
-  const asOfDateMatches = allTs.filter((t: any) => MONTHLY_DATE_REGEX.test(t.textContent || ''))
+  const asOfDateMatches = elementsOf(doc, 't').filter((t) => MONTHLY_DATE_REGEX.test(t.textContent ?? ''))
   if (asOfDateMatches.length !== 1) {
-    throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 기준일 캡션("N월 N일 현재") 표시 위치를 정확히 하나 찾아야 하는데 ${asOfDateMatches.length}개 발견했습니다.`)
+    throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 기준일 캡션("N월 N일 현재") 표시 위치를 정확히 하나 찾아야 하는데 ${asOfDateMatches.length}개 발견했습니다.`, 'INVALID_POSTCONDITION')
   }
 
-  return { dataRows, asOfDateNode: asOfDateMatches[0] }
+  // 제목의 "NNNN년"/"N월" 텍스트 노드 — 두 표 밖(문단 흐름)에서 정확히 1곳씩이어야 한다.
+  const isInsideAnyTable = (p: XmlElement) =>
+    [projTbl, calTbl].some((t) => elementsOf(t, 'p').includes(p))
+  const outerParas = elementsOf(doc, 'p').filter((p) => !isInsideAnyTable(p))
+  const outerTs = outerParas.flatMap((p) => elementsOf(p, 't'))
+
+  const yearMatches = outerTs.filter((t) => /^\d{4}년$/.test((t.textContent ?? '').trim()))
+  if (yearMatches.length !== 1) {
+    throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 제목의 연도 표시 위치를 정확히 하나 찾아야 하는데 ${yearMatches.length}개 발견했습니다.`, 'INVALID_TABLE_LAYOUT')
+  }
+  const monthMatches = outerTs.filter((t) => /^\d{1,2}월$/.test((t.textContent ?? '').trim()))
+  if (monthMatches.length !== 1) {
+    throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 제목의 월 표시 위치를 정확히 하나 찾아야 하는데 ${monthMatches.length}개 발견했습니다.`, 'INVALID_TABLE_LAYOUT')
+  }
+
+  // 표 밖 고정 콘텐츠 높이 — 표 wrapper 문단은 제외(표 자신의 높이는 별도로 계산해 중복 방지).
+  let fixedContentHeight = 0
+  for (const p of outerParas) {
+    if (isTableWrapperParagraph(p)) continue
+    fixedContentHeight += directLineHeight(p)
+  }
+
+  const pagePr = elementsOf(doc, 'pagePr')[0] ?? null
+  const margin = pagePr ? elementsOf(pagePr, 'margin')[0] ?? null : null
+  if (!pagePr || !margin) {
+    throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 페이지 설정(pagePr/margin)을 찾지 못했습니다.`, 'INVALID_PAGE_GEOMETRY')
+  }
+
+  const projOutMargin = findDirectChild(projTbl, 'outMargin')
+  const objectMarginsProject = Number(projOutMargin?.getAttribute('top') || 0) + Number(projOutMargin?.getAttribute('bottom') || 0)
+
+  return {
+    projTbl, calTbl,
+    dataRows: projectContract.dataRows, dataRowTemplate: projectContract.dataRowTemplate,
+    yearNode: yearMatches[0], monthNode: monthMatches[0], asOfDateNode: asOfDateMatches[0],
+    measurements: {
+      pageHeight: Number(pagePr.getAttribute('height')),
+      topMargin: Number(margin.getAttribute('top')),
+      bottomMargin: Number(margin.getAttribute('bottom')),
+      fixedContentHeight,
+      projectHeaderHeight: projectContract.headerHeight,
+      projectRowHeight: projectContract.dataRowHeight,
+      calendarHeight: calendarContract.calendarHeight,
+      objectMargins: objectMarginsProject + calendarContract.objectMarginsCalendar,
+      calendarVertOffset: calendarContract.calendarVertOffset,
+    },
+  }
+}
+
+// 프로젝트 표는 병합 셀이 전혀 없다(실측 확인) — 기존 데이터 행을 전부 지우고
+// desiredCount(0이면 1로 취급 — 빈 행 1개는 남긴다)만큼 template 행을 복제해 다시 채운다.
+function rebuildMonthlyProjectRows(
+  tbl: XmlElement,
+  oldDataRows: readonly ProjectRowElement[],
+  template: ProjectRowElement,
+  desiredCount: number
+): ProjectRowCells[] {
+  const n = Math.max(desiredCount, 1)
+  for (const old of oldDataRows) tbl.removeChild(old)
+  const newRows: ProjectRowElement[] = []
+  for (let i = 0; i < n; i++) newRows.push(template.cloneNode(true))
+  for (const nr of newRows) tbl.appendChild(nr)
+  return newRows.map((r) => getDirectChildren(r, 'tc'))
+}
+
+// 월간 컬럼 인덱스(12열): 용역명, 발주처, 단장, 금액, 기간, 쪽수, 과업설명, 현장조사, 제출일,
+// 발표/면접, 개찰일, 비고. 주간과 달리 별도의 번호(연번) 열이 없다(실측 확인 — 헤더 12칸 중
+// 번호 칸 없음). 그래서 이 표에는 "번호가 입력 순서와 일치"라는 검증 항목이 적용되지 않는다
+// — 대신 "입력 순서 그대로 배치"만 확인한다.
+const MONTHLY_PROJECT_IDX = {
+  name: 0, client: 1, chief: 2, fee: 3, period: 4, pages: 5,
+  taskDesc: 6, siteCheck: 7, submit: 8, interview: 9, bid: 10, note: 11,
+} as const
+
+/** 요청 본문(JSON, 타입 보증 없음)에서 읽는 월간 프로젝트 한 건의 원본 형태. */
+interface MonthlyProjectInput {
+  name?: unknown
+  director?: unknown
+  fee?: unknown
+  submit_date?: unknown
+  interview_date?: unknown
+  result_date?: unknown
+  note?: unknown
+}
+
+/** 셀에 그대로 넣을 수 있게 문자열로 확정된 한 건. 표 채우기·사후 검증이 둘 다 이걸 쓴다. */
+interface MonthlyProjectRow {
+  name: string
+  director: string
+  fee: string
+  submitDate: string
+  interviewDate: string
+  resultDate: string
+  note: string
+}
+
+// 기존 동작(`p.field || ''`)과 정확히 같은 의미 — falsy면 빈 문자열.
+function toReportText(value: unknown): string {
+  return value ? String(value) : ''
+}
+
+// 요청 본문 → 확정 타입. unknown을 받아 이 한 곳에서만 좁히고, 이후 단계로 any를 넘기지 않는다.
+function normalizeMonthlyProjects(performing: unknown): MonthlyProjectRow[] {
+  const list: unknown[] = Array.isArray(performing) ? performing : []
+  return list.map((raw) => {
+    const p: MonthlyProjectInput = typeof raw === 'object' && raw !== null ? raw : {}
+    return {
+      name: formatProjectNameForReport(toReportText(p.name)),
+      director: toReportText(p.director),
+      fee: p.fee != null ? String(p.fee) : '',
+      submitDate: toReportText(p.submit_date),
+      interviewDate: toReportText(p.interview_date),
+      resultDate: toReportText(p.result_date),
+      note: toReportText(p.note),
+    }
+  })
+}
+
+function fillMonthlyProjectRows(dataRows: readonly ProjectRowCells[], projects: readonly MonthlyProjectRow[]): void {
+  const IDX = MONTHLY_PROJECT_IDX
+  for (let i = 0; i < dataRows.length; i++) {
+    const dtcs = dataRows[i]
+    const p = projects[i]
+    if (p) {
+      setText(dtcs[IDX.name],      p.name)
+      setText(dtcs[IDX.client],    '')
+      setText(dtcs[IDX.chief],     p.director)
+      setText(dtcs[IDX.fee],       p.fee)
+      setText(dtcs[IDX.period],    '')
+      setText(dtcs[IDX.pages],     '')
+      setText(dtcs[IDX.taskDesc],  '')
+      setText(dtcs[IDX.siteCheck], '')
+      setText(dtcs[IDX.submit],    p.submitDate)
+      setText(dtcs[IDX.interview], p.interviewDate)
+      setText(dtcs[IDX.bid],       p.resultDate)
+      setTextMultiLine(dtcs[IDX.note], p.note)
+    } else {
+      for (const dtc of dtcs) clearCell(dtc)
+    }
+  }
+}
+
+// zip.updateFile 이전에 실행하는 최종 사후 검증 — 하나라도 어긋나면 잘못된 문서를 내보내지
+// 않고 던진다.
+function assertMonthlyPostcondition(projTbl: XmlElement, projects: readonly MonthlyProjectRow[]): void {
+  const rows = getDirectChildren(projTbl, 'tr')
+  const dataRows = rows.slice(1)
+  const expectedDataRowCount = Math.max(projects.length, 1)
+  if (dataRows.length !== expectedDataRowCount) {
+    throw new TemplateStructureError(`생성된 문서의 데이터 행 수(${dataRows.length})가 기대값(${expectedDataRowCount})과 다릅니다.`, 'INVALID_POSTCONDITION')
+  }
+  const declaredRowCnt = Number(projTbl.getAttribute('rowCnt'))
+  if (declaredRowCnt !== rows.length) {
+    throw new TemplateStructureError(`생성된 문서의 rowCnt(${declaredRowCnt})가 실제 행 수(${rows.length})와 다릅니다.`, 'INVALID_POSTCONDITION')
+  }
+
+  rows.forEach((tr, rowIdx) => {
+    const cells = getDirectChildren(tr, 'tc')
+    if (cells.length !== 12) {
+      throw new TemplateStructureError(`생성된 문서의 ${rowIdx}행 셀 수가 12가 아니라 ${cells.length}입니다.`, 'INVALID_POSTCONDITION')
+    }
+    cells.forEach((tc, colIdx) => {
+      const addr = getCellAddr(tc)
+      if (!addr || addr.rowAddr !== rowIdx || addr.colAddr !== colIdx) {
+        throw new TemplateStructureError(`생성된 문서의 ${rowIdx}행 ${colIdx}열 주소가 위치와 일치하지 않습니다.`, 'INVALID_POSTCONDITION')
+      }
+      const span = getCellSpanOf(tc)
+      if (!span || span.colSpan !== 1 || span.rowSpan !== 1) {
+        throw new TemplateStructureError(`생성된 문서의 ${rowIdx}행 ${colIdx}열의 span이 1x1이 아닙니다.`, 'INVALID_POSTCONDITION')
+      }
+    })
+  })
+
+  const dataHeights: number[] = dataRows.map((tr) => {
+    const heights = getDirectChildren(tr, 'tc').map((tc) => getCellHeightOf(tc))
+    return new Set(heights).size === 1 ? Number(heights[0]) : NaN
+  })
+  if (dataHeights.some((h) => Number.isNaN(h)) || new Set(dataHeights).size > 1) {
+    throw new TemplateStructureError(`생성된 문서의 데이터 행 높이가 균일하지 않습니다(실제: [${dataHeights.join(', ')}]).`, 'INVALID_POSTCONDITION')
+  }
+  const headerHeight: number = rowHeight(rows[0])
+  const computedHeight = headerHeight + dataHeights.reduce((s, h) => s + h, 0)
+  const sz = findDirectChild(projTbl, 'sz')
+  const declaredHeight = Number(sz?.getAttribute('height'))
+  if (declaredHeight !== computedHeight) {
+    throw new TemplateStructureError(`생성된 문서의 hp:sz(${declaredHeight})가 실제 행 높이 합(${computedHeight})과 다릅니다.`, 'INVALID_POSTCONDITION')
+  }
+
+  dataRows.forEach((tr, i) => {
+    const cells = getDirectChildren(tr, 'tc')
+    const project = projects[i]
+    if (project) {
+      if (getText(cells[MONTHLY_PROJECT_IDX.name]) !== project.name) {
+        throw new TemplateStructureError(`생성된 문서의 ${i}번째 데이터 행 프로젝트명이 입력 순서와 일치하지 않습니다.`, 'INVALID_POSTCONDITION')
+      }
+    } else {
+      const allEmpty = cells.every((tc) => getText(tc).trim() === '')
+      if (!allEmpty) {
+        throw new TemplateStructureError(`생성된 문서의 ${i}번째 빈 데이터 행에 값이 남아 있습니다.`, 'INVALID_POSTCONDITION')
+      }
+    }
+  })
 }
 
 // ── Monthly HWPX 생성 ─────────────────────────────────────────────────────────
+interface MonthlyGenerationRequest {
+  performing: unknown
+  reportYear: unknown
+  reportMonth: unknown
+  asOfDate?: unknown
+}
+
 async function generateMonthly(
   templatePath: string,
-  data: { week: string; performing: any[] }
+  data: MonthlyGenerationRequest
 ): Promise<Buffer> {
+  // 날짜 계약 해석과 입력 정규화는 ZIP을 열기 전에 먼저 한다 — 요청 자체가 잘못됐다면 템플릿을
+  // 읽을 필요조차 없다(순서: 요청 검증 → 날짜 계약 → ZIP/XML 파싱 → 구조 검증 → ...).
+  const reportDate: MonthlyReportDate = parseMonthlyReportDate({
+    reportYear: data.reportYear, reportMonth: data.reportMonth, asOfDate: data.asOfDate,
+  })
+  const projects: MonthlyProjectRow[] = normalizeMonthlyProjects(data.performing)
+
   const AdmZip = (await import('adm-zip')).default
   const { DOMParser, XMLSerializer } = await import('@xmldom/xmldom')
 
   const zip = new AdmZip(templatePath)
   const xml = zip.readAsText('Contents/section0.xml')
-  const doc = new DOMParser().parseFromString(xml, 'text/xml')
+  const doc = toXmlDocument(new DOMParser().parseFromString(xml, 'text/xml'))
 
   const structure = assertMonthlyTemplateStructure(doc)
 
-  // 월간 컬럼 인덱스 (12열): 용역명, 발주처, 단장, 금액, 기간, 쪽수, 과업설명, 현장조사, 제출일, 발표/면접, 개찰일, 비고
-  const IDX = { name: 0, client: 1, chief: 2, fee: 3, period: 4, pages: 5, taskDesc: 6, siteCheck: 7, submit: 8, interview: 9, bid: 10, note: 11 }
-
-  const dataRows = structure.dataRows
-  const projects = data.performing
-
-  for (let i = 0; i < dataRows.length; i++) {
-    const dtcs = dataRows[i]
-    if (i < projects.length) {
-      const p = projects[i]
-      setText(dtcs[IDX.name],      formatProjectNameForReport(p.name || ''))
-      setText(dtcs[IDX.client],    '')
-      setText(dtcs[IDX.chief],     p.director || '')
-      setText(dtcs[IDX.fee],       p.fee != null ? String(p.fee) : '')
-      setText(dtcs[IDX.period],    '')
-      setText(dtcs[IDX.pages],     '')
-      setText(dtcs[IDX.taskDesc],  '')
-      setText(dtcs[IDX.siteCheck], '')
-      setText(dtcs[IDX.submit],    p.submit_date || '')
-      setText(dtcs[IDX.interview], p.interview_date || '')
-      setText(dtcs[IDX.bid],       p.result_date || '')
-      setTextMultiLine(dtcs[IDX.note], p.note || '')
-    } else {
-      for (const dtc of dtcs) clearCell(dtc)
-    }
+  // 자동 문서 높이 예산 확인 — 행을 실제로 만들거나 데이터를 채우기 전에 먼저 판정한다.
+  // renderSafetyReserve는 한글 수동 경계 검증(0/13/20/23건)으로 확정된 값이다 —
+  // 근거는 lib/hwpx/monthlyPageBudget.ts의 MONTHLY_RENDER_SAFETY_RESERVE 주석 참고.
+  const budget = estimateMonthlyPageBudget({
+    pageHeight: structure.measurements.pageHeight,
+    topMargin: structure.measurements.topMargin,
+    bottomMargin: structure.measurements.bottomMargin,
+    fixedContentHeight: structure.measurements.fixedContentHeight,
+    projectHeaderHeight: structure.measurements.projectHeaderHeight,
+    projectRowHeight: structure.measurements.projectRowHeight,
+    projectRowCount: projects.length,
+    calendarHeight: structure.measurements.calendarHeight,
+    objectMargins: structure.measurements.objectMargins,
+    calendarVertOffset: structure.measurements.calendarVertOffset,
+    renderSafetyReserve: MONTHLY_RENDER_SAFETY_RESERVE,
+  } satisfies MonthlyPageBudgetInput)
+  if (!budget.fits) {
+    console.error('[Monthly HWPX Page Budget Exceeded]', { projectCount: projects.length, ...budget })
+    throw new PageBudgetExceededError(MONTHLY_PAGE_BUDGET_EXCEEDED_MESSAGE)
   }
 
-  // 기준일 캡션 — assertMonthlyTemplateStructure가 데이터 채우기 전에 미리 특정해 둔
-  // 그 노드 하나만 갱신한다(전체 문서 재검색 없음 — note 등 사용자 데이터를 건드리지 않는다).
-  const today = new Date()
-  const monthStr = `${today.getMonth() + 1}월 ${today.getDate()}일 현재`
-  structure.asOfDateNode.textContent = monthStr
+  // 프로젝트 표를 실제 건수에 맞춰 재구성 — rowAddr·rowCnt·표 높이까지 함께 갱신.
+  const newDataRows = rebuildMonthlyProjectRows(structure.projTbl, structure.dataRows, structure.dataRowTemplate, projects.length)
+  renumberRowAddr(structure.projTbl)
+  structure.projTbl.setAttribute('rowCnt', String(getDirectChildren(structure.projTbl, 'tr').length))
+  setTableHeight(structure.projTbl, sumRowSpan1Heights(structure.projTbl))
+
+  fillMonthlyProjectRows(newDataRows, projects)
+
+  // 제목의 연·월, 기준일 캡션 — assertMonthlyTemplateStructure가 데이터 채우기 전에 미리
+  // 특정해 둔 노드만 갱신한다(전체 문서 재검색 없음 — note 등 사용자 데이터를 건드리지 않는다).
+  structure.yearNode.textContent = `${reportDate.reportYear}년`
+  structure.monthNode.textContent = ` ${reportDate.reportMonth}월 `
+  structure.asOfDateNode.textContent = formatMonthlyAsOfCaption(reportDate)
+
+  // zip.updateFile로 실제 파일을 갱신하기 전에 마지막으로 결과 문서 자체를 검증한다.
+  assertMonthlyPostcondition(structure.projTbl, projects)
 
   removeLinesegarray(doc)
 
@@ -671,14 +1230,16 @@ async function generateMonthly(
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { type = 'weekly', week, performing = [], expected = [], meta } = body
+    const { type = 'weekly', week, performing = [], expected = [], meta, reportYear, reportMonth, asOfDate } = body
 
-    // 입력 수량 검증 — 템플릿 고정 행 수를 넘는 데이터는 조용히 잘리는 대신 여기서 막는다.
-    const violations = type === 'monthly'
-      ? validateMonthlyCapacity(performing)
-      : validateWeeklyCapacity(performing)
-    if (violations.length > 0) {
-      return NextResponse.json({ error: formatCapacityViolations(violations) }, { status: 400 })
+    // 입력 수량 검증 — Weekly는 기존 동작 그대로(상태값 검증). Monthly는 고정 행수 제한을
+    // 두지 않는다 — 아래 generateMonthly 내부의 날짜 계약 검증 + page budget 검증이 그 역할을
+    // 대신한다(고정 11건 제한은 실사용 건수를 못 담아 동적 생성으로 전환한 것과 같은 이유).
+    if (type !== 'monthly') {
+      const violations = validateWeeklyCapacity(performing)
+      if (violations.length > 0) {
+        return NextResponse.json({ error: formatCapacityViolations(violations) }, { status: 400 })
+      }
     }
 
     const templatesDir = path.join(process.cwd(), 'lib', 'templates')
@@ -690,13 +1251,18 @@ export async function POST(req: NextRequest) {
     }
 
     let buffer: Buffer
+    let reportDateForFilename: MonthlyReportDate | null = null
     try {
       if (type === 'monthly') {
-        buffer = await generateMonthly(templatePath, { week, performing })
+        buffer = await generateMonthly(templatePath, { performing, reportYear, reportMonth, asOfDate })
+        reportDateForFilename = parseMonthlyReportDate({ reportYear, reportMonth, asOfDate })
       } else {
         buffer = await generateWeekly(templatePath, { week, performing, expected, meta })
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
+      if (err instanceof InvalidMonthlyReportDateError) {
+        return NextResponse.json({ error: err.message }, { status: 400 })
+      }
       if (err instanceof TemplateStructureError) {
         console.error('[HWPX Template Structure Error]', err)
         return NextResponse.json(
@@ -710,9 +1276,8 @@ export async function POST(req: NextRequest) {
       throw err
     }
 
-    const today = new Date()
-    const filename = type === 'monthly'
-      ? `미래사업팀_월간업무_${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}.hwpx`
+    const filename = type === 'monthly' && reportDateForFilename
+      ? formatMonthlyFilename(reportDateForFilename)
       : `미래사업팀_주간업무_${week}.hwpx`
 
     return new NextResponse(buffer, {
@@ -721,7 +1286,7 @@ export async function POST(req: NextRequest) {
         'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
       },
     })
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('[HWPX API Error]', err)
     return NextResponse.json({ error: '문서 생성 중 오류가 발생했습니다.' }, { status: 500 })
   }
