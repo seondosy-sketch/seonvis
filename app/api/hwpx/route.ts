@@ -4,7 +4,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { validateWeeklyCapacity, formatCapacityViolations } from '@/lib/hwpx/capacity'
 import { formatProjectNameForReport } from '@/lib/hwpx/projectName'
-import { estimateWeeklyPageBudget, PAGE_BUDGET_EXCEEDED_MESSAGE, type WeeklyPageBudgetInput } from '@/lib/hwpx/pageBudget'
+import { estimateWeeklyPageBudget, type WeeklyPageBudgetInput } from '@/lib/hwpx/pageBudget'
 import {
   parseMonthlyReportDate, InvalidMonthlyReportDateError,
   formatMonthlyAsOfCaption, formatMonthlyFilename,
@@ -35,9 +35,9 @@ class TemplateStructureError extends Error {
   }
 }
 
-// 주간/월간 입력량이 각자의 page budget 계산기(lib/hwpx/pageBudget.ts, lib/hwpx/monthlyPageBudget.ts)
-// 산술 예산을 넘을 때 던진다. "1페이지를 보장한다"는 뜻이 아니라 "이 상태로는 안전하게 생성을
-// 시도하지 않는다"는 뜻이다 — 실제 페이지 수는 한글 프로그램으로 열어봐야만 확정된다.
+// Monthly 입력량이 lib/hwpx/monthlyPageBudget.ts의 산술 예산을 넘을 때 던진다.
+// Weekly는 더 이상 이 예외를 쓰지 않는다 — 1페이지에 들어가지 않으면 차단하지 않고 2페이지
+// 이상으로 생성한다(pageBreak="CELL" + repeatHeader="1"로 한글이 자동 분할·헤더 반복).
 class PageBudgetExceededError extends Error {}
 
 // 월간 입력 건수가 "사람이 한글로 직접 열어 확인한 최대 건수"를 넘을 때 던진다.
@@ -743,11 +743,15 @@ async function generateWeekly(
   const jinhaengProjects = data.performing.filter((p: any) => p.status === '진행중')
   const expectedProjects = data.expected || []
 
-  // 자동 문서 높이 예산 확인 — 행을 실제로 만들거나 데이터를 채우기 전에 먼저 판정한다.
-  // "1페이지 보장"이 아니라 "지금 서식을 전혀 줄이지 않은 기준으로 안전하게 생성 가능한가"다.
+  // 문서 높이 산술 계산 — 진단 전용이다. 여기서 생성을 막지 않는다.
+  //
+  // Weekly는 입력이 많아 1페이지에 들어가지 않아도 차단하지 않고 2페이지 이상으로 자연스럽게
+  // 생성한다. 두 표에 pageBreak="CELL"과 repeatHeader="1"이 설정되어 있어 한글이 행 경계에서
+  // 자동으로 나누고 다음 페이지에 헤더 행을 반복한다(템플릿 실측 확인). 데이터 삭제·행 누락·
+  // 말줄임·강제 절단은 어떤 경우에도 하지 않는다.
   const eduLineCount = 1 + EDU_FIELD_ORDER.filter(k => splitNames(data.meta?.[k]).length > 0).length
   const budget = estimateWeeklyPageBudget({
-    usableHeight: structure.measurements.usableHeight,
+    usableHeightPerPage: structure.measurements.usableHeight,
     fixedContentHeight: structure.measurements.fixedContentHeight,
     eduLineHeight: structure.measurements.eduLineHeight,
     eduLineCount,
@@ -767,15 +771,14 @@ async function generateWeekly(
     expectedWrapperSpacing: structure.measurements.expectedWrapperSpacing,
     trailingParagraphSpacing: structure.measurements.trailingParagraphSpacing,
   } satisfies WeeklyPageBudgetInput)
-  if (!budget.fitsHeightBudget) {
-    // 상세 수치는 사용자 응답(PAGE_BUDGET_EXCEEDED_MESSAGE)에는 넣지 않고 서버 로그에만 남긴다
-    // — 개발 로그·완료 보고·수동 검증 판단용.
-    console.error('[HWPX Page Budget Exceeded]', {
+  // 진단 로그만 남긴다 — 상세 수치는 사용자 응답에 넣지 않는다(개발 로그·완료 보고·검증 판단용).
+  // 1페이지를 넘어가는 경우도 오류가 아니라 정상 동작이므로 error가 아닌 info로 기록한다.
+  if (!budget.fitsSinglePage) {
+    console.info('[HWPX Weekly Multi-Page]', {
       gaeyal: gaeyalProjects.length, jinhaeng: jinhaengProjects.length, expected: expectedProjects.length,
       eduLineCount,
       ...budget,
     })
-    throw new PageBudgetExceededError(PAGE_BUDGET_EXCEEDED_MESSAGE)
   }
 
   // 개찰/진행중 섹션을 실제 데이터 수에 맞춰 재구성 — rowSpan·rowAddr·표 높이까지 함께 갱신.

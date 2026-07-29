@@ -6,7 +6,6 @@ import fs from 'node:fs'
 import AdmZip from 'adm-zip'
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom'
 import { POST } from './route'
-import { PAGE_BUDGET_EXCEEDED_MESSAGE } from '@/lib/hwpx/pageBudget'
 import {
   MONTHLY_PAGE_BUDGET_EXCEEDED_MESSAGE, MONTHLY_VERIFIED_MAX_PROJECT_COUNT,
   MONTHLY_MAX_PROJECT_COUNT_EXCEEDED_CODE, formatMonthlyMaxProjectCountExceededMessage,
@@ -106,6 +105,26 @@ function assertWeeklyDynamicXmlContract(doc: any, expectedGaeyal: number, expect
   expect(jinhaengSpan).toBe(Math.max(expectedJinhaeng, 1))
   expect(jinhaengIdx - gaeyalIdx).toBe(gaeyalSpan)
   expect(rows.length - jinhaengIdx).toBe(jinhaengSpan)
+
+  // 데이터행 높이는 전 행이 같아야 한다. 섹션 라벨 셀은 제외하고 판단한다 — 라벨 셀은 병합
+  // 셀이거나(rowSpan>1) 섹션이 1건일 때 rowSpan=1이 되는데, 후자에서는 높이가 템플릿의 병합
+  // 높이(5행분)로 남는 기존 결함이 있다(이번 변경과 무관, 별도 보고).
+  const dataCellHeight = (tr: any) => {
+    const tcs = getTcs(tr)
+    const sz = tcs[tcs.length - 1].getElementsByTagNameNS(HP_NS, 'cellSz')[0]
+    return Number(sz.getAttribute('height'))
+  }
+  const perfDataRowHeights = [...new Set(rows.slice(1).map(dataCellHeight))]
+  expect(perfDataRowHeights.length).toBe(1)
+
+  // 병합 라벨 셀(rowSpan>1) 높이 = rowSpan × 데이터행 높이
+  for (const idx of [gaeyalIdx, jinhaengIdx]) {
+    const tc = getTcs(rows[idx])[0]
+    const span = Number(tc.getElementsByTagNameNS(HP_NS, 'cellSpan')[0]?.getAttribute('rowSpan') ?? 1)
+    if (span <= 1) continue
+    const height = Number(tc.getElementsByTagNameNS(HP_NS, 'cellSz')[0].getAttribute('height'))
+    expect(height).toBe(span * perfDataRowHeights[0])
+  }
 
   const perfSum = rows.reduce((s, tr) => s + rowHeight(tr), 0)
   expect(tableSzHeight(perfTbl)).toBe(perfSum)
@@ -433,23 +452,27 @@ describe('POST /api/hwpx — 주간 동적 행 재구성 (개찰/진행중/발�
     expect(res.status).toBe(200)
   })
 
-  it('예산 초과(개찰 15 / 진행중 15 / 발주예상 15) — 문서를 생성하지 않고 400과 예산 초과 메시지를 반환한다', async () => {
+  it('입력이 많아 1페이지를 넘어도 차단하지 않고 생성한다 (개찰 15 / 진행중 15 / 발주예상 15)', async () => {
     const performing = [
       ...Array.from({ length: 15 }, (_, i) => perfItem('개찰', `개찰${i + 1}`)),
       ...Array.from({ length: 15 }, (_, i) => perfItem('진행중', `진행${i + 1}`)),
     ]
     const expected = Array.from({ length: 15 }, (_, i) => expItem(`예상${i + 1}`))
     const res: any = await POST(mockRequest({ type: 'weekly', week: '2026-W22', performing, expected, meta: {} }))
-    expect(res.status).toBe(400)
-    const json = await res.json()
-    expect(json.error).toBe(PAGE_BUDGET_EXCEEDED_MESSAGE)
-    expect(json.error).not.toContain('반드시 2페이지')
-    expect(json.error).not.toContain('1페이지가 보장')
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('application/zip')
+    const { doc } = await toZipDoc(res)
+    assertWeeklyDynamicXmlContract(doc, 15, 15, 15)
+    const all = getAllText(doc).join('|')
+    for (let i = 1; i <= 15; i++) {
+      expect(all).toContain(`개찰${i}`)
+      expect(all).toContain(`진행${i}`)
+      expect(all).toContain(`예상${i}`)
+    }
   })
 
-  // 6-6-2는 6-6-4의 대체물이 아니라 별도 비교 샘플이다 — 6-6-4 자체는 현재 높이 예산
-  // 정책에서 명확히 차단되어야 하고, 그 과정에서 일부 데이터만 잘려 생성되는 경로가 없어야 한다.
-  it('12행(개찰 6 / 진행중 6) + 발주예상 4 + 교육 4줄은 명확히 차단되고, 잘린 문서가 생성되지 않는다', async () => {
+  // 12행(개찰 6 + 진행중 6) + 발주예상 4 + 교육 4줄 — 어떤 경우에도 데이터가 잘리지 않는다.
+  it('12행(개찰 6 / 진행중 6) + 발주예상 4 + 교육 4줄도 데이터 누락 없이 생성된다', async () => {
     const performing = [
       ...Array.from({ length: 6 }, (_, i) => perfItem('개찰', `개찰${i + 1}`)),
       ...Array.from({ length: 6 }, (_, i) => perfItem('진행중', `진행${i + 1}`)),
@@ -458,13 +481,13 @@ describe('POST /api/hwpx — 주간 동적 행 재구성 (개찰/진행중/발�
     const res: any = await POST(mockRequest({ type: 'weekly', week: '2026-W22', performing, expected,
       meta: { edu_chief: '김책임', edu_arch: '박건축', edu_civil: '최토목', edu_safety: '정안전' } }))
 
-    expect(res.status).toBe(400)
-    const contentType = res.headers.get('content-type') || ''
-    expect(contentType).toContain('application/json') // zip이 아니라 JSON 오류 응답 — 문서가 생성되지 않았다는 뜻
-    expect(contentType).not.toContain('application/zip')
-
-    const json = await res.json()
-    expect(json.error).toBe(PAGE_BUDGET_EXCEEDED_MESSAGE)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('application/zip')
+    const { doc } = await toZipDoc(res)
+    assertWeeklyDynamicXmlContract(doc, 6, 6, 4)
+    const all = getAllText(doc).join('|')
+    for (let i = 1; i <= 6; i++) { expect(all).toContain(`개찰${i}`); expect(all).toContain(`진행${i}`) }
+    for (let i = 1; i <= 4; i++) expect(all).toContain(`예상${i}`)
   })
 })
 
@@ -1317,7 +1340,7 @@ describe('weekly.hwpx 표 wrapper 오버헤드 계약 (변형 템플릿 주입)'
   }
 
   // ── 실측값 확인 ───────────────────────────────────────────────────────────
-  it('B안 템플릿의 wrapper overhead 실측: 두 표 모두 0 (outMargin 0 + wrapper spacing 0)', () => {
+  it('현재 템플릿의 wrapper overhead 실측: 두 표 모두 720 (outMargin bottom 720 + wrapper spacing 0)', () => {
     const zip = new AdmZip(originalWeekly)
     const doc: any = new DOMParser().parseFromString(zip.readAsText('Contents/section0.xml'), 'text/xml')
     const [perf, exp] = weeklyTables(doc)
@@ -1336,10 +1359,13 @@ describe('weekly.hwpx 표 wrapper 오버헤드 계약 (변형 템플릿 주입)'
 
     const p = overheadOf(perf)
     const e = overheadOf(exp)
-    // B안 적용 전에는 수행표 1,002(282+720) / 발주예상표 1,286(566+720) = 2,288이었다.
-    expect(p).toMatchObject({ outMargins: 0, spacing: 0, overhead: 0 })
-    expect(e).toMatchObject({ outMargins: 0, spacing: 0, overhead: 0 })
-    expect(p.overhead + e.overhead).toBe(0)
+    // 표 → 다음 섹션 제목 간격은 두 구간 모두 outMargin bottom 720으로 만든다(같은 구조·같은 값).
+    // wrapper 문단 줄간격(spacing)은 쓰지 않는다 — treatAsChar="0"에서는 표 뒤 공간을 만들지
+    // 못한다(한글 렌더 실측: 8.3pt → 1.7pt로 붕괴). 예산 총합은 이동 전과 같은 1,440이다.
+    expect(p).toMatchObject({ outMargins: 720, spacing: 0, overhead: 720 })
+    expect(e).toMatchObject({ outMargins: 720, spacing: 0, overhead: 720 })
+    expect(p.overhead).toBe(e.overhead)
+    expect(p.overhead + e.overhead).toBe(1440)
     // 좌우 outMargin은 변경 금지 대상 — 그대로 남아 있어야 한다.
     expect(dcw(perf, 'outMargin')[0].getAttribute('left')).toBe('141')
     expect(dcw(exp, 'outMargin')[0].getAttribute('left')).toBe('283')
@@ -1366,30 +1392,47 @@ describe('weekly.hwpx 표 wrapper 오버헤드 계약 (변형 템플릿 주입)'
   })
 
   // ── outMargin / wrapper spacing 변경이 판정에 그대로 반영된다 ──────────────────
-  it('outMargin을 크게 키우면 원래 통과하던 조합이 차단된다', async () => {
-    const ok: any = await POST(mockRequest(weeklyBody(2, 3, 2)))
-    expect(ok.status).toBe(200)
+  // Weekly는 예산으로 생성을 막지 않으므로, 측정값이 실제 계산에 쓰이는지는 라우트가 남기는
+  // 진단 로그([HWPX Weekly Multi-Page])의 수치로 확인한다. 응답 계약은 항상 200 zip이다.
+  async function captureBudgetLog(body: any): Promise<{ status: number; budget: any }> {
+    const orig = console.info
+    let budget: any = null
+    console.info = (...a: any[]) => { if (a[0] === '[HWPX Weekly Multi-Page]') budget = a[1] }
+    try {
+      const res: any = await POST(mockRequest(body))
+      return { status: res.status, budget }
+    } finally {
+      console.info = orig
+    }
+  }
+
+  it('outMargin을 크게 키우면 예상 페이지 수가 늘어난다(생성은 계속된다)', async () => {
+    const before = await captureBudgetLog(weeklyBody(2, 3, 2))
+    expect(before.status).toBe(200)
+    expect(before.budget).toBeNull() // 1페이지라 진단 로그 없음
 
     injectMutatedWeekly((doc) => {
       const om = dcw(weeklyTables(doc)[0], 'outMargin')[0]
-      om.setAttribute('top', '100000') // 페이지 사용 높이(74,268)를 확실히 넘길 값
+      om.setAttribute('top', '100000') // 페이지 사용 높이(76,534)를 확실히 넘길 값
     })
-    const blocked: any = await POST(mockRequest(weeklyBody(2, 3, 2)))
-    expect(blocked.status).toBe(400)
-    expect((await blocked.json()).error).toBe(PAGE_BUDGET_EXCEEDED_MESSAGE)
+    const after = await captureBudgetLog(weeklyBody(2, 3, 2))
+    expect(after.status).toBe(200) // 차단하지 않는다
+    expect(after.budget.tableOutMarginsHeight).toBe(100000 + 720 + 720) // 주입한 top + 두 표의 bottom
+    expect(after.budget.estimatedPageCount).toBeGreaterThanOrEqual(2)
   })
 
-  it('wrapper spacing을 크게 키우면 원래 통과하던 조합이 차단된다', async () => {
+  it('wrapper spacing을 크게 키우면 예상 페이지 수가 늘어난다(생성은 계속된다)', async () => {
     injectMutatedWeekly((doc) => {
       const seg = dcw(dcw(wrapperParaOf(doc, weeklyTables(doc)[0]), 'linesegarray')[0], 'lineseg')[0]
       seg.setAttribute('spacing', '100000')
     })
-    const blocked: any = await POST(mockRequest(weeklyBody(2, 3, 2)))
-    expect(blocked.status).toBe(400)
-    expect((await blocked.json()).error).toBe(PAGE_BUDGET_EXCEEDED_MESSAGE)
+    const after = await captureBudgetLog(weeklyBody(2, 3, 2))
+    expect(after.status).toBe(200)
+    expect(after.budget.tableWrapperSpacingHeight).toBe(100000 + 0)
+    expect(after.budget.estimatedPageCount).toBeGreaterThanOrEqual(2)
   })
 
-  it('outMargin/wrapper spacing을 0으로 만들면 차단됐던 4/6/4+교육3줄이 통과한다(항목이 실제로 계산에 쓰인다는 증거)', async () => {
+  it('outMargin/wrapper spacing을 0으로 만들면 4/6/4+교육3줄이 그대로 생성된다', async () => {
     injectMutatedWeekly((doc) => {
       for (const t of weeklyTables(doc)) {
         const om = dcw(t, 'outMargin')[0]
@@ -1462,24 +1505,24 @@ describe('weekly.hwpx 표 wrapper 오버헤드 계약 (변형 템플릿 주입)'
   // 자체가 깨진다(1단계에서 변경 금지인 기존 로직). 새로 추가한 판독기는 표의 직계 outMargin과
   // 노드 동일성 기반 wrapper만 쓰므로 그 자체로는 중첩에 안전하다.
 
-  it('두 표의 outMargin을 서로 독립적으로 읽는다 (발주예상표만 키워도 차단)', async () => {
+  it('두 표의 outMargin을 서로 독립적으로 읽는다 (발주예상표만 키워도 수치에 반영)', async () => {
     injectMutatedWeekly((doc) => {
       const om = dcw(weeklyTables(doc)[1], 'outMargin')[0]
       om.setAttribute('bottom', '100000')
     })
-    const blocked: any = await POST(mockRequest(weeklyBody(2, 3, 2)))
-    expect(blocked.status).toBe(400)
-    expect((await blocked.json()).error).toBe(PAGE_BUDGET_EXCEEDED_MESSAGE)
+    const after = await captureBudgetLog(weeklyBody(2, 3, 2))
+    expect(after.status).toBe(200)
+    expect(after.budget.tableOutMarginsHeight).toBe(100000 + 720) // 발주예상표 bottom 덮어씀 + 수행표 bottom 720
   })
 
-  it('두 표의 wrapper spacing을 서로 독립적으로 읽는다 (발주예상표만 키워도 차단)', async () => {
+  it('두 표의 wrapper spacing을 서로 독립적으로 읽는다 (발주예상표만 키워도 수치에 반영)', async () => {
     injectMutatedWeekly((doc) => {
       const seg = dcw(dcw(wrapperParaOf(doc, weeklyTables(doc)[1]), 'linesegarray')[0], 'lineseg')[0]
       seg.setAttribute('spacing', '100000')
     })
-    const blocked: any = await POST(mockRequest(weeklyBody(2, 3, 2)))
-    expect(blocked.status).toBe(400)
-    expect((await blocked.json()).error).toBe(PAGE_BUDGET_EXCEEDED_MESSAGE)
+    const after = await captureBudgetLog(weeklyBody(2, 3, 2))
+    expect(after.status).toBe(200)
+    expect(after.budget.tableWrapperSpacingHeight).toBe(100000 + 0)
   })
 
   it('wrapper 문단에 linesegarray가 없으면 거절된다 (MISSING_WRAPPER_LINESEG)', async () => {
@@ -1615,43 +1658,42 @@ describe('weekly.hwpx 마지막 문단 여백 계약 (변형 템플릿 주입)',
     expect(res.status).toBe(200)
   })
 
-  it('12행 + 발주예상 4 + 교육 4줄 → 400 (B안 적용 후 새 차단 경계)', async () => {
+  it('12행 + 발주예상 4 + 교육 4줄도 200 zip으로 생성된다', async () => {
     const res: any = await POST(mockRequest(body(6, 6, 4, EDU4)))
-    expect(res.status).toBe(400)
-    const ct = res.headers.get('content-type') || ''
-    expect(ct).toContain('application/json')
-    expect(ct).not.toContain('application/zip')
-    const buf = Buffer.from(await res.arrayBuffer())
-    expect(buf.subarray(0, 2).toString('latin1')).not.toBe('PK')
-    expect(JSON.parse(buf.toString('utf8')).error).toBe(PAGE_BUDGET_EXCEEDED_MESSAGE)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('application/zip')
   })
 
-  // 마지막 문단의 spacing을 바꿔도 판정은 달라지지 않아야 한다: 그 값은 fixedContentHeight에
-  // 더해지면서 동시에 contentBottom에서 빠지므로 정확히 상쇄된다. 이것이 "문서 하단은 마지막 줄의
-  // 아래 여백과 무관하다"는 모델의 핵심 성질이다.
-  it('마지막 문단 spacing을 키워도 판정이 바뀌지 않는다(상쇄 불변식)', async () => {
-    const before: any = await POST(mockRequest(body(6, 6, 2, EDU1)))
-    expect(before.status).toBe(200) // 기본값에서 통과
+  // 마지막 문단의 spacing을 바꿔도 문서 하단은 달라지지 않아야 한다: 그 값은 fixedContentHeight에
+  // 더해지면서 동시에 contentBottom에서 빠지므로 정확히 상쇄된다.
+  it('마지막 문단 spacing을 키워도 contentBottom이 달라지지 않는다(상쇄 불변식)', async () => {
+    const capture = async (b: any) => {
+      const orig = console.info
+      let budget: any = null
+      console.info = (...a: any[]) => { if (a[0] === '[HWPX Weekly Multi-Page]') budget = a[1] }
+      try {
+        const res: any = await POST(mockRequest(b))
+        return { status: res.status, budget }
+      } finally { console.info = orig }
+    }
+    const before = await capture(body(20, 20, 10, EDU4))
+    expect(before.status).toBe(200)
 
     inject((doc) => {
       const segs = dch(dch(lastOuter(doc), 'linesegarray')[0], 'lineseg')
       segs[segs.length - 1].setAttribute('spacing', '5000')
     })
-    const after: any = await POST(mockRequest(body(6, 6, 2, EDU1)))
-    expect(after.status).toBe(200) // 여백을 5,000으로 키워도 그대로 통과
-
-    // 차단 케이스도 마찬가지로 판정이 유지된다.
-    inject((doc) => {
-      const segs = dch(dch(lastOuter(doc), 'linesegarray')[0], 'lineseg')
-      segs[segs.length - 1].setAttribute('spacing', '5000')
-    })
-    const blocked: any = await POST(mockRequest(body(6, 6, 4, EDU4)))
-    expect(blocked.status).toBe(400)
+    const after = await capture(body(20, 20, 10, EDU4))
+    expect(after.status).toBe(200)
+    expect(after.budget.trailingParagraphSpacing).toBe(5000)
+    // 점유 합은 4,280 늘지만 contentBottom은 동일하다
+    expect(after.budget.requiredHeight - before.budget.requiredHeight).toBe(5000 - 720)
+    expect(after.budget.contentBottom).toBe(before.budget.contentBottom)
+    expect(after.budget.estimatedPageCount).toBe(before.budget.estimatedPageCount)
   })
 
   it('마지막 문단이 바뀌면 그 문단의 spacing을 따라간다 (고정값 720을 쓰지 않는다는 증거)', async () => {
-    // "4) 기 타" 뒤에 spacing이 0인 새 문단을 붙이면 trailing이 그 문단이 되어 보정이 0이 되고,
-    // 그만큼 contentBottom이 720 올라간다. 여유가 626뿐인 6/6/2 + 교육 3줄이 차단으로 뒤집힌다.
+    // "4) 기 타" 뒤에 spacing이 0인 새 문단을 붙이면 trailing이 그 문단이 되어 보정이 0이 된다.
     inject((doc) => {
       const last = lastOuter(doc)
       const clone = last.cloneNode(true)
@@ -1660,9 +1702,16 @@ describe('weekly.hwpx 마지막 문단 여백 계약 (변형 템플릿 주입)',
       for (const t of Array.from(clone.getElementsByTagNameNS(HP_NS, 't') as any[])) t.textContent = ''
       last.parentNode.appendChild(clone)
     })
-    const res: any = await POST(mockRequest(body(6, 6, 2, EDU3)))
-    expect(res.status).toBe(400)
-    expect((await res.json()).error).toBe(PAGE_BUDGET_EXCEEDED_MESSAGE)
+    const orig = console.info
+    let budget: any = null
+    console.info = (...a: any[]) => { if (a[0] === '[HWPX Weekly Multi-Page]') budget = a[1] }
+    let res: any
+    try {
+      res = await POST(mockRequest(body(20, 20, 10, EDU4)))
+    } finally { console.info = orig }
+    expect(res.status).toBe(200)
+    expect(budget.trailingParagraphSpacing).toBe(0)
+    expect(budget.contentBottom).toBe(budget.requiredHeight)
   })
 
   // ── Template Contract 위반 ────────────────────────────────────────────────
@@ -1741,7 +1790,7 @@ describe('weekly.hwpx 마지막 문단 여백 계약 (변형 템플릿 주입)',
 // (줄 높이 1,600→1,400), 발주예상 데이터행 1,992→1,700, "4) 기 타" 직전 빈 문단 1개 삭제.
 // 수행표 데이터행(3,259)·글자 크기·글꼴·열 너비·셀 병합·테두리는 변경하지 않았다.
 // ════════════════════════════════════════════════════════════════════════════════
-describe('weekly.hwpx B안 서식 실측값 고정', () => {
+describe('weekly.hwpx 서식 실측값 고정 (한글 렌더 검증 기준)', () => {
   const tpl = path.join(process.cwd(), 'lib', 'templates', 'weekly.hwpx')
   const dcb = (p: any, n: string): any[] =>
     Array.from(p.childNodes || []).filter((x: any) => x.nodeType === 1 && x.localName === n)
@@ -1765,14 +1814,14 @@ describe('weekly.hwpx B안 서식 실측값 고정', () => {
     return Number(dcb(c, 'cellSz')[0].getAttribute('height'))
   }
 
-  it('두 표 outMargin top/bottom = 0, 좌우와 inMargin은 변경되지 않았다', () => {
+  it('두 표 outMargin top = 0 / bottom = 720(표→제목 간격), 좌우와 inMargin은 변경되지 않았다', () => {
     const { sec } = load()
     const [perf, exp] = elsb(sec, 'tbl')
     const pm = dcb(perf, 'outMargin')[0]
-    expect([pm.getAttribute('top'), pm.getAttribute('bottom')]).toEqual(['0', '0'])
+    expect([pm.getAttribute('top'), pm.getAttribute('bottom')]).toEqual(['0', '720'])
     expect([pm.getAttribute('left'), pm.getAttribute('right')]).toEqual(['141', '141'])
     const em = dcb(exp, 'outMargin')[0]
-    expect([em.getAttribute('top'), em.getAttribute('bottom')]).toEqual(['0', '0'])
+    expect([em.getAttribute('top'), em.getAttribute('bottom')]).toEqual(['0', '720'])
     expect([em.getAttribute('left'), em.getAttribute('right')]).toEqual(['283', '283'])
     // inMargin은 손대지 않았다(두 표 모두 0)
     for (const t of [perf, exp]) {
@@ -1782,23 +1831,114 @@ describe('weekly.hwpx B안 서식 실측값 고정', () => {
     }
   })
 
-  it('두 표 wrapper 문단 spacing = 0, 전용 paraPr(100%)을 참조한다', () => {
+  // "표 → 다음 섹션 제목"은 두 곳 모두 같은 성격의 전환 구간이므로 같은 구조·같은 값을 쓴다:
+  // 표 뒤 빈 문단 없이, 두 표가 같은 outMargin bottom(720) 하나로만 다음 제목과 떨어진다.
+  // 한쪽만 빈 문단으로 벌리면 육안 간격이 어긋난다(한글 UAT 지적).
+  const GAP = 720 // 표 하단 → 다음 섹션 제목 (outMargin bottom)
+
+  it('두 표는 같은 outMargin bottom(720)으로 다음 제목과 떨어지고, wrapper spacing은 쓰지 않는다', () => {
     const { sec, hdr } = load()
+    const [perf, exp] = elsb(sec, 'tbl')
     const wrappers = outerOf(sec).filter((p: any) => dcb(p, 'run').some((r: any) => dcb(r, 'tbl').length > 0))
     expect(wrappers.length).toBe(2)
-    const ids = new Set<string>()
-    for (const w of wrappers) {
-      const seg = dcb(dcb(w, 'linesegarray')[0], 'lineseg')[0]
-      expect(Number(seg.getAttribute('spacing'))).toBe(0)
-      ids.add(w.getAttribute('paraPrIDRef'))
+    const lineSpacingOf = (id: string) => {
+      const pp = (Array.from(hdr.getElementsByTagName('hh:paraPr')) as any[]).find((x: any) => x.getAttribute('id') === id)
+      return Number((Array.from(pp.getElementsByTagName('hh:lineSpacing'))[0] as any).getAttribute('value'))
     }
-    expect(ids.size).toBe(1) // 두 wrapper가 같은 전용 paraPr을 쓴다
-    const wrapId = [...ids][0]
-    const pp = (Array.from(hdr.getElementsByTagName('hh:paraPr')) as any[]).find((x: any) => x.getAttribute('id') === wrapId)
-    expect(Number((Array.from(pp.getElementsByTagName('hh:lineSpacing'))[0] as any).getAttribute('value'))).toBe(100)
+
+    // 같은 값: 두 표의 표→제목 간격이 서로 같다
+    const bottoms = [perf, exp].map((t: any) => Number(dcb(t, 'outMargin')[0].getAttribute('bottom')))
+    expect(bottoms[0]).toBe(bottoms[1])
+    expect(bottoms[0]).toBe(GAP)
+
+    // 같은 구조: 두 wrapper가 하나의 전용 paraPr을 공유하고, 그것은 섹션 제목용 paraPr 2가 아니다.
+    // treatAsChar="0"에서는 wrapper 줄간격이 표 뒤 공간을 만들지 못하므로 100%(spacing 0)로 둔다.
+    const ids = wrappers.map((w: any) => w.getAttribute('paraPrIDRef'))
+    expect(new Set(ids).size).toBe(1)
+    expect(ids).not.toContain('2')
+    expect(lineSpacingOf(ids[0])).toBe(100)
+    for (const w of wrappers) {
+      expect(Number(dcb(dcb(w, 'linesegarray')[0], 'lineseg')[0].getAttribute('spacing'))).toBe(0)
+    }
+
     // 섹션 제목이 쓰는 paraPr 2는 160% 그대로여야 한다(다른 문단 줄간격 불변)
-    const pp2 = (Array.from(hdr.getElementsByTagName('hh:paraPr')) as any[]).find((x: any) => x.getAttribute('id') === '2')
-    expect(Number((Array.from(pp2.getElementsByTagName('hh:lineSpacing'))[0] as any).getAttribute('value'))).toBe(160)
+    expect(lineSpacingOf('2')).toBe(160)
+  })
+
+  // P0 회귀 가드: treatAsChar="1"이면 표가 페이지 경계에서 쪼개지지 못해 한 페이지를 넘는
+  // 초과 행이 한글 인쇄물에서 사라진다(XML에는 남아 있어 XML 검증만으로는 잡히지 않는다).
+  // 한글 렌더로 확인: 30행 입력에서 treatAsChar="1"은 27~30행 소실, "0"은 30행 전부 출력.
+  it('두 표 모두 hp:pos treatAsChar="0" — 표가 페이지 경계에서 분할 가능해야 한다', () => {
+    const { sec } = load()
+    const poss = elsb(sec, 'pos')
+    expect(poss.length).toBe(2)
+    for (const pos of poss) {
+      expect(pos.getAttribute('treatAsChar')).toBe('0')
+      expect(pos.getAttribute('flowWithText')).toBe('1') // 뒤 문단이 표 아래로 밀려야 한다
+    }
+  })
+
+  // repeatHeader="1"은 표 단위 플래그일 뿐이고, 한글은 hp:tc의 header="1"로 어느 행이 제목
+  // 행인지 판단한다. header가 전부 "0"이면 이어지는 페이지에 헤더가 반복되지 않는다(한글 렌더
+  // 확인). 데이터 행이 복제 원본이므로 데이터 행은 "0"이어야 한다.
+  it('두 표의 첫 행 셀만 header="1"이고 데이터 행 셀은 header="0"이다', () => {
+    const { sec } = load()
+    for (const t of elsb(sec, 'tbl')) {
+      expect(t.getAttribute('repeatHeader')).toBe('1')
+      const rows = dcb(t, 'tr')
+      const headerCells = dcb(rows[0], 'tc')
+      expect(headerCells.length).toBeGreaterThan(0)
+      for (const tc of headerCells) expect(tc.getAttribute('header')).toBe('1')
+      for (const tr of rows.slice(1)) {
+        for (const tc of dcb(tr, 'tc')) expect(tc.getAttribute('header')).toBe('0')
+      }
+    }
+  })
+
+  it('두 표 다음에는 빈 문단 없이 곧바로 다음 섹션 제목이 이어진다 (중복 여백 없음)', () => {
+    const { sec } = load()
+    const outer = outerOf(sec)
+    const isWrapper = (p: any) => dcb(p, 'run').some((r: any) => dcb(r, 'tbl').length > 0)
+    const wrapperIdx = outer.map((p: any, i: number) => (isWrapper(p) ? i : -1)).filter((i: number) => i >= 0)
+    expect(wrapperIdx.length).toBe(2)
+    expect(textb(outer[wrapperIdx[0] + 1])).toBe('2) 발주예상 Project (공동예정)')
+    expect(textb(outer[wrapperIdx[1] + 1])).toBe('3) 교육참가자(OSG팀)')
+    // 두 제목 문단의 paraPr도 같아야 한다 — 제목 쪽 여백까지 동일해야 육안 간격이 같다
+    expect(outer[wrapperIdx[0] + 1].getAttribute('paraPrIDRef'))
+      .toBe(outer[wrapperIdx[1] + 1].getAttribute('paraPrIDRef'))
+  })
+
+  // 표 안 여백을 늘리려면 페이지에서 높이를 가져와야 한다. 좌우 여백과 용지 크기는 그대로 두고
+  // 상하 여백만 20mm/15mm → 15mm/12mm로 줄여 수행표 행 높이에 썼다(한글 렌더 비교로 결정).
+  it('페이지 상하 여백 = 4,252 / 3,402, 좌우와 용지 크기는 불변', () => {
+    const { sec } = load()
+    const pagePr = elsb(sec, 'pagePr')[0]
+    const pm = elsb(sec, 'margin')[0]
+    expect(Number(pagePr.getAttribute('height'))).toBe(84188) // A4 세로 불변
+    expect(pm.getAttribute('top')).toBe('4252')
+    expect(pm.getAttribute('bottom')).toBe('3402')
+    expect([pm.getAttribute('left'), pm.getAttribute('right')]).toEqual(['4252', '4252'])
+    const usable = Number(pagePr.getAttribute('height'))
+      - Number(pm.getAttribute('top')) - Number(pm.getAttribute('bottom'))
+      - Number(pm.getAttribute('header')) - Number(pm.getAttribute('footer'))
+    expect(usable).toBe(76534)
+  })
+
+  it('수행표 열 너비는 변경되지 않았다', () => {
+    const { sec } = load()
+    const header = dcb(elsb(sec, 'tbl')[0], 'tr')[0]
+    expect(dcb(header, 'tc').map((tc: any) => Number(dcb(tc, 'cellSz')[0].getAttribute('width'))))
+      .toEqual([2967, 13054, 3679, 4223, 4223, 4223, 3657, 14659])
+  })
+
+  it('보고기간 → "1) 수행 Project", 교육 마지막 줄 → "4) 기 타" 구간은 그대로 남아 있다', () => {
+    const { sec } = load()
+    const outer = outerOf(sec)
+    expect(textb(outer[1])).toMatch(/^\(\d{4}\./)   // 보고기간 캡션
+    expect(textb(outer[2])).toBe('')               // 그 뒤 빈 문단 유지
+    expect(textb(outer[3])).toBe('1) 수행 Project (공동수행)')
+    expect(textb(outer[outer.length - 2])).toBe('') // "4) 기 타" 직전 빈 문단 유지
+    expect(textb(outer[outer.length - 1])).toBe('4) 기 타')
   })
 
   it('교육 문단 3개만 전용 paraPr(140%)로 바뀌고 줄 높이는 1,400이다', () => {
@@ -1835,13 +1975,61 @@ describe('weekly.hwpx B안 서식 실측값 고정', () => {
     expect(sum).toBe(3098 + 1700 * (rows.length - 1))
   })
 
-  it('수행표 데이터행 = 3,259 / 헤더 = 3,664 / hp:sz = 36,254 — 변경 없음', () => {
+  // 수행표 데이터행은 2줄 용역명 콘텐츠(2,416)에 상하 여백을 얹은 높이다. 2,416(=콘텐츠와 동일),
+  // 2,600(한쪽 92), 2,698(한쪽 141 = cellMargin 최소치)은 한글에서 모두 "답답하다"는 판정을 받았다.
+  // 2,900은 한쪽 242로, 설계 여백 141의 1.7배다. vertAlign="CENTER"이므로 위아래로 균등 배분된다.
+  const PERF_ROW = 2900
+  const TWO_LINE_CONTENT = 2 * 1050 + 316 // 2,416
+  const CELL_MARGIN_TB = 141
+  const PER_SIDE = (PERF_ROW - TWO_LINE_CONTENT) / 2
+
+  it(`수행표 데이터행 = ${PERF_ROW} (2줄 콘텐츠 2,416 + 상하 ${PER_SIDE}씩) / 헤더 = 3,664 / hp:sz = 행 높이 합`, () => {
     const { sec } = load()
     const perf = elsb(sec, 'tbl')[0]
     const rows = dcb(perf, 'tr')
     expect(rowHb(rows[0])).toBe(3664)
-    for (const tr of rows.slice(1)) expect(rowHb(tr)).toBe(3259)
-    expect(Number(dcb(perf, 'sz')[0].getAttribute('height'))).toBe(36254)
+    for (const tr of rows.slice(1)) expect(rowHb(tr)).toBe(PERF_ROW)
+    expect(PER_SIDE).toBe(242)
+    expect(PER_SIDE).toBeGreaterThan(CELL_MARGIN_TB) // 설계 여백보다 넉넉해야 한다
+    const sum = rows.reduce((acc: number, tr: any) => acc + rowHb(tr), 0)
+    expect(Number(dcb(perf, 'sz')[0].getAttribute('height'))).toBe(sum)
+    expect(sum).toBe(3664 + PERF_ROW * (rows.length - 1))
+  })
+
+  it(`수행표 rowSpan 병합 셀 높이 = rowSpan × ${PERF_ROW}`, () => {
+    const { sec } = load()
+    const perf = elsb(sec, 'tbl')[0]
+    const merged = dcb(perf, 'tr').slice(1).flatMap((tr: any) => dcb(tr, 'tc')
+      .map((tc: any) => ({
+        span: Number(dcb(tc, 'cellSpan')[0]?.getAttribute('rowSpan') ?? 1),
+        height: Number(dcb(tc, 'cellSz')[0].getAttribute('height')),
+      }))
+      .filter((x: any) => x.span > 1))
+    expect(merged.length).toBe(2) // 개찰 / 진행중 라벨 셀
+    for (const m of merged) expect(m.height).toBe(m.span * PERF_ROW)
+  })
+
+  it('수행표 데이터셀은 전부 동일한 cellMargin top/bottom과 vertAlign=CENTER를 쓴다', () => {
+    const { sec } = load()
+    const perf = elsb(sec, 'tbl')[0]
+    const seen = new Set<string>()
+    for (const tr of dcb(perf, 'tr').slice(1)) {
+      for (const tc of dcb(tr, 'tc')) {
+        const cm = dcb(tc, 'cellMargin')[0]
+        seen.add(`${cm.getAttribute('top')}/${cm.getAttribute('bottom')}`)
+        expect(dcb(tc, 'subList')[0].getAttribute('vertAlign')).toBe('CENTER')
+      }
+    }
+    expect(seen.size).toBe(1) // 행마다 다른 여백을 쓰지 않는다
+    expect([...seen][0]).toBe(`${CELL_MARGIN_TB}/${CELL_MARGIN_TB}`)
+  })
+
+  it('두 표 모두 repeatHeader=1 / pageBreak=CELL — 2페이지 이상에서 헤더 행이 반복된다', () => {
+    const { sec } = load()
+    for (const t of elsb(sec, 'tbl')) {
+      expect(t.getAttribute('repeatHeader')).toBe('1')
+      expect(t.getAttribute('pageBreak')).toBe('CELL')
+    }
   })
 
   it('"4) 기 타" 직전 빈 문단이 1개만 남고, 마지막 문단과 trailing spacing은 그대로다', () => {
@@ -1897,52 +2085,31 @@ describe('POST /api/hwpx — B안 적용 후 Weekly 판정 경계', () => {
     expect(extractPerfRowNumbers(doc)).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'])
   })
 
-  // 발주예상 행의 2줄 자동 확장(행당 716)을 반영한 뒤로는 11행이 차단된다 — UAT에서 실제
-  // 2페이지로 확인된 조합이다(contentBottom 76,615 > 74,268, 초과 2,347).
-  it('11행(개찰 5 / 진행중 6) + 발주예상 4 + 교육 4줄 → 400 (UAT 2페이지 확인)', async () => {
-    const res: any = await POST(mockRequest(WB(5, 6, 4, 4)))
-    expect(res.status).toBe(400)
-    const ct = res.headers.get('content-type') || ''
-    expect(ct).toContain('application/json')
-    expect(ct).not.toContain('application/zip')
-    const buf = Buffer.from(await res.arrayBuffer())
-    expect(buf.subarray(0, 2).toString('latin1')).not.toBe('PK')
-    expect(JSON.parse(buf.toString('utf8')).error).toBe(PAGE_BUDGET_EXCEEDED_MESSAGE)
+  it('운영 기준 13행(개찰 4 / 진행중 9) + 발주예상 4 + 교육 4줄 → 200 zip, 1페이지 예상', async () => {
+    const orig = console.info
+    let budget: any = null
+    console.info = (...a: any[]) => { if (a[0] === '[HWPX Weekly Multi-Page]') budget = a[1] }
+    let res: any
+    try {
+      res = await POST(mockRequest(WB(4, 9, 4, 4)))
+    } finally { console.info = orig }
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('application/zip')
+    expect(budget).toBeNull() // 1페이지이므로 다중 페이지 진단 로그가 없다
+    const { doc } = await toZipDoc(res)
+    assertWeeklyDynamicXmlContract(doc, 4, 9, 4)
+    expect(extractPerfRowNumbers(doc)).toEqual(Array.from({ length: 13 }, (_, i) => String(i + 1)))
   })
 
-  it('12행(개찰 6 / 진행중 6) + 발주예상 4 + 교육 4줄 → 400 (초과 2,742)', async () => {
-    const res: any = await POST(mockRequest(WB(6, 6, 4, 4)))
-    expect(res.status).toBe(400)
-    expect((await res.json()).error).toBe(PAGE_BUDGET_EXCEEDED_MESSAGE)
-  })
 
-  // 발주예상 5건도 2줄 확장 반영 후 차단된다 — UAT에서 실제 2페이지로 확인된 조합이다
-  // (contentBottom 75,772 > 74,268, 초과 1,504).
-  it('10행 + 발주예상 5 + 교육 4줄 → 400 (UAT 2페이지 확인)', async () => {
-    const res: any = await POST(mockRequest(WB(4, 6, 5, 4)))
-    expect(res.status).toBe(400)
-    const ct = res.headers.get('content-type') || ''
-    expect(ct).toContain('application/json')
-    expect(ct).not.toContain('application/zip')
-    const buf = Buffer.from(await res.arrayBuffer())
-    expect(buf.subarray(0, 2).toString('latin1')).not.toBe('PK')
-    expect(JSON.parse(buf.toString('utf8')).error).toBe(PAGE_BUDGET_EXCEEDED_MESSAGE)
-  })
 
-  it('11행 + 발주예상 5 + 교육 4줄 → 400', async () => {
-    const res: any = await POST(mockRequest(WB(5, 6, 5, 4)))
-    expect(res.status).toBe(400)
-    expect((await res.json()).error).toBe(PAGE_BUDGET_EXCEEDED_MESSAGE)
-  })
 
-  it('6/6/2는 교육 1~3줄 통과, 4줄은 차단된다(발주예상 2줄 확장 반영 후 경계)', async () => {
-    for (const edu of [1, 2, 3]) {
+  it('6/6/2는 교육 1~4줄 모두 200 zip으로 생성된다', async () => {
+    for (const edu of [1, 2, 3, 4]) {
       const res: any = await POST(mockRequest(WB(6, 6, 2, edu)))
       expect(res.status, `교육 ${edu}줄`).toBe(200)
+      expect(res.headers.get('content-type')).toContain('application/zip')
     }
-    const over: any = await POST(mockRequest(WB(6, 6, 2, 4)))
-    expect(over.status).toBe(400)
-    expect((await over.json()).error).toBe(PAGE_BUDGET_EXCEEDED_MESSAGE)
   })
 
   it('생성 문서의 마지막 표 밖 문단은 "4) 기 타"로 유지된다(교육 줄 수 무관)', async () => {
@@ -2152,30 +2319,37 @@ describe('weekly.hwpx 발주예상 데이터행 줄 높이 계약 (변형 템플
     await expectRejectE(await POST(mockRequest(bodyE(1, 1, 1))))
   })
 
-  it('셀 줄간격을 키우면 2줄 높이가 커져 판정이 엄격해진다(값이 실제로 쓰인다는 증거)', async () => {
-    // 4/6/4 + 교육 4줄은 기본값에서 통과(여유 912). 줄간격을 키우면 2줄 높이가 올라 차단된다.
-    const EDU_4 = { edu_chief: '김책임', edu_arch: '박건축', edu_civil: '최토목', edu_safety: '정안전' }
-    const before: any = await POST(mockRequest(bodyE(4, 6, 4, EDU_4)))
-    expect(before.status).toBe(200)
+  // 예산이 게이트가 아니므로, 측정값이 실제로 쓰이는지는 진단 로그의 수치로 확인한다.
+  const EDU_4E = { edu_chief: '김책임', edu_arch: '박건축', edu_civil: '최토목', edu_safety: '정안전' }
+  async function captureE(b: any): Promise<{ status: number; budget: any }> {
+    const orig = console.info
+    let budget: any = null
+    console.info = (...a: any[]) => { if (a[0] === '[HWPX Weekly Multi-Page]') budget = a[1] }
+    try {
+      const res: any = await POST(mockRequest(b))
+      return { status: res.status, budget }
+    } finally { console.info = orig }
+  }
 
+  it('셀 줄간격을 키우면 2줄 필요 높이가 커진다(값이 실제로 쓰인다는 증거)', async () => {
     injectE((doc) => {
       for (const tc of expDataCells(doc)) firstSegOf(tc).setAttribute('spacing', '1000')
     })
-    const after: any = await POST(mockRequest(bodyE(4, 6, 4, EDU_4)))
-    expect(after.status).toBe(400)
-    expect((await after.json()).error).toBe(PAGE_BUDGET_EXCEEDED_MESSAGE)
+    const after = await captureE(bodyE(20, 20, 10, EDU_4E))
+    expect(after.status).toBe(200) // 차단하지 않는다
+    expect(after.budget.expectedRowTwoLineHeight).toBe(2 * 1050 + 1000)
+    expect(after.budget.effectiveExpectedRowHeight).toBe(3100)
   })
 
-  it('선언 높이가 2줄 높이보다 크면 확장 보정이 적용되지 않는다', async () => {
-    // 데이터행 선언 높이를 3,000(> 2,416)으로 올리면 실효 높이는 3,000이 된다.
-    // 4행이면 발주예상 행 합이 9,664 → 12,000으로 늘어 4/6/4 + 교육 4줄이 차단된다.
-    const EDU_4 = { edu_chief: '김책임', edu_arch: '박건축', edu_civil: '최토목', edu_safety: '정안전' }
+  it('선언 높이가 2줄 높이보다 크면 실효 높이로 선언 높이를 쓴다', async () => {
     injectE((doc) => {
       for (const tc of expDataCells(doc)) dce(tc, 'cellSz')[0].setAttribute('height', '3000')
     })
-    const res: any = await POST(mockRequest(bodyE(4, 6, 4, EDU_4)))
-    expect(res.status).toBe(400)
-    expect((await res.json()).error).toBe(PAGE_BUDGET_EXCEEDED_MESSAGE)
+    const after = await captureE(bodyE(20, 20, 10, EDU_4E))
+    expect(after.status).toBe(200)
+    expect(after.budget.declaredExpectedRowHeight).toBe(3000)
+    expect(after.budget.expectedRowTwoLineHeight).toBe(2416)
+    expect(after.budget.effectiveExpectedRowHeight).toBe(3000)
   })
 
   it('구조 위반으로 거절돼도 원본 weekly.hwpx는 변경되지 않는다', async () => {
@@ -2183,5 +2357,200 @@ describe('weekly.hwpx 발주예상 데이터행 줄 높이 계약 (변형 템플
     await POST(mockRequest(bodyE(1, 1, 1)))
     vi.restoreAllMocks()
     expect(fs.readFileSync(tplE).equals(originalE)).toBe(true)
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════════
+// 다중 페이지 정책 — 1페이지를 넘어도 차단하지 않고 생성한다
+//
+// Weekly는 입력이 많아 1페이지에 들어가지 않으면 2페이지 이상으로 자연스럽게 생성한다.
+// 두 표에 pageBreak="CELL" + repeatHeader="1"이 설정되어 있어 한글이 행 경계에서 나누고
+// 다음 페이지에 헤더 행을 반복한다. 데이터 삭제·행 누락·말줄임·강제 절단은 하지 않는다.
+//
+// 아래 사례는 예전 정책에서 400으로 차단됐던 조합들이다 — 이제 전부 200 zip이어야 하고
+// 모든 데이터가 문서에 남아 있어야 한다.
+// ════════════════════════════════════════════════════════════════════════════════
+describe('POST /api/hwpx — Weekly 다중 페이지 생성 (차단 없음)', () => {
+  const EDU = (n: number): Record<string, string> => ([
+    {}, { edu_chief: '김책임' }, { edu_chief: '김책임', edu_arch: '박건축' },
+    { edu_chief: '김책임', edu_arch: '박건축', edu_civil: '최토목' },
+    { edu_chief: '김책임', edu_arch: '박건축', edu_civil: '최토목', edu_safety: '정안전' },
+  ][n])
+  const bodyM = (g: number, j: number, e: number, edu: number) => ({
+    type: 'weekly', week: '2026-W22',
+    performing: [
+      ...Array.from({ length: g }, (_, i) => perfItem('개찰', `개찰${i + 1}`)),
+      ...Array.from({ length: j }, (_, i) => perfItem('진행중', `진행${i + 1}`)),
+    ],
+    expected: Array.from({ length: e }, (_, i) => expItem(`예상${i + 1}`)),
+    meta: EDU(edu),
+  })
+
+  const dcm = (p: any, n: string): any[] =>
+    Array.from(p.childNodes || []).filter((x: any) => x.nodeType === 1 && x.localName === n)
+
+  /** 지시된 전체 체크리스트를 한 번에 검증한다. */
+  async function assertGeneratedIntact(res: any, g: number, j: number, e: number, edu: number) {
+    // 생성 성공 + ZIP/HWPX 무결성
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('application/zip')
+    const buf = Buffer.from(await res.arrayBuffer())
+    expect(buf.subarray(0, 2).toString('latin1')).toBe('PK')
+    const zip = new AdmZip(buf)
+    for (const entry of ['mimetype', 'version.xml', 'settings.xml', 'Contents/content.hpf',
+      'Contents/header.xml', 'Contents/section0.xml', 'META-INF/container.xml', 'META-INF/manifest.xml']) {
+      expect(zip.getEntry(entry), `${entry} 누락`).not.toBeNull()
+    }
+    expect(zip.readAsText('mimetype').trim()).toBe('application/hwp+zip')
+
+    const doc: any = new DOMParser().parseFromString(zip.readAsText('Contents/section0.xml'), 'text/xml')
+    // rowCnt / 실제 행 수 / rowAddr 연속성 / rowSpan / hp:sz = 행 높이 합
+    assertWeeklyDynamicXmlContract(doc, g, j, e)
+
+    const tbls: any[] = Array.from(doc.getElementsByTagNameNS(HP_NS, 'tbl') as any[])
+    const [perf, exp] = tbls
+    // 표가 2페이지 이상으로 나뉘어도 헤더 반복 설정은 유지된다
+    for (const t of [perf, exp]) {
+      expect(t.getAttribute('repeatHeader')).toBe('1')
+      expect(t.getAttribute('pageBreak')).toBe('CELL')
+    }
+    // 실제 행 수 재확인(직계 tr)
+    expect(dcm(perf, 'tr').length).toBe(1 + Math.max(g, 1) + Math.max(j, 1))
+    expect(dcm(exp, 'tr').length).toBe(1 + Math.max(e, 1))
+
+    // 전체 데이터 존재 — 수행 / 발주예상 / 교육참가자
+    const all = getAllText(doc).join('|')
+    for (let i = 1; i <= g; i++) expect(all, `개찰${i} 누락`).toContain(`개찰${i}`)
+    for (let i = 1; i <= j; i++) expect(all, `진행${i} 누락`).toContain(`진행${i}`)
+    for (let i = 1; i <= e; i++) expect(all, `예상${i} 누락`).toContain(`예상${i}`)
+    const eduNames = ['김책임', '박건축', '최토목', '정안전'].slice(0, Math.max(edu - 1, 0) + (edu >= 1 ? 1 : 0))
+    for (const nm of eduNames) expect(all, `${nm} 누락`).toContain(nm)
+    // 연번은 개찰+진행중 통합 연속
+    expect(extractPerfRowNumbers(doc)).toEqual(
+      Array.from({ length: g + j }, (_, i) => String(i + 1)))
+
+    // linesegarray 제거 (한글이 페이지네이션을 처음부터 재계산하도록)
+    expect(Array.from(doc.getElementsByTagNameNS(HP_NS, 'linesegarray')).length).toBe(0)
+
+    // 마지막 문단 위치 — "4) 기 타"가 문서 마지막 표 밖 문단으로 유지
+    const inside = (q: any) => tbls.some((t: any) => Array.from(t.getElementsByTagNameNS(HP_NS, 'p') as any[]).includes(q))
+    const outer = (Array.from(doc.getElementsByTagNameNS(HP_NS, 'p') as any[])).filter((q: any) => !inside(q))
+    expect(getCellText(outer[outer.length - 1]).replace(/\s+/g, ' ').trim()).toBe('4) 기 타')
+    return buf
+  }
+
+  const CASES: Array<[string, number, number, number, number]> = [
+    ['수행 11 / 발주 4 / 교육 4', 5, 6, 4, 4],
+    ['수행 10 / 발주 5 / 교육 4', 4, 6, 5, 4],
+    ['수행 12 / 발주 4 / 교육 4', 6, 6, 4, 4],
+    ['15 / 15 / 15', 15, 15, 15, 1],
+    ['6 / 6 / 2 + 교육 4줄', 6, 6, 2, 4],
+  ]
+
+  for (const [label, g, j, e, edu] of CASES) {
+    it(`${label} → 200 zip, 전체 데이터 보존`, async () => {
+      const res: any = await POST(mockRequest(bodyM(g, j, e, edu)))
+      await assertGeneratedIntact(res, g, j, e, edu)
+    })
+  }
+
+  it('운영 기준 13행(개찰 4 / 진행중 9) + 발주 4 + 교육 4줄 → 200 zip, 전체 데이터 보존', async () => {
+    const res: any = await POST(mockRequest(bodyM(4, 9, 4, 4)))
+    await assertGeneratedIntact(res, 4, 9, 4, 4)
+  })
+
+  it('아주 많은 입력(30/30/30 + 교육 4줄)도 차단 없이 생성되고 데이터가 남아 있다', async () => {
+    const res: any = await POST(mockRequest(bodyM(30, 30, 30, 4)))
+    await assertGeneratedIntact(res, 30, 30, 30, 4)
+  })
+
+  // ── P0 회귀: 수행 30행 (수행표 한 장을 넘겨 표가 페이지 경계에서 쪼개지는 크기) ─────────
+  //
+  // 배경: 표가 hp:pos treatAsChar="1"이면 문단 속 글자처럼 앵커돼 페이지 경계에서 쪼개지지
+  // 못하고, 한 페이지를 넘는 초과 행이 한글 인쇄물에서 그대로 사라졌다(XML에는 남아 있어
+  // XML 검증만으로는 잡히지 않는다). 또 repeatHeader="1"만으로는 헤더가 반복되지 않고
+  // hp:tc header="1"로 제목 행을 지정해야 한다. 둘 다 한글 렌더로 확인한 사실이다.
+  //
+  // 한글 렌더 확인(수행 30행 / 발주 4 / 교육 4줄): 2페이지, 30행 전원 출력,
+  // 2페이지 상단에 수행표 헤더 행 반복, 표 경계 정상.
+  it('수행 30행 — 표가 쪼개지는 크기에서도 전체 행이 남고 헤더 반복 설정이 유지된다', async () => {
+    const res: any = await POST(mockRequest(bodyM(4, 26, 4, 4)))
+    const buf = await assertGeneratedIntact(res, 4, 26, 4, 4)
+
+    const zip = new AdmZip(buf)
+    const doc: any = new DOMParser().parseFromString(zip.readAsText('Contents/section0.xml'), 'text/xml')
+    const tbls: any[] = Array.from(doc.getElementsByTagNameNS(HP_NS, 'tbl') as any[])
+
+    // 표가 페이지 경계에서 쪼개질 수 있어야 한다 — treatAsChar="1"이면 초과 행이 잘려나간다
+    const poss: any[] = Array.from(doc.getElementsByTagNameNS(HP_NS, 'pos') as any[])
+    expect(poss.length).toBe(2)
+    for (const pos of poss) {
+      expect(pos.getAttribute('treatAsChar')).toBe('0')
+      expect(pos.getAttribute('flowWithText')).toBe('1')
+    }
+
+    // 이어지는 페이지에 반복될 제목 행이 지정되어 있어야 한다
+    for (const t of tbls) {
+      expect(t.getAttribute('repeatHeader')).toBe('1')
+      const rows = dcm(t, 'tr')
+      for (const tc of dcm(rows[0], 'tc')) expect(tc.getAttribute('header')).toBe('1')
+      for (const tr of rows.slice(1)) {
+        for (const tc of dcm(tr, 'tc')) expect(tc.getAttribute('header')).toBe('0')
+      }
+    }
+
+    // 30행 전원 + 연번 연속
+    const all = getAllText(doc).join('|')
+    for (let i = 1; i <= 4; i++) expect(all).toContain(`개찰${i}`)
+    for (let i = 1; i <= 26; i++) expect(all).toContain(`진행${i}`)
+    expect(extractPerfRowNumbers(doc)).toEqual(Array.from({ length: 30 }, (_, i) => String(i + 1)))
+  })
+
+  it('수행 30행은 2페이지 이상으로 예상된다', async () => {
+    const orig = console.info
+    let budget: any = null
+    console.info = (...a: any[]) => { if (a[0] === '[HWPX Weekly Multi-Page]') budget = a[1] }
+    let res: any
+    try {
+      res = await POST(mockRequest(bodyM(4, 26, 4, 4)))
+    } finally { console.info = orig }
+    expect(res.status).toBe(200)
+    expect(budget.fitsSinglePage).toBe(false)
+    expect(budget.estimatedPageCount).toBeGreaterThanOrEqual(2)
+  })
+
+  it('예산 초과를 이유로 400을 반환하지 않는다 (Weekly 차단 정책 제거 확인)', async () => {
+    for (const [, g, j, e, edu] of CASES) {
+      const res: any = await POST(mockRequest(bodyM(g, j, e, edu)))
+      expect(res.status, `${g}/${j}/${e}`).not.toBe(400)
+    }
+  })
+
+  it('1페이지를 넘는 입력에서만 다중 페이지 진단 로그가 남고, 페이지 수가 보고된다', async () => {
+    const capture = async (b: any) => {
+      const orig = console.info
+      let budget: any = null
+      console.info = (...a: any[]) => { if (a[0] === '[HWPX Weekly Multi-Page]') budget = a[1] }
+      try {
+        const res: any = await POST(mockRequest(b))
+        return { status: res.status, budget }
+      } finally { console.info = orig }
+    }
+    // 운영 기준 13행은 1페이지 → 로그 없음
+    const single = await capture(bodyM(4, 9, 4, 4))
+    expect(single.status).toBe(200)
+    expect(single.budget).toBeNull()
+
+    // 15행은 2페이지 → 로그 있음
+    const two = await capture(bodyM(4, 11, 4, 4))
+    expect(two.status).toBe(200)
+    expect(two.budget.fitsSinglePage).toBe(false)
+    expect(two.budget.estimatedPageCount).toBe(2)
+    expect(two.budget.overflowBeyondSinglePage).toBeGreaterThan(0)
+
+    // 아주 많은 입력은 3페이지 이상
+    const many = await capture(bodyM(30, 30, 30, 4))
+    expect(many.status).toBe(200)
+    expect(many.budget.estimatedPageCount).toBeGreaterThanOrEqual(3)
   })
 })

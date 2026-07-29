@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { estimateWeeklyPageBudget, type WeeklyPageBudgetInput } from './pageBudget'
 
 const baseInput: WeeklyPageBudgetInput = {
-  usableHeight: 74268,
+  usableHeightPerPage: 74268,
   fixedContentHeight: 21460, // 교육참가자 줄 제외한 나머지 고정 콘텐츠
   eduLineHeight: 1600,
   eduLineCount: 1, // 책임 줄만
@@ -28,23 +28,23 @@ const baseInput: WeeklyPageBudgetInput = {
 }
 
 describe('estimateWeeklyPageBudget', () => {
-  it('입력이 적을 때는 예산 안에 든다', () => {
+  it('입력이 적을 때는 1페이지에 든다', () => {
     const result = estimateWeeklyPageBudget(baseInput)
-    expect(result.fitsHeightBudget).toBe(true)
-    expect(result.requiredHeight).toBeLessThanOrEqual(result.usableHeight)
+    expect(result.fitsSinglePage).toBe(true)
+    expect(result.requiredHeight).toBeLessThanOrEqual(result.usableHeightPerPage)
   })
 
-  it('경계값 — contentBottom이 usableHeight와 정확히 같으면 예산 안에 든다(포함 경계)', () => {
+  it('경계값 — contentBottom이 페이지 높이와 정확히 같으면 1페이지다(포함 경계)', () => {
     const probe = estimateWeeklyPageBudget(baseInput)
-    const result = estimateWeeklyPageBudget({ ...baseInput, usableHeight: probe.contentBottom })
-    expect(result.contentBottom).toBe(result.usableHeight)
-    expect(result.fitsHeightBudget).toBe(true)
+    const result = estimateWeeklyPageBudget({ ...baseInput, usableHeightPerPage: probe.contentBottom })
+    expect(result.contentBottom).toBe(result.usableHeightPerPage)
+    expect(result.fitsSinglePage).toBe(true)
   })
 
-  it('경계값 — contentBottom이 usableHeight를 1이라도 넘으면 초과로 판정한다', () => {
+  it('경계값 — contentBottom이 페이지 높이를 1이라도 넘으면 2페이지로 판정한다', () => {
     const probe = estimateWeeklyPageBudget(baseInput)
-    const result = estimateWeeklyPageBudget({ ...baseInput, usableHeight: probe.contentBottom - 1 })
-    expect(result.fitsHeightBudget).toBe(false)
+    const result = estimateWeeklyPageBudget({ ...baseInput, usableHeightPerPage: probe.contentBottom - 1 })
+    expect(result.fitsSinglePage).toBe(false)
   })
 
   it('개찰·진행중·발주예상 행 수가 늘어날수록 필요 높이가 커진다', () => {
@@ -65,14 +65,14 @@ describe('estimateWeeklyPageBudget', () => {
     expect(zero.requiredHeight).toBe(one.requiredHeight)
   })
 
-  it('충분히 큰 입력은 예산을 초과한다', () => {
+  it('충분히 큰 입력은 1페이지를 넘어간다', () => {
     const result = estimateWeeklyPageBudget({
       ...baseInput,
       perfGaeyalRowCount: 30,
       perfJinhaengRowCount: 30,
       expRowCount: 30,
     })
-    expect(result.fitsHeightBudget).toBe(false)
+    expect(result.fitsSinglePage).toBe(false)
   })
 
   it('진단용 세부 내역(각 구성 요소별 높이)이 requiredHeight와 정확히 합산 일치한다', () => {
@@ -98,12 +98,12 @@ describe('estimateWeeklyPageBudget', () => {
 
   it('overflowHeight는 contentBottom - usableHeight와 정확히 같다(초과 시 양수, 여유 시 음수)', () => {
     const over = estimateWeeklyPageBudget({ ...baseInput, perfGaeyalRowCount: 30, perfJinhaengRowCount: 30, expRowCount: 30 })
-    expect(over.overflowHeight).toBe(over.contentBottom - over.usableHeight)
-    expect(over.overflowHeight).toBeGreaterThan(0)
+    expect(over.overflowBeyondSinglePage).toBe(over.contentBottom - over.usableHeightPerPage)
+    expect(over.overflowBeyondSinglePage).toBeGreaterThan(0)
 
     const under = estimateWeeklyPageBudget(baseInput)
-    expect(under.overflowHeight).toBe(under.contentBottom - under.usableHeight)
-    expect(under.overflowHeight).toBeLessThanOrEqual(0)
+    expect(under.overflowBeyondSinglePage).toBe(under.contentBottom - under.usableHeightPerPage)
+    expect(under.overflowBeyondSinglePage).toBeLessThanOrEqual(0)
   })
 })
 
@@ -111,7 +111,7 @@ describe('estimateWeeklyPageBudget', () => {
 //
 // 배경: hp:sz(행 높이 합)만 세면 표의 outMargin과 wrapper 문단 줄간격이 빠진다. 실측 결과
 // 수행표 1,002(282+720) + 발주예상표 1,286(566+720) = 2,288이 누락되어, 예산이 "통과"로
-// 판정한 4/6/4 + 교육 3줄이 한글에서 실제 2페이지가 되는 것을 수동 검증으로 확인했다.
+// 1페이지로 판정한 4/6/4 + 교육 3줄이 한글에서 실제 2페이지가 되는 것을 수동 검증으로 확인했다.
 describe('표 wrapper 오버헤드가 예산에 정확히 한 번씩 반영된다', () => {
   it('현재 템플릿 실측값 기준 wrapper overhead 합계는 2,288이다', () => {
     const r = estimateWeeklyPageBudget(baseInput)
@@ -166,25 +166,25 @@ describe('표 wrapper 오버헤드가 예산에 정확히 한 번씩 반영된�
     expect(r.requiredHeight).toBe(77068)
   })
 
-  it('실제로 2페이지였던 조합들이 보정 후 초과로 판정된다', () => {
-    // 4/6/4 + 교육 3줄 — 보정 전 73,180(통과) → 보정 후 75,468(초과 1,200)
+  it('실제로 2페이지였던 조합들이 2페이지로 판정된다', () => {
+    // 4/6/4 + 교육 3줄 — 보정 전 73,180(1페이지 오판) → 보정 후 75,468(2페이지)
     const t3 = estimateWeeklyPageBudget({
       ...baseInput, fixedContentHeight: 21060, eduLineCount: 3,
       perfGaeyalRowCount: 4, perfJinhaengRowCount: 6, expRowCount: 4,
     })
     expect(t3.requiredHeight).toBe(75468)
     expect(t3.contentBottom).toBe(74748) // 75,468 - 마지막 문단 여백 720
-    expect(t3.fitsHeightBudget).toBe(false)
-    expect(t3.overflowHeight).toBe(480)
+    expect(t3.fitsSinglePage).toBe(false)
+    expect(t3.overflowBeyondSinglePage).toBe(480)
 
-    // 4/6/3 + 교육 4줄 — 보정 전 72,788(통과) → 보정 후 75,076(초과 808)
+    // 4/6/3 + 교육 4줄 — 보정 전 72,788(1페이지 오판) → 보정 후 75,076(2페이지)
     const e3 = estimateWeeklyPageBudget({
       ...baseInput, fixedContentHeight: 21060, eduLineCount: 4,
       perfGaeyalRowCount: 4, perfJinhaengRowCount: 6, expRowCount: 3,
     })
     expect(e3.requiredHeight).toBe(75076)
     expect(e3.contentBottom).toBe(74356)
-    expect(e3.fitsHeightBudget).toBe(false)
+    expect(e3.fitsSinglePage).toBe(false)
 
     // 보정 항목을 빼면 둘 다 통과로 잘못 판정된다는 사실도 함께 고정한다.
     for (const input of [
@@ -197,7 +197,7 @@ describe('표 wrapper 오버헤드가 예산에 정확히 한 번씩 반영된�
         performingOutMargins: 0, expectedOutMargins: 0,
         performingWrapperSpacing: 0, expectedWrapperSpacing: 0,
       })
-      expect(wrong.fitsHeightBudget).toBe(true) // ← 보정 전 공식의 오판
+      expect(wrong.fitsSinglePage).toBe(true) // ← 보정 전 공식의 오판(1페이지로 잘못 판정)
     }
   })
 })
@@ -209,7 +209,7 @@ describe('표 wrapper 오버헤드가 예산에 정확히 한 번씩 반영된�
 // linesegarray)에서 마지막 문단 "4) 기 타"의 vertpos+vertsize = 70,764이고 전체 점유 합은
 // 71,484로, 차이가 정확히 그 문단의 spacing(720)이었다.
 //
-// 이 값을 빼지 않으면 실제로는 1페이지인 조합을 차단한다 — 6/6/2 + 교육 1줄이 그 사례
+// 이 값을 빼지 않으면 실제로는 1페이지인 조합을 2페이지로 오판한다 — 6/6/2 + 교육 1줄이 그 사례
 // (2,288 보정만으로는 534 초과 예측이었으나 한글에서 1페이지 확인, 교육 2줄은 2페이지 확인).
 describe('마지막 문단 여백은 contentBottom에서 제외된다', () => {
   const at = (g: number, j: number, e: number, edu: number) => estimateWeeklyPageBudget({
@@ -252,7 +252,7 @@ describe('마지막 문단 여백은 contentBottom에서 제외된다', () => {
       ['4/6/4 교육5 training5 (2페이지)', at(4, 6, 4, 5), false],
     ]
     for (const [label, r, expected] of cases) {
-      expect(r.fitsHeightBudget, label).toBe(expected)
+      expect(r.fitsSinglePage, label).toBe(expected)
     }
     // 경계 수치 고정
     expect(at(6, 6, 2, 1).contentBottom).toBe(74082) // 여유 186
@@ -278,12 +278,13 @@ describe('마지막 문단 여백은 contentBottom에서 제외된다', () => {
 // 6~8자면 발주청 열(약 5자 폭)에서 2줄이 되어 선언 높이 1,700을 넘어 2,416으로 확장된다.
 // 선언 높이만 세던 기존 계산은 이 확장을 보지 못해, 예산이 통과시킨 조합이 한글에서 2페이지가
 // 됐다(11행/발주4, 10행/발주5 — UAT 확인). 아래는 그 보정을 고정한다.
+// (현재 정책에서는 2페이지가 되어도 차단하지 않고 그대로 생성한다 — 페이지 수 진단만 한다.)
 //
 // B안 템플릿 실측값: fixedContentHeight 19,460 / eduLineHeight 1,400 / 수행 헤더 3,664 /
 // 수행 데이터행 3,259 / 발주예상 헤더 3,098 / 발주예상 선언 1,700 / 2줄 필요 2,416 /
 // outMargin·wrapper spacing 0 / trailingParagraphSpacing 720
 const B_PLAN: Omit<WeeklyPageBudgetInput, 'eduLineCount' | 'perfGaeyalRowCount' | 'perfJinhaengRowCount' | 'expRowCount'> = {
-  usableHeight: 74268,
+  usableHeightPerPage: 74268,
   fixedContentHeight: 19460,
   eduLineHeight: 1400,
   perfHeaderHeight: 3664,
@@ -359,29 +360,29 @@ describe('발주예상 데이터 행의 2줄 자동 확장이 예산에 반영�
     const target = atB(4, 6, 4, 4)   // 수행 10행 / 발주 4 / 교육 4 → 1페이지
     expect(target.requiredHeight).toBe(74076)
     expect(target.contentBottom).toBe(73356)
-    expect(target.fitsHeightBudget).toBe(true)
-    expect(target.usableHeight - target.contentBottom).toBe(912)
+    expect(target.fitsSinglePage).toBe(true)
+    expect(target.usableHeightPerPage - target.contentBottom).toBe(912)
 
     const eleven = atB(5, 6, 4, 4)   // 수행 11행 / 발주 4 / 교육 4 → 2페이지
     expect(eleven.requiredHeight).toBe(77335)
     expect(eleven.contentBottom).toBe(76615)
-    expect(eleven.fitsHeightBudget).toBe(false)
-    expect(eleven.overflowHeight).toBe(2347)
+    expect(eleven.fitsSinglePage).toBe(false)
+    expect(eleven.overflowBeyondSinglePage).toBe(2347)
 
     const fiveExp = atB(4, 6, 5, 4)  // 수행 10행 / 발주 5 / 교육 4 → 2페이지
     expect(fiveExp.requiredHeight).toBe(76492)
     expect(fiveExp.contentBottom).toBe(75772)
-    expect(fiveExp.fitsHeightBudget).toBe(false)
-    expect(fiveExp.overflowHeight).toBe(1504)
+    expect(fiveExp.fitsSinglePage).toBe(false)
+    expect(fiveExp.overflowBeyondSinglePage).toBe(1504)
   })
 
-  it('보정 없이는 세 조합이 모두 통과로 오판된다(보정이 필요했다는 증거)', () => {
+  it('보정 없이는 세 조합이 모두 1페이지로 오판된다(보정이 필요했다는 증거)', () => {
     for (const [g, j, e] of [[4, 6, 4], [5, 6, 4], [4, 6, 5]] as const) {
       const wrong = estimateWeeklyPageBudget({
         ...B_PLAN, expectedRowTwoLineHeight: 0, eduLineCount: 4,
         perfGaeyalRowCount: g, perfJinhaengRowCount: j, expRowCount: e,
       })
-      expect(wrong.fitsHeightBudget, `${g}/${j}/${e}`).toBe(true)
+      expect(wrong.fitsSinglePage, `${g}/${j}/${e}`).toBe(true)
     }
   })
 
@@ -394,5 +395,92 @@ describe('발주예상 데이터 행의 2줄 자동 확장이 예산에 반영�
       r.tableOutMarginsHeight + r.tableWrapperSpacingHeight
     expect(sum).toBe(r.requiredHeight)
     expect(r.expectedRowsHeight).toBe(4 * r.effectiveExpectedRowHeight)
+  })
+})
+
+// ── 페이지 수 추정 (생성 차단이 아니라 진단) ────────────────────────────────────
+//
+// Weekly는 1페이지에 들어가지 않아도 차단하지 않고 2페이지 이상으로 생성한다. 이 계산기는
+// "몇 페이지가 필요한지"만 알려준다. estimatedPageCount는 행·문단이 페이지 경계에서 통째로
+// 밀리는 손실을 계산하지 않으므로 최소 예상값이며, 실제 페이지 수는 이보다 클 수 있다.
+describe('estimatedPageCount — 최소 예상 페이지 수', () => {
+  // 페이지 높이만 바꿔 원하는 페이지 수를 만드는 헬퍼(다른 입력은 고정).
+  const withUsable = (usableHeightPerPage: number) =>
+    estimateWeeklyPageBudget({ ...baseInput, usableHeightPerPage })
+
+  it('1페이지 — contentBottom이 페이지 높이 이하', () => {
+    const probe = estimateWeeklyPageBudget(baseInput)
+    const r = withUsable(probe.contentBottom + 1000)
+    expect(r.estimatedPageCount).toBe(1)
+    expect(r.fitsSinglePage).toBe(true)
+    expect(r.overflowBeyondSinglePage).toBeLessThan(0)
+  })
+
+  it('경계값 — contentBottom과 페이지 높이가 정확히 같으면 1페이지', () => {
+    const probe = estimateWeeklyPageBudget(baseInput)
+    const r = withUsable(probe.contentBottom)
+    expect(r.contentBottom).toBe(r.usableHeightPerPage)
+    expect(r.estimatedPageCount).toBe(1)
+    expect(r.fitsSinglePage).toBe(true)
+    expect(r.overflowBeyondSinglePage).toBe(0)
+  })
+
+  it('경계값 바로 초과 — 1만 넘어도 2페이지', () => {
+    const probe = estimateWeeklyPageBudget(baseInput)
+    const r = withUsable(probe.contentBottom - 1)
+    expect(r.estimatedPageCount).toBe(2)
+    expect(r.fitsSinglePage).toBe(false)
+    expect(r.overflowBeyondSinglePage).toBe(1)
+  })
+
+  it('2페이지 — 페이지 높이의 1배 초과 ~ 2배 이하', () => {
+    const probe = estimateWeeklyPageBudget(baseInput)
+    const cb = probe.contentBottom
+    expect(withUsable(Math.ceil(cb / 2)).estimatedPageCount).toBe(2)      // 정확히 2배 경계
+    expect(withUsable(Math.ceil(cb / 2) + 100).estimatedPageCount).toBe(2)
+  })
+
+  it('3페이지 이상 — 페이지 높이의 2배 초과', () => {
+    const probe = estimateWeeklyPageBudget(baseInput)
+    const cb = probe.contentBottom
+    expect(withUsable(Math.ceil(cb / 2) - 1).estimatedPageCount).toBeGreaterThanOrEqual(3)
+    expect(withUsable(Math.ceil(cb / 3)).estimatedPageCount).toBe(3)
+    expect(withUsable(Math.ceil(cb / 5)).estimatedPageCount).toBe(5)
+  })
+
+  it('fitsSinglePage는 estimatedPageCount === 1과 항상 일치한다', () => {
+    const probe = estimateWeeklyPageBudget(baseInput)
+    for (const u of [probe.contentBottom * 2, probe.contentBottom + 1, probe.contentBottom,
+      probe.contentBottom - 1, Math.ceil(probe.contentBottom / 3), 1000]) {
+      const r = withUsable(u)
+      expect(r.fitsSinglePage, `usable=${u}`).toBe(r.estimatedPageCount === 1)
+    }
+  })
+
+  it('페이지 수는 최소 1이다(입력이 아무리 작아도 0페이지는 없다)', () => {
+    const r = estimateWeeklyPageBudget({
+      ...baseInput, usableHeightPerPage: 10_000_000,
+      perfGaeyalRowCount: 0, perfJinhaengRowCount: 0, expRowCount: 0, eduLineCount: 1,
+    })
+    expect(r.estimatedPageCount).toBe(1)
+  })
+
+  it('행 수가 늘어날수록 예상 페이지 수는 단조 증가한다', () => {
+    let prev = 0
+    for (const n of [1, 10, 20, 40, 80, 160]) {
+      const r = estimateWeeklyPageBudget({ ...baseInput, perfJinhaengRowCount: n })
+      expect(r.estimatedPageCount).toBeGreaterThanOrEqual(prev)
+      prev = r.estimatedPageCount
+    }
+    expect(prev).toBeGreaterThanOrEqual(3)
+  })
+
+  it('estimatedPageCount = max(1, ceil(contentBottom / usableHeightPerPage)) 공식과 정확히 일치', () => {
+    for (const n of [1, 5, 13, 30, 60]) {
+      for (const u of [74268, 40000, 20000]) {
+        const r = estimateWeeklyPageBudget({ ...baseInput, perfJinhaengRowCount: n, usableHeightPerPage: u })
+        expect(r.estimatedPageCount).toBe(Math.max(1, Math.ceil(r.contentBottom / u)))
+      }
+    }
   })
 })

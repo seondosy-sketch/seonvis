@@ -1,17 +1,23 @@
-// 주간 HWPX의 "자동 문서 높이 예산" 계산 — 순수 함수, XML을 직접 다루지 않는다.
+// 주간 HWPX의 "문서 높이 산술 계산" — 순수 함수, XML을 직접 다루지 않는다.
 //
-// 이건 "1페이지를 보장한다"는 뜻이 아니다. HWPX XML만으로는 셀 안 텍스트가 실제로 몇 줄로
-// 줄바꿈될지, 한글이 최종적으로 몇 페이지로 렌더링할지 정확히 알 수 없다(한글 프로그램이
-// 있어야만 확인 가능). 여기서 하는 일은 "지금 이 입력량이 템플릿의 고정 서식(행 높이·글자
-// 크기를 전혀 줄이지 않은 상태) 기준으로 계산한 필요 높이가, 페이지의 사용 가능한 높이를
-// 넘는지"를 산술적으로 어림하는 것뿐이다 — 문단 간격/글자 크기 자동 축소는 하지 않는다.
+// ── 역할: 생성 가능 여부 게이트가 아니라 "몇 페이지가 필요한지" 진단 ──────────────
 //
-// 입력값(usableHeight, 각 행/헤더 높이 등)은 실제 템플릿 XML에서 실측한 숫자를
-// app/api/hwpx/route.ts 쪽에서 뽑아 넘겨준다 — 이 파일은 그 숫자들을 어떻게 조합해 판정할지만
-// 책임진다.
+// 예전에는 이 계산이 예산 초과 시 생성을 차단하는 게이트였다. 지금은 그렇지 않다.
+// Weekly는 입력이 많아 1페이지에 들어가지 않으면 차단하지 않고 2페이지 이상으로 자연스럽게
+// 생성한다(표에 pageBreak="CELL" + repeatHeader="1"이 걸려 있어 한글이 행 경계에서 자동으로
+// 나누고 다음 페이지에 헤더 행을 반복한다). 따라서 이 파일은 판정이 아니라 진단만 한다.
+//
+// 데이터 삭제·행 누락·말줄임·강제 절단은 어떤 경우에도 하지 않는다.
+//
+// estimatedPageCount는 "최소 예상 페이지 수"다 — 행이나 문단은 페이지 경계에서 쪼개지지 않고
+// 다음 페이지로 통째로 밀리므로, 경계마다 한 단위(수행 행/발주예상 행/문단 하나)만큼 여백이
+// 버려질 수 있다. 실제 페이지 수는 이 값보다 클 수 있고, 정확한 값은 한글로 열어봐야 한다.
+//
+// 입력값(페이지 사용 높이, 각 행/헤더 높이 등)은 실제 템플릿 XML에서 실측한 숫자를
+// app/api/hwpx/route.ts 쪽에서 뽑아 넘겨준다 — 이 파일은 그 숫자들을 어떻게 조합할지만 책임진다.
 export interface WeeklyPageBudgetInput {
-  /** 페이지 용지 높이 - 상하 여백 (HWPUNIT) */
-  usableHeight: number
+  /** 한 페이지에서 본문이 쓸 수 있는 높이 = 용지 높이 − 상하 여백 (HWPUNIT). 모든 페이지 동일. */
+  usableHeightPerPage: number
   /** 표 이외 고정 콘텐츠(제목·"1)/2)" 헤딩·"4) 기타" 제목 등, 교육참가자 문단 제외) 높이 합 */
   fixedContentHeight: number
   /** 교육참가자 문단 한 줄의 높이(책임 줄과 분야별 줄이 템플릿 기준 동일한 높이임을 실측 확인) */
@@ -86,23 +92,29 @@ export interface WeeklyPageBudgetInput {
   trailingParagraphSpacing: number
 }
 
-// 판정 결과 + 진단용 세부 내역. fitsHeightBudget/requiredHeight/usableHeight 세 값만으로도
-// 판정에는 충분하지만, 나머지 필드는 "어느 구성 요소가 얼마나 차지했는지"를 그대로 노출해서
-// 단위 테스트·완료 보고·개발 로그·수동 검증 판단에 쓴다 — 사용자에게 보이는 API 응답에는
-// 이 상세 수치를 넣지 않는다(app/api/hwpx/route.ts가 그 경계를 지킨다).
+// 전부 진단용 수치다 — 생성 가능 여부를 가르는 값은 하나도 없다. 사용자에게 보이는 API 응답에는
+// 이 수치를 넣지 않고(app/api/hwpx/route.ts가 그 경계를 지킨다) 서버 로그·테스트·완료 보고에만 쓴다.
 export interface WeeklyPageBudgetResult {
-  usableHeight: number
-  /** 모든 구성 요소의 "점유 높이" 합(마지막 문단의 줄 아래 여백까지 포함). 판정 기준이 아니다. */
+  /** 한 페이지에서 본문이 쓸 수 있는 높이 (모든 페이지 동일) */
+  usableHeightPerPage: number
+  /** 모든 구성 요소의 "점유 높이" 합(마지막 문단의 줄 아래 여백까지 포함) */
   requiredHeight: number
-  /** 실제 문서 하단 = requiredHeight - trailingParagraphSpacing. 페이지 적합 판정은 이 값으로 한다. */
+  /** 실제 문서 하단 = requiredHeight - trailingParagraphSpacing. 페이지 수 산정 기준값. */
   contentBottom: number
-  /** 표 밖 마지막 문단의 줄 아래 여백(판정에서 제외한 값) */
+  /** 표 밖 마지막 문단의 줄 아래 여백(문서 하단 계산에서 제외한 값) */
   trailingParagraphSpacing: number
-  /** true면 "현재 서식을 전혀 줄이지 않은 상태 기준" 산술 예산 안에 든다는 뜻일 뿐,
-   *  실제 한글 렌더링이 1페이지임을 보장하지 않는다. */
-  fitsHeightBudget: boolean
-  /** contentBottom - usableHeight, 음수면 여유분(예산 안에 듦)을 뜻한다. */
-  overflowHeight: number
+  /**
+   * 최소 예상 페이지 수 = max(1, ceil(contentBottom / usableHeightPerPage)).
+   *
+   * "최소"인 이유: 행과 문단은 페이지 경계에서 쪼개지지 않고 다음 페이지로 통째로 밀리므로,
+   * 경계마다 한 단위만큼 여백이 버려질 수 있다. 실제 페이지 수는 이 값보다 클 수 있으며
+   * 정확한 값은 한글 프로그램으로 열어야만 확인된다. 이 값으로 생성을 막지 않는다.
+   */
+  estimatedPageCount: number
+  /** estimatedPageCount === 1 인지. 1페이지 최적화 목표 달성 여부를 진단하는 용도다. */
+  fitsSinglePage: boolean
+  /** contentBottom - usableHeightPerPage. 음수면 1페이지 안에 여유가 있다는 뜻. */
+  overflowBeyondSinglePage: number
   fixedContentHeight: number
   educationHeight: number
   performingHeaderHeight: number
@@ -169,13 +181,18 @@ export function estimateWeeklyPageBudget(input: WeeklyPageBudgetInput): WeeklyPa
   // 실제 문서 하단 — 마지막 문단의 줄 아래 여백은 밀어낼 대상이 없어 페이지에 들어갈 필요가 없다.
   const contentBottom = requiredHeight - input.trailingParagraphSpacing
 
+  // 최소 예상 페이지 수. 행·문단이 페이지 경계에서 통째로 밀리는 손실은 계산하지 않으므로
+  // 실제 페이지 수는 이 값 이상이다. 이 값으로 생성을 막지 않는다.
+  const estimatedPageCount = Math.max(1, Math.ceil(contentBottom / input.usableHeightPerPage))
+
   return {
-    usableHeight: input.usableHeight,
+    usableHeightPerPage: input.usableHeightPerPage,
     requiredHeight,
     contentBottom,
     trailingParagraphSpacing: input.trailingParagraphSpacing,
-    fitsHeightBudget: contentBottom <= input.usableHeight,
-    overflowHeight: contentBottom - input.usableHeight,
+    estimatedPageCount,
+    fitsSinglePage: estimatedPageCount === 1,
+    overflowBeyondSinglePage: contentBottom - input.usableHeightPerPage,
     fixedContentHeight: input.fixedContentHeight,
     educationHeight,
     performingHeaderHeight: input.perfHeaderHeight,
@@ -191,5 +208,5 @@ export function estimateWeeklyPageBudget(input: WeeklyPageBudgetInput): WeeklyPa
   }
 }
 
-export const PAGE_BUDGET_EXCEEDED_MESSAGE =
-  '현재 입력량은 자동 문서 높이 예산을 초과하여 안전하게 생성할 수 없습니다.'
+// PAGE_BUDGET_EXCEEDED_MESSAGE는 제거했다 — Weekly는 더 이상 예산 초과로 생성을 차단하지 않는다.
+// (Monthly는 별도 상수 MONTHLY_PAGE_BUDGET_EXCEEDED_MESSAGE로 차단 정책을 그대로 유지한다.)
