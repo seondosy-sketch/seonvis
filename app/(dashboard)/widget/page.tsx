@@ -15,9 +15,9 @@ type SizeName = 'small' | 'medium' | 'large'
 type ThemeName = 'light' | 'dark'
 
 const SIZE_LABEL: Record<SizeName, string> = {
-  small: '작게 (정사각형)',
-  medium: '보통 (가로형)',
-  large: '크게 (세로형)',
+  small: '작게 (정사각형) — 오늘 요약',
+  medium: '보통 (가로형) — 주간 달력',
+  large: '크게 (세로형) — 월간 달력',
 }
 
 const card: React.CSSProperties = {
@@ -167,7 +167,9 @@ Script.complete()`
 
       <div style={{ ...card, marginBottom: 12 }}>
         <div style={{ fontSize: 12, color: '#666', lineHeight: 1.6, marginBottom: 12 }}>
-          이번 주 <b>제출 · 발표 · 개찰</b> 일정과 <b>팀 일정 · 공휴일</b>을 그린 이미지를 주소 하나로 제공합니다.
+          <b>제출 · 발표 · 개찰</b> 일정과 <b>팀 일정 · 공휴일</b>을 <b>달력</b>으로 그린 이미지를 주소 하나로 제공합니다
+          (작게=오늘 요약, 보통=주간 달력, 크게=월간 달력). 날짜 칸에는 종류를 한 글자 칩(<b>제·발·개·팀·휴</b>)으로 표시하고,
+          프로젝트명은 <b>크게</b>의 하단 목록에만 넣습니다.
           휴대폰의 위젯 앱이 이 주소를 가져가 홈화면에 띄웁니다. 자동 갱신은 <b>2시간 간격</b>으로 낮게 잡았고,
           최신 정보가 필요할 때 쓰는 방법은 <b>기종에 따라 다릅니다</b> — 아래 안내를 확인하세요.
         </div>

@@ -1,15 +1,23 @@
 /**
- * 홈화면 위젯에 그릴 "이번 주 요약" 데이터.
+ * 홈화면 위젯에 그릴 달력 데이터.
  *
  * 대시보드 홈(app/(dashboard)/page.tsx)이 브라우저에서 하는 일을 서버에서 한 번에 한다:
- *   performing_projects(이번 주차) + projects(날짜 보완) → 제출/면접/개찰 일정
+ *   performing_projects(주차별 스냅샷) + projects(날짜 보완) → 제출/면접/개찰 일정
  *   team_events → 팀 일정,  공휴일 API → 공휴일
- * 주차·날짜 계산은 lib/weekSchedule.ts를 그대로 재사용해 웹 화면과 값이 어긋나지 않게 한다.
+ * 주차·날짜 계산은 lib/weekSchedule.ts(+ lib/widget/calendar.ts)를 그대로 재사용해 웹 화면과
+ * 값이 어긋나지 않게 한다.
+ *
+ * ── 주 단위 데이터로 월 달력을 만드는 방법 ──
+ * performing_projects는 주차별로 저장되고 buildSchedule은 "그 주에 들어가는 일정"만 고른다.
+ * 그래서 월 달력은 **그리드가 걸치는 주차들을 각각 자기 주 경계로 buildSchedule** 해서 합친다.
+ * 월 전용 날짜 판정을 새로 만들지 않는 것이 핵심 — 그러면 같은 날짜가 웹 화면과 위젯에서
+ * 다르게 분류될 수 있다. 조회는 주차 목록 IN 한 번 + projects 한 번으로 끝낸다.
  *
  * ── 시간대 ──
  * 위젯은 서버(Vercel, UTC)에서 렌더된다. new Date()를 그냥 쓰면 KST 월요일 오전에도 UTC로는
  * 아직 일요일이라 "지난 주"가 나온다. 그래서 모든 날짜 기준을 kstToday()로 만든 KST 달력
  * 날짜에서 출발한다 (시:분 없는 로컬 자정 Date — lib/weekSchedule.ts의 날짜 규약과 동일).
+ * 월 경계도 이 KST 날짜의 연·월에서 만든다.
  *
  * ── 권한 ──
  * 프로젝트 일정은 menu_permissions에서 weekly/projects가 전부 'none'인 사용자에게는 숨긴다.
@@ -18,43 +26,77 @@
 import { createSupabaseAdminClient } from '@/lib/supabase-admin'
 import type { PerformingProject } from '@/lib/supabase'
 import { permissionFor, type MenuPermission } from '@/lib/menuConfig'
+import { buildSchedule, fmtDate, getWeekBounds, parseDate, type WeekSchedule } from '@/lib/weekSchedule'
 import {
-  buildSchedule,
-  fmtDate,
-  getCurrentWeek,
-  getWeekBounds,
-  parseDate,
-  type WeekSchedule,
-} from '@/lib/weekSchedule'
+  addDays,
+  eachDate,
+  mondayOf,
+  monthGrid,
+  sundayOf,
+  weekKeysInRange,
+  weekdayIndex,
+} from '@/lib/widget/calendar'
 
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000
 const DOW = ['일', '월', '화', '수', '목', '금', '토']
 
-export type WidgetItemKind = 'submit' | 'interview' | 'result' | 'event'
+/** 하단 "다가오는 일정"을 몇 건까지 준비할지 (렌더 쪽에서 크기별로 잘라 쓴다) */
+const UPCOMING_LIMIT = 5
+/** 월 그리드 끝 이후로 더 읽어두는 기간 — 월말에 "다가오는 일정"이 비지 않게 한다 */
+const UPCOMING_LOOKAHEAD_DAYS = 21
+
+export type WidgetItemKind = 'holiday' | 'submit' | 'interview' | 'result' | 'event'
+
+/** 날짜 칸 표시 순서 — 공휴일이 먼저 와야 "일하는 날인지"가 가장 먼저 읽힌다. */
+export const KIND_ORDER: WidgetItemKind[] = ['holiday', 'submit', 'interview', 'result', 'event']
+
+/** 하단 목록·small 위젯의 "주요 일정" 우선순위 (공휴일은 일정이 아니라 배경 정보라 제외) */
+const UPCOMING_PRIORITY: WidgetItemKind[] = ['submit', 'interview', 'result', 'event']
 
 export interface WidgetItem {
   kind: WidgetItemKind
   text: string
-  /** 팀 일정은 사용자가 고른 색을 그대로 쓴다. 프로젝트 일정은 종류별 고정색. */
-  color?: string
 }
 
-export interface WidgetDay {
+/** 달력 한 칸 */
+export interface WidgetCell {
   date: string          // YYYY-MM-DD
-  label: string         // '7/30(목)'
+  day: number           // 1~31
+  /** 월간 달력에서 이번 달 날짜인지 (false면 흐리게 그린다) */
+  inMonth: boolean
   isToday: boolean
   isPast: boolean
-  holidayName: string | null
+  /** 월=0 … 일=6 */
+  weekday: number
   items: WidgetItem[]
 }
 
+export interface WidgetUpcoming {
+  date: string
+  /** '7/31(금)' */
+  label: string
+  kind: WidgetItemKind
+  text: string
+}
+
 export interface WidgetSummary {
-  week: string
-  rangeLabel: string    // '7/27 ~ 8/2'
-  todayLabel: string    // '7/30(목)'
-  updatedLabel: string  // '업데이트 14:05'
-  days: WidgetDay[]
-  totals: Record<WidgetItemKind, number>
+  updatedLabel: string      // '업데이트 14:05'
+  monthLabel: string        // '2026년 7월'
+  weekRangeLabel: string    // '7/27 ~ 8/2'
+  today: {
+    date: string
+    day: number             // 30
+    weekday: string         // '목'
+    label: string           // '7/30(목)'
+    holidayName: string | null
+    items: WidgetItem[]
+  }
+  /** 이번 주 월~일 7칸 (medium) */
+  weekCells: WidgetCell[]
+  /** 이번 달 그리드 4~6행 × 7칸 (large) */
+  monthWeeks: WidgetCell[][]
+  /** 오늘 이후 가까운 주요 일정 */
+  upcoming: WidgetUpcoming[]
   showProjects: boolean
 }
 
@@ -65,7 +107,7 @@ export function kstToday(now: Date = new Date()): Date {
 }
 
 /**
- * KST 시:분 — 위젯 좌하단 "업데이트 HH:MM"에 쓴다.
+ * KST 시:분 — 위젯 "업데이트 HH:MM"에 쓴다.
  *
  * 이 값의 의미는 **이 요약을 만든 시각(= DB를 조회하고 그 응답으로 PNG를 그린 시각)** 하나로
  * 고정한다. 라우트가 모든 응답을 `private, no-store`로 내리고 조건부 응답(304)도 쓰지 않으므로,
@@ -89,6 +131,7 @@ export function dayLabel(d: Date): string {
 
 interface TeamEventRow { title: string; date: string; color: string | null }
 interface HolidayRow { date: string; localName: string }
+interface PerformingRow extends PerformingProject { week: string }
 interface ProjectRow {
   name: string
   submit_date: string | null
@@ -99,26 +142,25 @@ interface ProjectRow {
   evaluation: string | null
 }
 
-/** YYYY-MM-DD 문자열 비교로 주 범위 안의 행만 남긴다(문자열 사전순 = 날짜순). */
+/** YYYY-MM-DD 문자열 비교로 범위 안의 행만 남긴다(문자열 사전순 = 날짜순). */
 export function inWeek<T extends { date: string }>(rows: T[], start: Date, end: Date): T[] {
   const from = toDateKey(start)
   const to = toDateKey(end)
   return rows.filter(r => r.date >= from && r.date <= to)
 }
 
+/** 종류별로 묶어 개수를 센다 — 날짜 칸의 칩(`제2`)을 만들 때 쓴다. */
+export function groupByKind(items: WidgetItem[]): { kind: WidgetItemKind; count: number }[] {
+  return KIND_ORDER.map(kind => ({ kind, count: items.filter(i => i.kind === kind).length })).filter(g => g.count > 0)
+}
+
 /**
- * 이번 주 프로젝트 일정을 요일별로 나눈다.
+ * 한 주의 프로젝트 일정을 날짜별로 나눠 map에 쌓는다.
  * buildSchedule()이 고른 항목을 그대로 받아 날짜만 되돌려 파싱한다 — 포함 여부 판단을
  * 두 번 구현하지 않으려는 것. 되돌려 파싱이 실패하는 값은 버리지 않고 주 첫날에 붙인다.
  */
-function scheduleByDay(schedule: WeekSchedule, start: Date): Map<string, WidgetItem[]> {
+function pushSchedule(map: Map<string, WidgetItem[]>, schedule: WeekSchedule, start: Date): void {
   const refYear = start.getFullYear()
-  const map = new Map<string, WidgetItem[]>()
-  const push = (key: string, item: WidgetItem) => {
-    const list = map.get(key) ?? []
-    list.push(item)
-    map.set(key, list)
-  }
   const kinds: { kind: WidgetItemKind; items: { name: string; date: string }[] }[] = [
     { kind: 'submit', items: schedule.submit },
     { kind: 'interview', items: schedule.interview },
@@ -127,10 +169,12 @@ function scheduleByDay(schedule: WeekSchedule, start: Date): Map<string, WidgetI
   for (const { kind, items } of kinds) {
     for (const item of items) {
       const d = parseDate(item.date, refYear)
-      push(toDateKey(d ?? start), { kind, text: item.name })
+      const key = toDateKey(d ?? start)
+      const list = map.get(key) ?? []
+      list.push({ kind, text: item.name })
+      map.set(key, list)
     }
   }
-  return map
 }
 
 export async function loadWidgetSummary(
@@ -139,8 +183,16 @@ export async function loadWidgetSummary(
   now: Date = new Date(),
 ): Promise<WidgetSummary> {
   const today = kstToday(now)
-  const week = getCurrentWeek(today)
-  const { start, end } = getWeekBounds(week)
+  const todayKey = toDateKey(today)
+  const grid = monthGrid(today)
+  const weekStart = mondayOf(today)
+  const weekEnd = sundayOf(today)
+
+  // 읽는 범위: 월 그리드 전체 + 그 뒤 3주(월말에 "다가오는 일정"이 비지 않게).
+  // 이번 주는 항상 월 그리드 안에 있으므로 따로 넓히지 않아도 된다.
+  const rangeStart = grid.gridStart
+  const rangeEnd = addDays(grid.gridEnd, UPCOMING_LOOKAHEAD_DAYS)
+  const weekKeys = weekKeysInRange(rangeStart, rangeEnd)
 
   const showProjects =
     isAdmin ||
@@ -148,52 +200,81 @@ export async function loadWidgetSummary(
     permissionFor(menuPermissions, 'projects') !== 'none'
 
   const admin = createSupabaseAdminClient()
-  const [performing, events, holidays] = await Promise.all([
-    showProjects ? loadPerforming(admin, week) : Promise.resolve([] as PerformingProject[]),
-    loadTeamEvents(admin, start, end),
-    loadHolidays(start, end),
+  const [performingByWeek, events, holidays] = await Promise.all([
+    showProjects ? loadPerformingByWeek(admin, weekKeys) : Promise.resolve(new Map<string, PerformingProject[]>()),
+    loadTeamEvents(admin, rangeStart, rangeEnd),
+    loadHolidays(rangeStart, rangeEnd),
   ])
 
-  const schedule = buildSchedule(performing, start, end)
-  const byDay = scheduleByDay(schedule, start)
-  const holidayByDate = new Map(holidays.map(h => [h.date, h.localName]))
-  const eventsByDate = new Map<string, WidgetItem[]>()
+  // 날짜 → 항목 맵 (공휴일 → 프로젝트 → 팀 일정 순으로 쌓고, 칸 표시에서 KIND_ORDER로 정렬)
+  const byDate = new Map<string, WidgetItem[]>()
+  const holidayByDate = new Map<string, string>()
+  for (const h of holidays) {
+    holidayByDate.set(h.date, h.localName)
+    const list = byDate.get(h.date) ?? []
+    list.push({ kind: 'holiday', text: h.localName })
+    byDate.set(h.date, list)
+  }
+  for (const weekKey of weekKeys) {
+    const bounds = getWeekBounds(weekKey)
+    const rows = performingByWeek.get(weekKey) ?? []
+    pushSchedule(byDate, buildSchedule(rows, bounds.start, bounds.end), bounds.start)
+  }
   for (const e of events) {
-    const list = eventsByDate.get(e.date) ?? []
-    list.push({ kind: 'event', text: e.title, color: e.color ?? '#7c3aed' })
-    eventsByDate.set(e.date, list)
+    const list = byDate.get(e.date) ?? []
+    list.push({ kind: 'event', text: e.title })
+    byDate.set(e.date, list)
   }
 
-  const todayKey = toDateKey(today)
-  const days: WidgetDay[] = []
-  for (let i = 0; i < 7; i++) {
-    const d = new Date(start)
-    d.setDate(start.getDate() + i)
+  const cellOf = (d: Date): WidgetCell => {
     const key = toDateKey(d)
-    days.push({
+    const items = byDate.get(key) ?? []
+    return {
       date: key,
-      label: dayLabel(d),
+      day: d.getDate(),
+      inMonth: d.getMonth() === grid.monthStart.getMonth() && d.getFullYear() === grid.monthStart.getFullYear(),
       isToday: key === todayKey,
       isPast: key < todayKey,
-      holidayName: holidayByDate.get(key) ?? null,
-      items: [...(byDay.get(key) ?? []), ...(eventsByDate.get(key) ?? [])],
-    })
+      weekday: weekdayIndex(d),
+      items: KIND_ORDER.flatMap(kind => items.filter(i => i.kind === kind)),
+    }
   }
 
-  const totals: Record<WidgetItemKind, number> = {
-    submit: schedule.submit.length,
-    interview: schedule.interview.length,
-    result: schedule.result.length,
-    event: events.length,
+  const weekCells = eachDate(weekStart, weekEnd).map(cellOf)
+  const gridCells = eachDate(grid.gridStart, grid.gridEnd).map(cellOf)
+  const monthWeeks: WidgetCell[][] = []
+  for (let i = 0; i < gridCells.length; i += 7) monthWeeks.push(gridCells.slice(i, i + 7))
+
+  // 다가오는 일정 — 오늘부터 범위 끝까지, 날짜 순 → 종류 우선순위 순
+  const upcoming: WidgetUpcoming[] = []
+  for (const d of eachDate(today, rangeEnd)) {
+    const key = toDateKey(d)
+    const items = (byDate.get(key) ?? []).filter(i => i.kind !== 'holiday')
+    items.sort((a, b) => UPCOMING_PRIORITY.indexOf(a.kind) - UPCOMING_PRIORITY.indexOf(b.kind))
+    for (const item of items) {
+      if (upcoming.length >= UPCOMING_LIMIT) break
+      upcoming.push({ date: key, label: dayLabel(d), kind: item.kind, text: item.text })
+    }
+    if (upcoming.length >= UPCOMING_LIMIT) break
   }
+
+  const todayItems = byDate.get(todayKey) ?? []
 
   return {
-    week,
-    rangeLabel: `${start.getMonth() + 1}/${start.getDate()} ~ ${end.getMonth() + 1}/${end.getDate()}`,
-    todayLabel: dayLabel(today),
     updatedLabel: `업데이트 ${kstTimeLabel(now)}`,
-    days,
-    totals,
+    monthLabel: grid.monthLabel,
+    weekRangeLabel: `${weekStart.getMonth() + 1}/${weekStart.getDate()} ~ ${weekEnd.getMonth() + 1}/${weekEnd.getDate()}`,
+    today: {
+      date: todayKey,
+      day: today.getDate(),
+      weekday: DOW[today.getDay()],
+      label: dayLabel(today),
+      holidayName: holidayByDate.get(todayKey) ?? null,
+      items: KIND_ORDER.flatMap(kind => todayItems.filter(i => i.kind === kind)),
+    },
+    weekCells,
+    monthWeeks,
+    upcoming,
     showProjects,
   }
 }
@@ -201,53 +282,77 @@ export async function loadWidgetSummary(
 type AdminClient = ReturnType<typeof createSupabaseAdminClient>
 
 /**
- * 대시보드 홈의 loadPerforming과 같은 규칙:
- * 이번 주차 performing_projects가 있으면 그것을 쓰고 빈 날짜는 projects로 보완한다.
- * 아직 이번 주차 데이터를 만들지 않았으면 projects에서 직접 만든다(취소·드랍·자사평가 제외).
+ * 주차별 수행 프로젝트 — 대시보드 홈의 loadPerforming과 같은 규칙을 주차 여러 개로 확장한다.
+ * 해당 주차 performing_projects가 있으면 그것을 쓰고 빈 날짜는 projects로 보완한다.
+ * 아직 그 주차 데이터를 만들지 않았으면 projects에서 직접 만든다(취소·드랍·자사평가 제외).
+ * projects는 주차마다 다시 읽지 않고 한 번만 읽어 재사용한다.
  */
-async function loadPerforming(admin: AdminClient, week: string): Promise<PerformingProject[]> {
+async function loadPerformingByWeek(
+  admin: AdminClient,
+  weekKeys: string[],
+): Promise<Map<string, PerformingProject[]>> {
   const [{ data: perf }, { data: projs }] = await Promise.all([
-    admin.from('performing_projects').select('*').eq('week', week).order('sort_order'),
+    admin.from('performing_projects').select('*').in('week', weekKeys).order('sort_order'),
     admin
       .from('projects')
       .select('name, submit_date, interview_date, bid_date, participants, status_override, evaluation')
       .order('project_number', { ascending: false }),
   ])
 
+  const projectRows = (projs ?? []) as ProjectRow[]
   const projByName = new Map<string, ProjectRow>()
-  for (const p of (projs ?? []) as ProjectRow[]) projByName.set(p.name, p)
+  for (const p of projectRows) projByName.set(p.name, p)
 
-  if (perf && perf.length > 0) {
-    return (perf as PerformingProject[]).map(p => {
-      const src = projByName.get(p.name)
-      return {
-        ...p,
-        result_date: p.result_date?.trim() ? p.result_date : fmtDate(src?.bid_date ?? null),
-        submit_date: p.submit_date?.trim() ? p.submit_date : fmtDate(src?.submit_date ?? null),
-        interview_date: p.interview_date?.trim() ? p.interview_date : fmtDate(src?.interview_date ?? null),
-      }
-    })
+  const perfByWeek = new Map<string, PerformingRow[]>()
+  for (const row of (perf ?? []) as PerformingRow[]) {
+    const list = perfByWeek.get(row.week) ?? []
+    list.push(row)
+    perfByWeek.set(row.week, list)
   }
 
-  return ((projs ?? []) as ProjectRow[])
-    .filter(p => {
-      if (p.status_override === '취소') return false
-      if (p.participants?.includes('드랍') || p.participants?.includes('드롭')) return false
-      if (p.evaluation === '선') return false
-      return true
-    })
-    .map((p, i) => ({
-      status: '진행중' as const,
-      name: p.name,
-      director: '',
-      submit_date: fmtDate(p.submit_date),
-      interview_date: fmtDate(p.interview_date),
-      result_date: fmtDate(p.bid_date),
-      fee: null,
-      note: '',
-      sort_order: i,
+  // 저장된 주차 데이터가 없을 때 쓰는 projects 기반 행 (주차마다 week 값만 바꿔 재사용)
+  const fallbackBase = projectRows.filter(p => {
+    if (p.status_override === '취소') return false
+    if (p.participants?.includes('드랍') || p.participants?.includes('드롭')) return false
+    if (p.evaluation === '선') return false
+    return true
+  })
+
+  const out = new Map<string, PerformingProject[]>()
+  for (const week of weekKeys) {
+    const stored = perfByWeek.get(week)
+    if (stored && stored.length > 0) {
+      out.set(
+        week,
+        stored.map(p => {
+          const src = projByName.get(p.name)
+          return {
+            ...p,
+            result_date: p.result_date?.trim() ? p.result_date : fmtDate(src?.bid_date ?? null),
+            submit_date: p.submit_date?.trim() ? p.submit_date : fmtDate(src?.submit_date ?? null),
+            interview_date: p.interview_date?.trim() ? p.interview_date : fmtDate(src?.interview_date ?? null),
+          }
+        }),
+      )
+      continue
+    }
+    out.set(
       week,
-    }))
+      fallbackBase.map((p, i) => ({
+        status: '진행중' as const,
+        name: p.name,
+        director: '',
+        submit_date: fmtDate(p.submit_date),
+        interview_date: fmtDate(p.interview_date),
+        result_date: fmtDate(p.bid_date),
+        fee: null,
+        note: '',
+        sort_order: i,
+        week,
+      })),
+    )
+  }
+  return out
 }
 
 async function loadTeamEvents(admin: AdminClient, start: Date, end: Date): Promise<TeamEventRow[]> {
@@ -262,7 +367,7 @@ async function loadTeamEvents(admin: AdminClient, start: Date, end: Date): Promi
 
 /**
  * 공휴일 — app/api/holidays/route.ts와 같은 외부 API를 서버에서 직접 부른다.
- * 주가 연말·연초에 걸치면 두 해를 받아야 한다. 실패는 조용히 무시(공휴일 없이 그린다).
+ * 범위가 연말·연초에 걸치면 두 해를 받아야 한다. 실패는 조용히 무시(공휴일 없이 그린다).
  */
 async function loadHolidays(start: Date, end: Date): Promise<HolidayRow[]> {
   const years = Array.from(new Set([start.getFullYear(), end.getFullYear()]))
