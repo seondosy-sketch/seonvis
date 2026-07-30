@@ -1878,6 +1878,80 @@ describe('weekly.hwpx 서식 실측값 고정 (한글 렌더 검증 기준)', ()
     }
   })
 
+  // ── 섹션 제목 고아 방지 (2페이지 이상에서 제목만 앞 페이지 끝에 남는 문제) ────────────────
+  //
+  // 두 속성 이름은 한글에서 직접 설정한 문서를 저장해 XML로 확인한 것이다(추정 아님):
+  //   문단 모양 → 확장 → "다음 문단과 함께"   → hh:breakSetting/@keepWithNext
+  //   개체 속성 → HoldAnchorObj              → hp:pos/@holdAnchorAndSO
+  //
+  // 둘 다 필요하다. keepWithNext만 켜면 제목은 표를 감싸는 문단(조판 부호)에 붙지만, 그 문단은
+  // 빈 줄 하나라 앞 페이지에 그대로 남고 표만 다음 페이지로 넘어간다(treatAsChar="0" 부동
+  // 개체라서 그렇다 — 한글 렌더로 확인: 수행 20건에서 "2) 발주예상"이 여전히 1페이지에 고아).
+  // holdAnchorAndSO가 조판 부호를 표와 같은 쪽으로 끌어내리고, keepWithNext가 제목을 그 조판
+  // 부호에 붙여 함께 넘긴다.
+  it('섹션 제목 paraPr(2)만 keepWithNext="1" — 다른 문단 모양은 건드리지 않았다', () => {
+    const { sec, hdr } = load()
+    const paraPrs = Array.from(hdr.getElementsByTagName('hh:paraPr')) as any[]
+    const kwnOf = (pp: any) =>
+      (Array.from(pp.getElementsByTagName('hh:breakSetting'))[0] as any).getAttribute('keepWithNext')
+
+    const titlePP = paraPrs.find((x: any) => x.getAttribute('id') === '2')
+    expect(kwnOf(titlePP)).toBe('1')
+    // 제목용 paraPr 외에는 전부 0이어야 한다
+    for (const pp of paraPrs) {
+      if (pp.getAttribute('id') === '2') continue
+      expect(kwnOf(pp)).toBe('0')
+    }
+    // paraPr 2를 참조하는 문단은 섹션 제목 4개뿐이다 — 표·교육·본문 문단에는 번지지 않는다
+    const users = elsb(sec, 'p').filter((p: any) => p.getAttribute('paraPrIDRef') === '2')
+    expect(users.map((p: any) => textb(p)))
+      .toEqual(['1) 수행 Project (공동수행)', '2) 발주예상 Project (공동예정)', '3) 교육참가자(OSG팀)', '4) 기 타'])
+  })
+
+  it('두 표 hp:pos holdAnchorAndSO="1" — 조판 부호가 표와 같은 쪽으로 따라간다', () => {
+    const { sec } = load()
+    const poss = elsb(sec, 'pos')
+    expect(poss.length).toBe(2)
+    for (const pos of poss) expect(pos.getAttribute('holdAnchorAndSO')).toBe('1')
+  })
+
+  // 제목을 붙여 내리는 수단으로 keepLines(문단 보호)나 pageBreakBefore(문단 앞에서 쪽 나눔)를
+  // 쓰지 않았다는 가드 — 둘 중 하나라도 켜지면 표 분할·페이지 수가 달라진다.
+  it('어떤 문단 모양도 keepLines / pageBreakBefore를 쓰지 않는다', () => {
+    const { hdr } = load()
+    for (const pp of Array.from(hdr.getElementsByTagName('hh:paraPr')) as any[]) {
+      const bs = Array.from(pp.getElementsByTagName('hh:breakSetting'))[0] as any
+      expect([bs.getAttribute('keepLines'), bs.getAttribute('pageBreakBefore')]).toEqual(['0', '0'])
+    }
+  })
+
+  it('생성된 문서도 keepWithNext / holdAnchorAndSO / treatAsChar="0"을 그대로 내보낸다', async () => {
+    const res: any = await POST(mockRequest({
+      type: 'weekly', week: '2026-W22',
+      performing: [
+        ...Array.from({ length: 4 }, (_, i) => perfItem('개찰', `개찰${i + 1}`)),
+        ...Array.from({ length: 16 }, (_, i) => perfItem('진행중', `진행중${i + 1}`)),
+      ],
+      expected: Array.from({ length: 4 }, (_, i) => expItem(`발주예상${i + 1}`)),
+      meta: { edu_chief: '김책임', edu_arch: '박건축', edu_civil: '최토목', edu_safety: '정안전' },
+    }))
+    expect(res.status).toBe(200)
+    const zip = new AdmZip(Buffer.from(await res.arrayBuffer()))
+    const outHdr: any = new DOMParser().parseFromString(zip.readAsText('Contents/header.xml'), 'text/xml')
+    const outSec: any = new DOMParser().parseFromString(zip.readAsText('Contents/section0.xml'), 'text/xml')
+
+    const titlePP = (Array.from(outHdr.getElementsByTagName('hh:paraPr')) as any[])
+      .find((x: any) => x.getAttribute('id') === '2')
+    expect((Array.from(titlePP.getElementsByTagName('hh:breakSetting'))[0] as any).getAttribute('keepWithNext')).toBe('1')
+
+    const poss = elsb(outSec, 'pos')
+    expect(poss.length).toBe(2)
+    for (const pos of poss) {
+      expect(pos.getAttribute('holdAnchorAndSO')).toBe('1')
+      expect(pos.getAttribute('treatAsChar')).toBe('0') // 표는 계속 페이지 경계에서 분할되어야 한다
+    }
+  })
+
   // repeatHeader="1"은 표 단위 플래그일 뿐이고, 한글은 hp:tc의 header="1"로 어느 행이 제목
   // 행인지 판단한다. header가 전부 "0"이면 이어지는 페이지에 헤더가 반복되지 않는다(한글 렌더
   // 확인). 데이터 행이 복제 원본이므로 데이터 행은 "0"이어야 한다.
