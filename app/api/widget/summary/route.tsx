@@ -8,13 +8,15 @@
  *
  * ── 크기별 레이아웃 ──
  *   small  : 달력 없음. 오늘 날짜를 크게 + 오늘 일정 건수 + 다음 일정 1건
- *   medium : 이번 주 월~일 7칸 달력 (날짜 숫자 + 종류 칩)
+ *   medium : 이번 주 월~일 7칸 달력 (날짜 숫자 + 일정 이름 2줄까지)
  *   large  : 이번 달 전체 달력(월요일 시작, 이전·다음 달은 흐리게) + 하단 다가오는 일정 3건
  *
- * 일정 5종(공휴일·제출·발표·개찰·팀)은 **색만으로 구분하지 않는다** — 한 글자 라벨을 넣은
- * 칩으로 그려서 색을 구분하기 어려운 환경에서도 읽힌다. 같은 종류가 하루에 여러 건이면
- * `제2`처럼 개수를 붙이고, 칸에 넣을 수 있는 칩 수를 넘으면 `+N`으로 접는다.
- * 날짜 칸에는 프로젝트명을 넣지 않는다(칸이 좁아 오히려 못 읽는다) — 이름은 하단 목록에만.
+ * 날짜 칸에는 일정 종류를 **색**(왼쪽 색 막대 + 같은 색 이름)으로 구분하고 **프로젝트명을 짧게
+ * 잘라** 넣는다. 칸 폭이 좁아 몇 글자밖에 안 들어가지만, 건수만 보이는 것보다 "어느 사업인지"
+ * 감이 잡히는 쪽이 쓸모 있다는 요청에 따른 것이다. 이름은 HWPX 보고서와 같은 정제 규칙
+ * (`formatProjectNameForReport`)을 거쳐 앞부분에 식별 정보가 오게 만든다. 종류 색의 범례는
+ * 헤더에 한 글자 칩(제·발·개·팀)으로 두고, 칸에 넣을 줄 수를 넘으면 `+N`으로 접는다.
+ * 전체 이름은 large 하단 "다가오는 일정"과 small의 "다음 일정"에서 더 길게 보여준다.
  *
  * 인증: 쿠키가 없으므로 ?token= 로만 신원을 확인한다(lib/widget/token.ts). 토큰이 무효하면
  * 빈 응답 대신 "재발급 안내" 이미지를 200으로 돌려준다 — 위젯 앱들은 4xx를 받으면 아무것도
@@ -78,8 +80,14 @@ interface Layout {
   day: number
   chip: number
   body: number
-  /** 날짜 칸에 넣는 칩 최대 개수 (초과분은 +N) */
-  maxChips: number
+  /** 날짜 칸에 넣는 일정 줄 수 (초과분은 +N) */
+  cellItems: number
+  /** 날짜 칸 프로젝트명 글자 크기 */
+  cellName: number
+  /** 날짜 칸 프로젝트명 최대 글자 수 (한 줄 기준, 말줄임) */
+  cellChars: number
+  /** 날짜 칸 프로젝트명을 몇 줄까지 보여줄지 */
+  cellLines: number
   /** 하단 목록에 넣는 일정 수 */
   upcoming: number
   /** 하단 목록 프로젝트명 최대 글자 수 */
@@ -91,13 +99,12 @@ interface Layout {
  * 27px 미만은 폰에서 9pt 아래가 되어 잘 안 읽힌다. 그래서 본문·칩은 24px 이상을 쓴다.
  */
 const LAYOUTS: Record<SizeName, Layout> = {
-  small: { pad: 26, header: 28, meta: 24, weekday: 40, day: 130, chip: 26, body: 30, maxChips: 4, upcoming: 1, nameChars: 11 },
-  // medium의 maxChips가 3인 이유: 칩을 세로로 쌓으므로 한 칸이 너무 높아지면 프레임을 넘쳐
-  // 요일 머리글·푸터가 잘린다(칩 3개 + '+N'까지가 안전한 최대치).
-  medium: { pad: 24, header: 34, meta: 24, weekday: 26, day: 44, chip: 28, body: 26, maxChips: 3, upcoming: 0, nameChars: 0 },
-  // large는 6주 달인 달에서 한 행 높이가 가장 낮아진다 — 날짜 숫자 + 칩 2줄이 그 안에 들어가야
-  // 숫자와 칩이 겹치지 않는다(6주 × 밀집 일정으로 실측해 정한 값).
-  large: { pad: 28, header: 36, meta: 24, weekday: 26, day: 28, chip: 21, body: 26, maxChips: 3, upcoming: 3, nameChars: 24 },
+  small: { pad: 26, header: 28, meta: 24, weekday: 40, day: 130, chip: 26, body: 30, cellItems: 0, cellName: 0, cellChars: 0, cellLines: 1, upcoming: 1, nameChars: 14 },
+  // medium은 세로 여유가 있어 이름 줄을 4개까지 넣는다(그 이상은 프레임을 넘쳐 머리글이 잘린다).
+  medium: { pad: 24, header: 34, meta: 24, weekday: 26, day: 40, chip: 26, body: 26, cellItems: 4, cellName: 19, cellChars: 6, cellLines: 2, upcoming: 0, nameChars: 0 },
+  // large는 주 행 수(4~6)에 따라 행 높이가 달라진다 — cellItems는 렌더 시점에 주 수로 보정한다
+  // (6주 달은 2줄, 4~5주 달은 3줄). 이름 글자 크기·수는 칸 폭 133px에서 실측해 정했다.
+  large: { pad: 28, header: 36, meta: 24, weekday: 26, day: 26, chip: 21, body: 26, cellItems: 3, cellName: 17, cellChars: 6, cellLines: 1, upcoming: 3, nameChars: 24 },
 }
 
 interface KindStyle { label: string; color: string; bg: string }
@@ -308,36 +315,64 @@ function Chip({
   )
 }
 
-/** 날짜 칸의 칩 묶음 — maxChips를 넘는 항목은 +N으로 접는다. */
-function CellChips({
+/**
+ * 날짜 칸 내용 — 일정 종류는 **색**으로 구분하고, 프로젝트명을 짧게 잘라 함께 보여준다.
+ *
+ * 칸 폭이 좁아 이름은 몇 글자밖에 못 넣지만(말줄임), 건수만 보이는 것보다 "어느 사업인지"
+ * 감이 잡히는 쪽이 쓸모 있다는 요청에 따른 구성이다. 왼쪽 색 막대 + 같은 색 이름으로
+ * 종류를 나타내고(범례는 헤더에 있다), 넣을 수 있는 줄 수를 넘으면 `+N`으로 접는다.
+ * 전체 이름은 large 하단 "다가오는 일정"과 small의 "다음 일정"에서 더 길게 보여준다.
+ */
+function CellItems({
   cell,
   theme,
   layout,
-  direction,
+  maxItems,
 }: {
   cell: WidgetCell
   theme: Theme
   layout: Layout
-  direction: 'column' | 'row'
+  maxItems: number
 }) {
-  const groups = groupByKind(cell.items)
-  const shown = groups.slice(0, layout.maxChips)
-  const hidden = groups.slice(layout.maxChips).reduce((n, g) => n + g.count, 0)
+  // '+N' 줄도 한 줄을 차지하므로 줄 수 예산에 포함시킨다 — 그러지 않으면 칸이 한 줄 더 높아져
+  // 좁은 행(5~6주 달)에서 날짜 숫자와 겹친다. 결과적으로 칸의 줄 수는 항상 maxItems 이하다.
+  const overflow = cell.items.length > maxItems
+  const shown = cell.items.slice(0, overflow ? maxItems - 1 : maxItems)
+  const hidden = cell.items.length - shown.length
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: direction,
-        flexWrap: direction === 'row' ? 'wrap' : 'nowrap',
-        alignItems: direction === 'column' ? 'center' : 'flex-start',
-        gap: 3,
-      }}
-    >
-      {shown.map(g => (
-        <Chip key={g.kind} kind={g.kind} count={g.count} theme={theme} fontSize={layout.chip} />
+    <div style={{ display: 'flex', flexDirection: 'column', width: '100%', gap: 2 }}>
+      {shown.map((item, i) => (
+        <div key={i} style={{ display: 'flex', alignItems: 'stretch', gap: 3 }}>
+          <div
+            style={{
+              display: 'flex',
+              width: 5,
+              minHeight: layout.cellName,
+              borderRadius: 3,
+              background: theme.kind[item.kind].color,
+            }}
+          />
+          <div
+            style={{
+              display: 'flex',
+              flex: 1,
+              fontSize: layout.cellName,
+              lineHeight: 1.15,
+              color: theme.kind[item.kind].color,
+              // 여러 줄을 허용할 때: satori에서는 lineClamp가 먹지 않아(3줄로 흘러넘쳤다)
+              // ① 글자 수를 줄당 폭 × 줄 수로 미리 자르고 ② 높이를 줄 수만큼으로 묶어
+              // 혹시 한 줄 더 흐르더라도 칸이 높아지지 않게 한다.
+              ...(layout.cellLines > 1
+                ? { maxHeight: Math.round(layout.cellName * 1.15 * layout.cellLines), overflow: 'hidden' }
+                : {}),
+            }}
+          >
+            {truncate(item.short, layout.cellChars * layout.cellLines)}
+          </div>
+        </div>
       ))}
       {hidden > 0 && (
-        <div style={{ display: 'flex', fontSize: layout.chip, color: theme.dim }}>{`+${hidden}`}</div>
+        <div style={{ display: 'flex', fontSize: layout.cellName, color: theme.dim }}>{`+${hidden}`}</div>
       )}
     </div>
   )
@@ -387,7 +422,7 @@ function UpcomingRow({
       <div style={{ display: 'flex', fontSize: layout.body, color: theme.dim }}>{item.label}</div>
       <Chip kind={item.kind} count={1} theme={theme} fontSize={layout.chip} />
       <div style={{ display: 'flex', fontSize: layout.body, color: theme.text }}>
-        {truncate(item.text, layout.nameChars)}
+        {truncate(item.short, layout.nameChars)}
       </div>
     </div>
   )
@@ -429,7 +464,7 @@ function TodayWidget({ summary, theme, layout }: { summary: WidgetSummary; theme
         <div style={{ display: 'flex', fontSize: layout.body, color: theme.text }}>
           {today.items.length > 0 ? `오늘 ${today.items.length}건` : '오늘 일정 없음'}
         </div>
-        {groups.slice(0, layout.maxChips).map(g => (
+        {groups.map(g => (
           <Chip key={g.kind} kind={g.kind} count={g.count} theme={theme} fontSize={layout.chip} />
         ))}
       </div>
@@ -484,7 +519,7 @@ function WeekWidget({ summary, theme, layout }: { summary: WidgetSummary; theme:
               flexDirection: 'column',
               alignItems: 'center',
               gap: 6,
-              padding: '10px 3px 12px',
+              padding: '10px 6px 12px',
               borderRadius: 9,
               background: cell.isToday ? theme.todayBg : theme.card,
               border: `1px solid ${cell.isToday ? theme.todayBorder : theme.border}`,
@@ -508,7 +543,7 @@ function WeekWidget({ summary, theme, layout }: { summary: WidgetSummary; theme:
             >
               {`${cell.day}`}
             </div>
-            <CellChips cell={cell} theme={theme} layout={layout} direction="column" />
+            <CellItems cell={cell} theme={theme} layout={layout} maxItems={layout.cellItems} />
           </div>
         ))}
       </div>
@@ -522,6 +557,8 @@ function WeekWidget({ summary, theme, layout }: { summary: WidgetSummary; theme:
 /** large — 이번 달 전체 달력 + 하단 다가오는 일정 */
 function MonthWidget({ summary, theme, layout }: { summary: WidgetSummary; theme: Theme; layout: Layout }) {
   const upcoming = summary.upcoming.slice(0, layout.upcoming)
+  // 6주 달은 행 높이가 가장 낮아 이름 줄을 2개로 줄인다(그대로 3줄이면 날짜 숫자와 겹친다)
+  const cellItems = summary.monthWeeks.length >= 6 ? 2 : layout.cellItems
   return (
     <Frame theme={theme} layout={layout}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
@@ -576,7 +613,7 @@ function MonthWidget({ summary, theme, layout }: { summary: WidgetSummary; theme
                 >
                   {`${cell.day}`}
                 </div>
-                {cell.inMonth && <CellChips cell={cell} theme={theme} layout={layout} direction="row" />}
+                {cell.inMonth && <CellItems cell={cell} theme={theme} layout={layout} maxItems={cellItems} />}
               </div>
             ))}
           </div>

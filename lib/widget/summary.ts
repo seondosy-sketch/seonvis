@@ -27,6 +27,9 @@ import { createSupabaseAdminClient } from '@/lib/supabase-admin'
 import type { PerformingProject } from '@/lib/supabase'
 import { permissionFor, type MenuPermission } from '@/lib/menuConfig'
 import { buildSchedule, fmtDate, getWeekBounds, parseDate, type WeekSchedule } from '@/lib/weekSchedule'
+// 프로젝트명 정제는 HWPX 보고서와 같은 규칙을 재사용한다 — 위젯 전용 규칙을 새로 만들면
+// 같은 프로젝트가 문서와 위젯에서 다른 이름으로 보인다.
+import { formatProjectNameForReport } from '@/lib/hwpx/projectName'
 import {
   addDays,
   eachDate,
@@ -55,7 +58,14 @@ const UPCOMING_PRIORITY: WidgetItemKind[] = ['submit', 'interview', 'result', 'e
 
 export interface WidgetItem {
   kind: WidgetItemKind
+  /** 원본 이름 (팀 일정 제목, 공휴일명, 프로젝트 용역명) */
   text: string
+  /**
+   * 좁은 날짜 칸에 넣을 짧은 이름. 프로젝트는 HWPX 보고서와 같은 정제 규칙
+   * (`formatProjectNameForReport` — 건설사업관리용역·신축공사·감독권한대행 등 제거)을 재사용해
+   * 앞부분에 식별 정보가 오게 만든다. 실제 글자 수 자르기(말줄임)는 크기별 폭을 아는 렌더 쪽에서 한다.
+   */
+  short: string
 }
 
 /** 달력 한 칸 */
@@ -77,6 +87,7 @@ export interface WidgetUpcoming {
   label: string
   kind: WidgetItemKind
   text: string
+  short: string
 }
 
 export interface WidgetSummary {
@@ -171,7 +182,7 @@ function pushSchedule(map: Map<string, WidgetItem[]>, schedule: WeekSchedule, st
       const d = parseDate(item.date, refYear)
       const key = toDateKey(d ?? start)
       const list = map.get(key) ?? []
-      list.push({ kind, text: item.name })
+      list.push({ kind, text: item.name, short: formatProjectNameForReport(item.name) })
       map.set(key, list)
     }
   }
@@ -212,7 +223,7 @@ export async function loadWidgetSummary(
   for (const h of holidays) {
     holidayByDate.set(h.date, h.localName)
     const list = byDate.get(h.date) ?? []
-    list.push({ kind: 'holiday', text: h.localName })
+    list.push({ kind: 'holiday', text: h.localName, short: h.localName })
     byDate.set(h.date, list)
   }
   for (const weekKey of weekKeys) {
@@ -222,7 +233,7 @@ export async function loadWidgetSummary(
   }
   for (const e of events) {
     const list = byDate.get(e.date) ?? []
-    list.push({ kind: 'event', text: e.title })
+    list.push({ kind: 'event', text: e.title, short: e.title })
     byDate.set(e.date, list)
   }
 
@@ -253,7 +264,7 @@ export async function loadWidgetSummary(
     items.sort((a, b) => UPCOMING_PRIORITY.indexOf(a.kind) - UPCOMING_PRIORITY.indexOf(b.kind))
     for (const item of items) {
       if (upcoming.length >= UPCOMING_LIMIT) break
-      upcoming.push({ date: key, label: dayLabel(d), kind: item.kind, text: item.text })
+      upcoming.push({ date: key, label: dayLabel(d), kind: item.kind, text: item.text, short: item.short })
     }
     if (upcoming.length >= UPCOMING_LIMIT) break
   }
