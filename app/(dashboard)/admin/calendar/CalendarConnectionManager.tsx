@@ -79,6 +79,8 @@ export default function CalendarConnectionManager() {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [result, setResult] = useState<SyncResult | null>(null)
+  // 지난 일정 소급 기간(일). 기본 21일 = 최근 3주 — 지난 공고일을 채워 넣을 때 쓴다.
+  const [backfillDays, setBackfillDays] = useState('21')
 
   const load = useCallback(async () => {
     try {
@@ -128,13 +130,17 @@ export default function CalendarConnectionManager() {
     } finally { setBusy(null) }
   }
 
-  async function sync(failedOnly: boolean) {
-    setBusy(failedOnly ? 'retry' : 'sync'); setError(null); setNotice(null); setResult(null)
+  async function sync(mode: 'all' | 'retry' | 'backfill') {
+    setBusy(mode); setError(null); setNotice(null); setResult(null)
     try {
+      const body =
+        mode === 'retry' ? { failedOnly: true }
+        : mode === 'backfill' ? { backfillDays: Number(backfillDays) || 0 }
+        : {}
       const res = await fetch('/api/calendar/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(failedOnly ? { failedOnly: true } : {}),
+        body: JSON.stringify(body),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? '동기화 실패')
@@ -280,15 +286,30 @@ export default function CalendarConnectionManager() {
           이미 만든 일정은 반복 실행해도 중복되지 않습니다.
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          <button onClick={() => sync(false)} disabled={!!busy || !connected} style={primaryBtn}>
-            {busy === 'sync' ? '동기화 중...' : '오늘 이후 일정 동기화'}
+          <button onClick={() => sync('all')} disabled={!!busy || !connected} style={primaryBtn}>
+            {busy === 'all' ? '동기화 중...' : '오늘 이후 일정 동기화'}
           </button>
-          <button onClick={() => sync(true)} disabled={!!busy || !connected || info.stats.failed === 0} style={btn}>
+          <button onClick={() => sync('retry')} disabled={!!busy || !connected || info.stats.failed === 0} style={btn}>
             {busy === 'retry' ? '재시도 중...' : `실패 일정 다시 동기화 (${info.stats.failed})`}
           </button>
           <div style={{ flex: 1 }} />
           <button onClick={() => disconnect(false)} disabled={!!busy} style={{ ...btn, color: '#b91c1c' }}>연결 해제</button>
           <button onClick={() => disconnect(true)} disabled={!!busy} style={{ ...btn, color: '#b91c1c' }}>해제 + 일정 삭제</button>
+        </div>
+
+        {/* 지난 일정 소급 — 지난 공고일처럼 이미 지나간 일정을 한 번 채워 넣을 때 쓴다. */}
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 10, paddingTop: 10, borderTop: '1px solid #f0f0ee' }}>
+          <span style={{ fontSize: 11.5, color: '#666' }}>지난</span>
+          <input
+            value={backfillDays}
+            onChange={e => setBackfillDays(e.target.value.replace(/[^0-9]/g, ''))}
+            style={{ width: 56, height: 30, padding: '0 8px', border: '1px solid #e8e8e6', borderRadius: 6, fontSize: 12, textAlign: 'right' }}
+          />
+          <span style={{ fontSize: 11.5, color: '#666' }}>일 전 일정까지 소급해서 추가</span>
+          <button onClick={() => sync('backfill')} disabled={!!busy || !connected || !backfillDays} style={btn}>
+            {busy === 'backfill' ? '추가 중...' : '소급 동기화'}
+          </button>
+          <span style={{ fontSize: 11, color: '#999' }}>한 번 만든 일정은 이후 일반 동기화에서 유지됩니다</span>
         </div>
 
         {result && (

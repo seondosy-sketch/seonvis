@@ -13,7 +13,7 @@
  * 예외를 밖으로 던지지 않는다(연결 자체가 없을 때만 예외).
  */
 import { createSupabaseAdminClient } from '@/lib/supabase-admin'
-import { kstTodayKey } from '@/lib/kstDate'
+import { kstToday, kstTodayKey, toDateKey } from '@/lib/kstDate'
 import { hubKey, type CalendarAction } from './actions'
 import {
   GoogleCalendarError,
@@ -38,6 +38,12 @@ export interface ReconcileOptions {
   projectId?: string
   /** 실패 상태인 건만 다시 시도 */
   failedOnly?: boolean
+  /**
+   * 며칠 전 일정까지 소급해서 만들지. 기본 0 = 오늘 이후만(확정 사양).
+   * 지난 공고일처럼 이미 지나간 일정을 한 번 채워 넣을 때만 쓴다 — 한 번 만들어진 일정은
+   * 이후 일반 동기화(0)에서도 유지된다.
+   */
+  backfillDays?: number
   maxCalls?: number
 }
 
@@ -125,12 +131,19 @@ export async function reconcileCalendar(options: ReconcileOptions = {}): Promise
   const existing = new Map<string, EventRow>()
   for (const r of (rows ?? []) as EventRow[]) existing.set(`${r.project_id}:${r.action}`, r)
 
+  const todayKey = kstTodayKey()
+  const backfillDays = Math.max(0, Math.floor(options.backfillDays ?? 0))
+  const backfillFromKey = backfillDays > 0
+    ? toDateKey(new Date(kstToday().getFullYear(), kstToday().getMonth(), kstToday().getDate() - backfillDays))
+    : todayKey
+
   const desired = buildDesiredEvents(
     (projects ?? []) as CalendarProjectRow[],
     (tooltips ?? []) as CalendarTooltipRow[],
-    kstTodayKey(),
+    todayKey,
     connection.color_map ?? {},
     new Set(existing.keys()),
+    backfillFromKey,
   )
   result.skipped = desired.skipped
   result.excludedProjects = desired.excludedProjects

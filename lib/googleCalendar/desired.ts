@@ -112,6 +112,9 @@ export function exclusiveEndDate(dateKey: string): string {
  * @param todayKey KST 기준 오늘 (YYYY-MM-DD). 호출부가 계산해 넘긴다 — 이 함수는 시계를 읽지 않는다.
  * @param syncedKeys 이미 동기화된 `projectId:action` 집합. 시간이 지나 과거가 된 일정을
  *   "오늘 이후" 조건 때문에 삭제해 버리지 않도록, 이미 만든 일정은 계속 유지 대상으로 둔다.
+ * @param backfillFromKey 이 날짜부터는 과거 일정도 포함한다(소급). 기본은 오늘 = 소급 없음.
+ *   지난 공고일처럼 이미 지나간 일정을 한 번 채워 넣을 때 쓴다. 한 번 만들어진 일정은
+ *   syncedKeys에 들어가므로 이후 일반 동기화에서 삭제되지 않는다.
  */
 export function buildDesiredEvents(
   projects: CalendarProjectRow[],
@@ -119,7 +122,10 @@ export function buildDesiredEvents(
   todayKey: string,
   colorMap: Partial<Record<CalendarAction, string>>,
   syncedKeys: ReadonlySet<string> = new Set(),
+  backfillFromKey: string = todayKey,
 ): DesiredResult {
+  // 소급 기준일은 오늘보다 미래일 수 없다(잘못 넘겨도 "오늘 이후"로 동작하게 한다).
+  const fromKey = backfillFromKey < todayKey ? backfillFromKey : todayKey
   const tooltipByNumber = new Map(tooltips.map(t => [t.project_number, t]))
   const events: DesiredEvent[] = []
   const skipped: SkippedDate[] = []
@@ -154,9 +160,9 @@ export function buildDesiredEvents(
         }
         continue
       }
-      // 오늘 이후만 새로 만든다. 이미 동기화한 일정은 과거가 되어도 유지한다.
+      // 기준일(기본 오늘) 이후만 새로 만든다. 이미 동기화한 일정은 과거가 되어도 유지한다.
       const alreadySynced = syncedKeys.has(`${p.id}:${action}`)
-      if (date < todayKey && !alreadySynced) continue
+      if (date < fromKey && !alreadySynced) continue
 
       const title = eventTitle(cleanName, action)
       const colorId = colorMap[action] ?? null

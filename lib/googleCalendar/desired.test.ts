@@ -133,6 +133,63 @@ describe('buildDesiredEvents', () => {
     expect(r.events[0].date).toBe('2026-07-20')
   })
 
+  /**
+   * 소급(backfill) — 지난 공고일을 한 번 채워 넣기 위한 예외 경로.
+   * 잘못 동작하면 캘린더가 옛 일정으로 오염되므로 경계를 고정한다.
+   */
+  describe('backfillFromKey', () => {
+    const past = (id: string, date: string) => project({ id, project_number: id, announce_date: date })
+
+    it('기준일을 주면 그 날짜부터의 과거 일정도 만든다', () => {
+      const r = buildDesiredEvents(
+        [past('a', '2026-07-10'), past('b', '2026-07-28')],
+        [], TODAY, COLORS, new Set(), '2026-07-09',
+      )
+      expect(r.events.map(e => e.date).sort()).toEqual(['2026-07-10', '2026-07-28'])
+      expect(r.events.every(e => e.action === 'announce')).toBe(true)
+    })
+
+    it('기준일보다 더 과거는 여전히 만들지 않는다', () => {
+      const r = buildDesiredEvents(
+        [past('old', '2026-07-08'), past('in', '2026-07-09')],
+        [], TODAY, COLORS, new Set(), '2026-07-09',
+      )
+      expect(r.events.map(e => e.projectId)).toEqual(['in'])
+    })
+
+    it('기준일을 주지 않으면 기존대로 오늘 이후만 (기본 동작 불변)', () => {
+      const r = buildDesiredEvents([past('a', '2026-07-10')], [], TODAY, COLORS)
+      expect(r.events).toHaveLength(0)
+    })
+
+    it('기준일이 오늘보다 미래여도 오늘 기준으로 동작한다 (잘못된 입력 방어)', () => {
+      const r = buildDesiredEvents(
+        [past('a', TODAY), past('b', '2026-08-05')],
+        [], TODAY, COLORS, new Set(), '2026-12-31',
+      )
+      expect(r.events.map(e => e.projectId).sort()).toEqual(['a', 'b'])
+    })
+
+    it('소급으로 만든 일정은 이후 일반 동기화에서 유지된다 (삭제되지 않는다)', () => {
+      // 1회차: 소급으로 생성
+      const first = buildDesiredEvents([past('a', '2026-07-10')], [], TODAY, COLORS, new Set(), '2026-07-09')
+      expect(first.events).toHaveLength(1)
+      // 2회차: 소급 없이 실행 — 이미 동기화된 키라서 계속 대상으로 남는다
+      const second = buildDesiredEvents([past('a', '2026-07-10')], [], TODAY, COLORS, new Set(['a:announce']))
+      expect(second.events).toHaveLength(1)
+      expect(second.events[0].date).toBe('2026-07-10')
+    })
+
+    it('소급이어도 취소·드랍 프로젝트는 제외한다', () => {
+      const r = buildDesiredEvents(
+        [project({ id: 'x', announce_date: '2026-07-10', status_override: '취소' })],
+        [], TODAY, COLORS, new Set(), '2026-07-09',
+      )
+      expect(r.events).toHaveLength(0)
+      expect(r.excludedProjects).toBe(1)
+    })
+  })
+
   it('날짜가 없으면 아무 일정도 만들지 않는다', () => {
     const r = buildDesiredEvents([project()], [tooltip()], TODAY, COLORS)
     expect(r.events).toHaveLength(0)

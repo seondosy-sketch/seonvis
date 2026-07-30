@@ -4,6 +4,7 @@
  * 세 가지 용도를 한 라우트로 처리한다.
  *   { projectId }        프로젝트 저장·삭제 직후 자동 호출 (승인 사용자 허용)
  *   {}                   오늘 이후 일정 전체 동기화 (관리자)
+ *   { backfillDays: 21 } 최근 N일 지난 일정까지 소급 포함 (관리자) — 지난 공고일 채우기 등
  *   { failedOnly: true } 실패 건만 다시 시도 (관리자)
  *
  * 호출부(프로젝트 화면)는 이 요청을 **결과를 기다리지 않고** 보낸다 — Google이 실패해도 Hub 저장
@@ -14,7 +15,11 @@ import { requireAdmin, requireAllowedUser } from '@/lib/googleCalendar/guard'
 import { NotConnectedError, reconcileCalendar } from '@/lib/googleCalendar/reconcile'
 
 export async function POST(request: Request) {
-  const body = (await request.json().catch(() => ({}))) as { projectId?: string; failedOnly?: boolean }
+  const body = (await request.json().catch(() => ({}))) as {
+    projectId?: string
+    failedOnly?: boolean
+    backfillDays?: number
+  }
   const scoped = !!body.projectId
 
   // 단건(저장 직후)은 승인 사용자까지, 전체·재시도는 관리자만.
@@ -25,6 +30,8 @@ export async function POST(request: Request) {
     const result = await reconcileCalendar({
       projectId: body.projectId,
       failedOnly: !!body.failedOnly,
+      // 소급은 관리자 전체 동기화에서만 허용한다(단건 저장 트리거로 과거를 끌어오지 않게).
+      backfillDays: scoped ? 0 : body.backfillDays,
     })
     return NextResponse.json({ ok: true, ...result })
   } catch (e) {
