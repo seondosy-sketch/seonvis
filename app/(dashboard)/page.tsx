@@ -5,6 +5,8 @@ import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import WeeklyCalendar, { Holiday, TeamEvent } from '../components/WeeklyCalendar'
 import { PerformingProject } from '@/lib/supabase'
 import { useIsMobile } from '@/lib/useIsMobile'
+// 주차·일정 계산은 홈화면 위젯(app/api/widget/summary)과 공유한다 — lib/weekSchedule.ts 참고.
+import { getCurrentWeek, getWeekBounds, fmtDate, buildSchedule } from '@/lib/weekSchedule'
 
 interface PendingAction { name: string; args: Record<string, unknown> }
 interface Message {
@@ -12,63 +14,6 @@ interface Message {
   relatedProjects?: Record<string, unknown>[]
   pendingAction?: PendingAction; preview?: string
   actionResult?: { success: boolean; message: string }
-}
-
-function getCurrentWeek(): string {
-  const now = new Date()
-  const jan4 = new Date(now.getFullYear(), 0, 4)
-  const startOfWeek1 = new Date(jan4)
-  startOfWeek1.setDate(jan4.getDate() - jan4.getDay() + 1)
-  const diff = now.getTime() - startOfWeek1.getTime()
-  const week = Math.ceil((diff / 86400000 + 1) / 7)
-  return `${now.getFullYear()}-W${String(week).padStart(2, '0')}`
-}
-
-function getWeekBounds(week: string): { start: Date; end: Date } {
-  const [year, w] = week.split('-W')
-  const jan4 = new Date(parseInt(year), 0, 4)
-  const startOfW1 = new Date(jan4)
-  startOfW1.setDate(jan4.getDate() - jan4.getDay() + 1)
-  const start = new Date(startOfW1)
-  start.setDate(start.getDate() + (parseInt(w) - 1) * 7)
-  const end = new Date(start); end.setDate(end.getDate() + 6)
-  return { start, end }
-}
-
-function parseDate(raw: string | null | undefined, refYear: number): Date | null {
-  if (!raw || raw === '추후' || raw === '-') return null
-  const m1 = raw.match(/^(\d{1,2})\/(\d{1,2})$/)
-  if (m1) return new Date(refYear, parseInt(m1[1]) - 1, parseInt(m1[2]))
-  const m2 = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/)
-  if (m2) return new Date(parseInt(m2[1]), parseInt(m2[2]) - 1, parseInt(m2[3]))
-  return null
-}
-
-function fmtDate(raw: string | null | undefined): string {
-  if (!raw || raw === '추후' || raw === '-') return '추후'
-  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/)
-  if (m) return `${parseInt(m[2])}/${parseInt(m[3])}`
-  return raw
-}
-
-interface ScheduleItem { name: string; date: string }
-interface WeekSchedule { submit: ScheduleItem[]; interview: ScheduleItem[]; result: ScheduleItem[] }
-
-function buildSchedule(performing: PerformingProject[], start: Date, end: Date): WeekSchedule {
-  const refYear = start.getFullYear()
-  const submit: ScheduleItem[] = []
-  const interview: ScheduleItem[] = []
-  const result: ScheduleItem[] = []
-  for (const p of performing) {
-    if (!p.name) continue
-    const sd = parseDate(p.submit_date, refYear)
-    const id = parseDate(p.interview_date, refYear)
-    const rd = parseDate(p.result_date, refYear)
-    if (sd && sd >= start && sd <= end) submit.push({ name: p.name, date: fmtDate(p.submit_date) })
-    if (id && id >= start && id <= end) interview.push({ name: p.name, date: fmtDate(p.interview_date) })
-    if (rd && rd >= start && rd <= end) result.push({ name: p.name, date: fmtDate(p.result_date) })
-  }
-  return { submit, interview, result }
 }
 
 export default function DashboardPage() {
@@ -112,7 +57,6 @@ export default function DashboardPage() {
     } else {
       // 저장된 주간 데이터가 없으면 projects 테이블에서 직접 불러오기
       if (projs) {
-        const { start: weekStart } = getWeekBounds(week)
         const rows: PerformingProject[] = projs
           .filter((p: any) => {
             if (p.status_override === '취소') return false

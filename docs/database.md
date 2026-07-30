@@ -35,6 +35,7 @@
 | `project_change_history` | 기술인 출근부 — 프로젝트 변경이력(재공고/변경공고/취소 등의 공식 원본) |
 | `attendance_audit_log` | 기술인 출근부 — 마감취소·과거기록수정 등 감사이력 |
 | `project_participant_links` | 기술인 출근부 — Project List 슬롯(director/staff_*) ↔ engineer_contacts 확정 연결(Phase 3) |
+| `widget_tokens` | 홈화면 위젯 — 사용자별 위젯 이미지 접근 토큰 |
 
 ---
 
@@ -389,3 +390,22 @@ result_score 또는 evaluation 비어있으면 → "진행중"
 - 백그라운드 자동 동기화(`lib/attendance/autoSync.ts`, 2026-07-22 추가): 후보 1명인 슬롯은 사용자가 동기화 버튼을 누르기 전에 페이지 로드 시점에 자동 반영. 개찰일(`projects.bid_date`, 기존 컬럼 재사용)이 지난 프로젝트, 상태가 '취소'인 프로젝트는 대상 제외.
 - 그리드 표시 필터(`lib/attendance/gridFilters.ts`)도 확장 — 면접일이 비어 있어도 개찰일이 조회 기간 시작보다 이전이면 더 이상 "겹침"으로 보지 않고, 상태가 '취소'인 프로젝트는 상태 필터에서 명시적으로 '취소'를 선택하지 않는 한 활성 참여자·기록 유무와 무관하게 기본적으로 숨긴다.
 - 마이그레이션: `supabase/migration_attendance_participant_links.sql`, `supabase/migration_attendance_participant_links_rpc.sql` — `BEGIN...ROLLBACK` 검증 후 **2026-07-22 실사용 DB(seonvis)에 적용 완료**(사용자 승인). 적용 후 신규 함수 3개 모두 `search_path`를 명시적으로 고정하는 후속 마이그레이션도 함께 적용해 Supabase 보안 어드바이저의 `function_search_path_mutable` 경고를 해소했다.
+---
+
+## 홈화면 위젯 테이블 (widget_tokens)
+
+상세는 [docs/widget/README.md](./widget/README.md) 참고. 휴대폰 홈화면 위젯 앱은 Supabase 쿠키 세션을
+들고 갈 수 없어서, 위젯 이미지(`/api/widget/summary`)는 **URL에 담긴 토큰**으로만 신원을 확인한다.
+
+- `widget_tokens(token PK, email, created_at, last_used_at, revoked_at)` — `token`은 `'wgt_' + 랜덤 32 hex`.
+  사용자당 활성 토큰 1개로 운영하며, 재발급 시 이전 토큰의 `revoked_at`을 채워 즉시 무효화한다(유출 대응).
+- **RLS를 켜고 정책을 만들지 않는다** = anon/authenticated 전부 거부. 발급·조회·검증은 전부 service role
+  (`lib/supabase-admin.ts`)로만 한다 — 브라우저에서 이 테이블을 읽을 수 있으면 다른 사람 토큰까지 노출된다.
+- 토큰이 유효한 것만으로 끝내지 않고, **요청마다 `allowed_users`를 다시 조회**해 지금도 접근 권한이
+  있는지 확인한다(`lib/widget/token.ts`). 승인 취소·퇴사 시 토큰이 남아 있어도 이미지가 막힌다.
+  `menu_permissions`의 `weekly`·`projects`가 모두 `none`이면 프로젝트 일정을 빼고 그린다.
+
+**마이그레이션**: `supabase/migration_widget_tokens.sql` (테이블 1개 + 인덱스 1개, 기존 테이블 변경 없음) —
+`BEGIN...ROLLBACK` 검증 후 **2026-07-30 실사용 DB(seonvis)에 적용 완료**(사용자 승인). 적용 후 Supabase 보안
+어드바이저에 `rls_enabled_no_policy`(INFO, `public.widget_tokens`)가 뜨는데 이는 **의도된 상태**다 — 정책 없이
+RLS만 켜서 클라이언트 접근을 전면 차단하고 service role로만 다루는 설계이기 때문이다.

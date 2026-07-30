@@ -244,6 +244,17 @@ export default function Sidebar({ isAdmin, userEmail, hiddenMenuItems = [], onCl
             {userEmail}
           </div>
         )}
+        {/* 홈화면 위젯은 사람별 권한 대상이 아닌 "내 계정 설정"이라 메뉴가 아니라 푸터에 둔다. */}
+        <Link href="/widget" onClick={onClose} style={{ textDecoration: 'none' }}>
+          <div style={{
+            fontSize: 12,
+            color: pathname === '/widget' ? '#111' : '#666',
+            fontWeight: pathname === '/widget' ? 600 : 400,
+            cursor: 'pointer',
+          }}>
+            📱 홈화면 위젯
+          </div>
+        </Link>
         <div style={{ fontSize: 11, color: '#ccc' }}>미래사업팀 · {new Date().getFullYear()}</div>
         <button
           onClick={handleLogout}
