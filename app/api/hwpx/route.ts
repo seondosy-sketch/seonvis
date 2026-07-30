@@ -118,17 +118,28 @@ function removeLinesegarray(node: any): void {
 
 // ── 동적 행(개찰/진행중/발주예상) 조작에 쓰는 저수준 헬퍼 ──────────────────────────────
 
-// 행 안에서 rowSpan===1(병합 안 된) 셀을 찾아 그 cellSz height를 그 행의 실제 높이로 쓴다.
+// 셀 목록 안에서 rowSpan===1(병합 안 된) 첫 셀의 cellSz height를 행 높이로 쓴다.
 // 병합 라벨 셀(rowSpan>1)의 cellSz height는 표마다 관례가 달라(개별 행 높이 vs 병합 범위 합)
 // 신뢰할 수 없다는 걸 실측으로 확인했다 — 반드시 rowSpan=1 셀 기준으로 재야 한다.
-function rowHeight(tr: any): number {
-  const tcs: any[] = getTcs(tr)
-  const cell = tcs.find((tc: any) => {
+function rowHeightOfCells(tcs: XmlElement[]): number {
+  const cell = tcs.find((tc) => {
     const span = tc.getElementsByTagNameNS(HP_NS, 'cellSpan')[0]
     return !span || Number(span.getAttribute('rowSpan') || 1) === 1
   })
   const sz = cell?.getElementsByTagNameNS(HP_NS, 'cellSz')[0]
   return Number(sz?.getAttribute('height') || 0)
+}
+
+function rowHeight(tr: any): number {
+  return rowHeightOfCells(getTcs(tr))
+}
+
+// 라벨 행의 높이는 라벨 셀(첫 열)을 제외한 데이터 칸에서만 재야 한다. 섹션이 1건이면 라벨 셀의
+// rowSpan이 1이 되어 rowHeight()가 라벨 셀 자신을 "병합 안 된 셀"로 집어버리는데, 그 셀의
+// cellSz height는 아직 템플릿의 병합 높이(5행분)라서 행 높이를 5배로 잘못 읽는다
+// (실제로 단일 건 섹션의 라벨 셀이 5행 높이로 렌더되던 결함의 원인).
+function labelRowDataHeight(tr: any): number {
+  return rowHeightOfCells(getTcs(tr).slice(1))
 }
 
 // 표 전체의 <hp:tr>을 순서대로 훑어 각 셀의 cellAddr rowAddr을 0부터 다시 매긴다.
@@ -147,6 +158,9 @@ function renumberRowAddr(tbl: any): void {
 // 일치했다 — 행을 추가/삭제한 뒤에는 반드시 이 값으로 다시 맞춰야 표 흐름 뒤의 발주예상·
 // 교육참가자·기타 영역이 밀리지 않는다(표가 treatAsChar="1"로 문단에 문자처럼 얹혀 있어,
 // 한글이 이 크기를 기준으로 뒤 내용을 배치하기 때문).
+//
+// 반드시 rebuildSection 이후에 호출한다 — 라벨 셀 높이가 갱신되기 전에 부르면, 섹션이 1건이라
+// 라벨 셀 rowSpan이 1인 행에서 템플릿의 병합 높이를 그 행 높이로 오인한다.
 function sumRowSpan1Heights(tbl: any): number {
   const rows: any[] = Array.from(tbl.getElementsByTagNameNS(HP_NS, 'tr') as any[])
   return rows.reduce((sum: number, tr: any) => sum + rowHeight(tr), 0)
@@ -204,12 +218,15 @@ function rebuildSection(
   const span = labelCell.getElementsByTagNameNS(HP_NS, 'cellSpan')[0]
   if (span) span.setAttribute('rowSpan', String(n))
 
-  // 라벨 셀 자체의 cellSz height도 병합 범위 전체 합으로 갱신한다(기준 파일의 관례를 따름 —
-  // 개발 템플릿은 병합 셀에 개별 행 높이를 그대로 쓰는 다른 관례였지만, 표 전체 높이(hp:sz)는
-  // rowSpan=1 셀 기준으로 별도 계산하므로 이 값 자체가 문서 배치에 영향을 주지는 않는다).
+  // 라벨 셀 자체의 cellSz height는 병합 범위(=이 섹션 전체 행) 높이 합으로 갱신한다(기준 파일의
+  // 관례). rowSpan이 1인 경우도 예외가 아니다 — 템플릿의 병합 높이(5행분)를 그대로 남기면 한글이
+  // 그 값을 최소 높이로 삼아 라벨 행 하나를 5행 높이로 렌더한다(실제 결함). 그래서 라벨 행의
+  // 높이는 rowHeight()가 아니라 labelRowDataHeight()로 재야 한다 — 위에서 rowSpan을 n으로 이미
+  // 바꿨으므로 rowHeight()는 n=1일 때 갱신 전 라벨 셀 높이를 되읽는다.
+  // 데이터 행 높이는 템플릿 전 행이 균일하므로(계약으로 검증) 이 합은 rowSpan × 데이터행높이다.
   const labelSz = labelCell.getElementsByTagNameNS(HP_NS, 'cellSz')[0]
   if (labelSz) {
-    const total = rowHeight(labelRow) + newAdditionalRows.reduce((sum, r) => sum + rowHeight(r), 0)
+    const total = labelRowDataHeight(labelRow) + newAdditionalRows.reduce((sum, r) => sum + rowHeight(r), 0)
     labelSz.setAttribute('height', String(total))
   }
 

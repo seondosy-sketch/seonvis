@@ -106,24 +106,24 @@ function assertWeeklyDynamicXmlContract(doc: any, expectedGaeyal: number, expect
   expect(jinhaengIdx - gaeyalIdx).toBe(gaeyalSpan)
   expect(rows.length - jinhaengIdx).toBe(jinhaengSpan)
 
-  // 데이터행 높이는 전 행이 같아야 한다. 섹션 라벨 셀은 제외하고 판단한다 — 라벨 셀은 병합
-  // 셀이거나(rowSpan>1) 섹션이 1건일 때 rowSpan=1이 되는데, 후자에서는 높이가 템플릿의 병합
-  // 높이(5행분)로 남는 기존 결함이 있다(이번 변경과 무관, 별도 보고).
-  const dataCellHeight = (tr: any) => {
-    const tcs = getTcs(tr)
-    const sz = tcs[tcs.length - 1].getElementsByTagNameNS(HP_NS, 'cellSz')[0]
-    return Number(sz.getAttribute('height'))
+  // 데이터행 높이는 전 행이 같아야 한다. 라벨 행은 라벨 칸(첫 열)을 뺀 데이터 칸 8개로 판단한다
+  // — 라벨 칸은 병합 셀이라 그 행 하나의 높이가 아니라 섹션 전체 높이를 담기 때문이다.
+  const dataCellHeights = (tr: any, idx: number) => {
+    const tcs = idx === gaeyalIdx || idx === jinhaengIdx ? getTcs(tr).slice(1) : getTcs(tr)
+    return tcs.map((tc: any) => Number(tc.getElementsByTagNameNS(HP_NS, 'cellSz')[0].getAttribute('height')))
   }
-  const perfDataRowHeights = [...new Set(rows.slice(1).map(dataCellHeight))]
+  const perfDataRowHeights = [
+    ...new Set(rows.flatMap((tr, idx) => (idx === 0 ? [] : dataCellHeights(tr, idx)))),
+  ]
   expect(perfDataRowHeights.length).toBe(1)
 
-  // 병합 라벨 셀(rowSpan>1) 높이 = rowSpan × 데이터행 높이
+  // 라벨 셀 높이 = rowSpan × 데이터행 높이. rowSpan=1(섹션 1건)도 예외가 아니다 — 예전에는 이
+  // 경우 템플릿의 병합 높이(5행분)가 그대로 남아 라벨 행이 5행 높이로 렌더되는 결함이 있었다.
   for (const idx of [gaeyalIdx, jinhaengIdx]) {
     const tc = getTcs(rows[idx])[0]
     const span = Number(tc.getElementsByTagNameNS(HP_NS, 'cellSpan')[0]?.getAttribute('rowSpan') ?? 1)
-    if (span <= 1) continue
     const height = Number(tc.getElementsByTagNameNS(HP_NS, 'cellSz')[0].getAttribute('height'))
-    expect(height).toBe(span * perfDataRowHeights[0])
+    expect(height, `라벨 셀 높이(rowSpan=${span})`).toBe(span * perfDataRowHeights[0])
   }
 
   const perfSum = rows.reduce((s, tr) => s + rowHeight(tr), 0)
@@ -429,6 +429,53 @@ describe('POST /api/hwpx — 주간 동적 행 재구성 (개찰/진행중/발�
     }
     expect(extractPerfRowNumbers(doc)).toEqual([])
   })
+
+  // ── 라벨 셀 병합 높이 회귀: 개찰 0/1/2 × 진행중 0/1/2 ───────────────────────────
+  //
+  // 섹션이 1건이면 라벨 셀 rowSpan이 1이 되는데, 예전에는 cellSz height가 템플릿의 병합
+  // 높이(5행분 = 14,500)로 남아 라벨 행이 5행 높이로 렌더됐다(한글 렌더로 확인한 결함).
+  // hp:sz도 그 값을 합산해 XML 내부 정합성만으로는 잡히지 않았고, pageBudget은 실측 행
+  // 높이(2,900)로 계산하므로 예산이 행당 11,600만큼 과소 계상됐다.
+  // 0/1/2 전 조합에서 라벨 셀 높이가 rowSpan × 데이터행 높이인지 확인한다.
+  for (const g of [0, 1, 2]) {
+    for (const j of [0, 1, 2]) {
+      it(`개찰 ${g} / 진행중 ${j}: 라벨 셀 높이 = rowSpan × 데이터행 높이 (병합 높이 잔존 없음)`, async () => {
+        const performing = [
+          ...Array.from({ length: g }, (_, i) => perfItem('개찰', `개찰${i + 1}`)),
+          ...Array.from({ length: j }, (_, i) => perfItem('진행중', `진행${i + 1}`)),
+        ]
+        const res: any = await POST(mockRequest({ type: 'weekly', week: '2026-W22', performing, expected: [], meta: {} }))
+        expect(res.status).toBe(200)
+        const { doc } = await toZipDoc(res)
+
+        assertWeeklyDynamicXmlContract(doc, g, j, 0)
+
+        const { perfTbl, rows, gaeyalIdx, jinhaengIdx } = getPerfSections(doc)
+        // 데이터행 높이는 라벨 칸을 뺀 데이터 칸에서 잰다 — 어느 섹션에도 속하지 않는 기준값
+        const dataRowHeight = Number(
+          getTcs(rows[gaeyalIdx])[1].getElementsByTagNameNS(HP_NS, 'cellSz')[0].getAttribute('height')
+        )
+        expect(dataRowHeight).toBeGreaterThan(0)
+
+        for (const [label, idx, count] of [['개찰', gaeyalIdx, g], ['진행중', jinhaengIdx, j]] as const) {
+          const labelCell = getTcs(rows[idx])[0]
+          const span = Number(labelCell.getElementsByTagNameNS(HP_NS, 'cellSpan')[0].getAttribute('rowSpan'))
+          const height = Number(labelCell.getElementsByTagNameNS(HP_NS, 'cellSz')[0].getAttribute('height'))
+          expect(span, `${label} rowSpan`).toBe(Math.max(count, 1))
+          expect(height, `${label} 라벨 셀 높이`).toBe(span * dataRowHeight)
+        }
+
+        // 표 전체 높이도 실측 행 높이(헤더 + 데이터 행) 합과 정확히 일치해야 한다 —
+        // 병합 높이가 남으면 여기서 5행분이 부풀어 예산과 어긋난다.
+        const headerHeight = Number(
+          getTcs(rows[0])[0].getElementsByTagNameNS(HP_NS, 'cellSz')[0].getAttribute('height')
+        )
+        const dataRowCount = Math.max(g, 1) + Math.max(j, 1)
+        expect(rows.length).toBe(1 + dataRowCount)
+        expect(tableSzHeight(perfTbl)).toBe(headerHeight + dataRowCount * dataRowHeight)
+      })
+    }
+  }
 
   it('새로 복제된 행(원래 템플릿 용량을 넘는 진행중 6번째 항목)에도 프로젝트명 정제가 적용된다', async () => {
     const performing = Array.from({ length: 6 }, (_, i) =>
