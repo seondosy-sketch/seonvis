@@ -7,9 +7,8 @@ import AdmZip from 'adm-zip'
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom'
 import { POST } from './route'
 import {
-  MONTHLY_PAGE_BUDGET_EXCEEDED_MESSAGE, MONTHLY_VERIFIED_MAX_PROJECT_COUNT,
+  MONTHLY_ABSOLUTE_MAX_PROJECT_COUNT,
   MONTHLY_MAX_PROJECT_COUNT_EXCEEDED_CODE, formatMonthlyMaxProjectCountExceededMessage,
-  estimateMonthlyPageBudget,
 } from '@/lib/hwpx/monthlyPageBudget'
 
 // route.ts는 POST()만 export한다(불필요한 내부 함수 export를 피하기 위해). 이 테스트는 실제
@@ -272,13 +271,24 @@ describe('POST /api/hwpx — 기본 생성', () => {
     expect(all).toContain('월간11')
   })
 
-  it('월간: 프로젝트 12건(원래 템플릿 고정 용량을 넘음)도 200과 zip 바이너리를 반환한다(더 이상 고정 11건 제한이 없음)', async () => {
-    const performing = Array.from({ length: 12 }, (_, i) => perfItem('개찰', `월간${i + 1}`))
+  // A4 가로 실제 사용 가능 높이(55,276)로 예산을 바로잡은 뒤의 경계: 짧은 이름·짧은 발주처
+  // (줄바꿈 없음, 선언 행 높이 1,818)에서 11건까지 통과하고 12건부터 예산이 차단한다.
+  // 12건 이상이 실제로 2페이지임은 한글 렌더로 확인했다. 행 복제 자체는 건수와 무관하게 옳으며
+  // route.monthlyRows.test.ts가 예산을 우회해 별도로 검증한다.
+  it('월간: 프로젝트 11건은 200과 zip 바이너리를 반환한다', async () => {
+    const performing = Array.from({ length: 11 }, (_, i) => perfItem('개찰', `월간${i + 1}`))
     const res: any = await POST(mockRequest(monthlyReq(performing)))
     expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('application/zip')
     const { doc } = await toZipDoc(res)
-    const all = getAllText(doc).join('|')
-    expect(all).toContain('월간12')
+    expect(getAllText(doc).join('|')).toContain('월간11')
+  })
+
+  it('월간: 프로젝트 12건은 예산 초과로 400이다(실제로 2페이지)', async () => {
+    const performing = Array.from({ length: 12 }, (_, i) => perfItem('개찰', `월간${i + 1}`))
+    const res: any = await POST(mockRequest(monthlyReq(performing)))
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toContain('한 페이지 허용 높이를 초과')
   })
 
   it('월간: reportYear/reportMonth가 없으면 400과 날짜 계약 오류를 반환한다', async () => {
@@ -492,7 +502,9 @@ describe('POST /api/hwpx — 주간 동적 행 재구성 (개찰/진행중/발�
 })
 
 describe('POST /api/hwpx — 월간 동적 행 재구성 (프로젝트 표)', () => {
-  const counts = [0, 1, 5, 11, 13, 20]
+  // 예산이 11건에서 경계를 이루므로 공개 경로 계약 검증은 그 이내에서 한다.
+  // 12건 이상의 행 복제는 route.monthlyRows.test.ts가 예산을 우회해 검증한다.
+  const counts = [0, 1, 5, 11]
 
   for (const count of counts) {
     it(`프로젝트 ${count}건 → 200, XML 계약 통과(rowCnt/rowAddr/colAddr/hp:sz), 데이터 누락 없음`, async () => {
@@ -518,9 +530,10 @@ describe('POST /api/hwpx — 월간 동적 행 재구성 (프로젝트 표)', ()
     for (const tc of getTcs(rows[1])) expect(getCellText(tc).trim()).toBe('')
   })
 
-  it('새로 복제된 행(원래 템플릿 용량을 넘는 13번째 항목)에도 프로젝트명 정제가 적용된다', async () => {
-    const performing = Array.from({ length: 13 }, (_, i) =>
-      perfItem('개찰', i === 12 ? '○○센터 신축공사 건설사업관리용역' : `월${i + 1}`)
+  // 복제된 행까지 포함한 검증은 route.monthlyRows.test.ts(예산 우회)가 담당한다.
+  it('마지막 행에도 프로젝트명 정제가 적용된다', async () => {
+    const performing = Array.from({ length: 11 }, (_, i) =>
+      perfItem('개찰', i === 10 ? '○○센터 신축공사 건설사업관리용역' : `월${i + 1}`)
     )
     const res: any = await POST(mockRequest(monthlyReq(performing)))
     expect(res.status).toBe(200)
@@ -530,6 +543,8 @@ describe('POST /api/hwpx — 월간 동적 행 재구성 (프로젝트 표)', ()
     expect(all).not.toContain('건설사업관리용역')
   })
 
+  // A4 가로 실제 사용 가능 높이(55,276)로 바로잡은 뒤에는 예산이 1차 판단자다.
+  // 짧은 이름·짧은 발주처(줄바꿈 없음)일 때 선언 행 높이 1,818 기준으로 경계가 정해진다.
   it('프로젝트 수가 계속 늘어나면 어느 지점부터는 반드시 400을 반환한다(경계 존재 확인)', async () => {
     let lastOk = -1
     let firstFail = -1
@@ -543,69 +558,63 @@ describe('POST /api/hwpx — 월간 동적 행 재구성 (프로젝트 표)', ()
         break
       }
     }
-    // 원래 템플릿 용량(11건)은 반드시 통과해야 한다 — 그 이하에서 막히면 회귀.
-    expect(lastOk).toBeGreaterThanOrEqual(11)
-    expect(lastOk).toBe(MONTHLY_VERIFIED_MAX_PROJECT_COUNT)
-    expect(firstFail).toBe(MONTHLY_VERIFIED_MAX_PROJECT_COUNT + 1)
+    // 운영 규모(10건)는 반드시 통과해야 한다 — 그 이하에서 막히면 회귀.
+    expect(lastOk).toBeGreaterThanOrEqual(10)
+    expect(firstFail).toBe(lastOk + 1)
+    // 절대 상한(100)에 닿기 전에 예산이 먼저 막는다.
+    expect(firstFail).toBeLessThan(MONTHLY_ABSOLUTE_MAX_PROJECT_COUNT)
   })
 })
 
-// ── P1-1: 최대 건수 정책이 실제 요청 경로에 고정되어 있는지 ─────────────────────────────
-describe('POST /api/hwpx — 월간 최대 건수 정책(수동 검증 범위)', () => {
+// ── P1-1: 절대 상한 정책이 실제 요청 경로에 고정되어 있는지 ─────────────────────────────
+//
+// 정책 재정의(A안): 실질 판단은 예상 높이 기반 예산이 하고, 프로젝트 수 상한은 비정상 입력·
+// 성능 보호용 절대 상한(100)이다. 이전 값 23은 잘못된 usableHeight를 전제로 한 "수동 검증된
+// 최대 건수"였고 실제로 23건은 2페이지였다(한글 렌더 확인) — 그래서 근거를 버렸다.
+describe('POST /api/hwpx — 월간 프로젝트 수 절대 상한과 예산의 역할 분리', () => {
   const make = (n: number) => Array.from({ length: n }, (_, i) => perfItem('개찰', `월${i + 1}`))
 
-  it(`${MONTHLY_VERIFIED_MAX_PROJECT_COUNT}건은 최대 건수 정책과 페이지 예산을 모두 통과해 생성된다`, async () => {
-    const res: any = await POST(mockRequest(monthlyReq(make(MONTHLY_VERIFIED_MAX_PROJECT_COUNT))))
-    expect(res.status).toBe(200)
-    expect(res.headers.get('content-type')).toContain('application/zip')
-    const { doc } = await toZipDoc(res)
-    assertMonthlyDynamicXmlContract(doc, MONTHLY_VERIFIED_MAX_PROJECT_COUNT)
-    const all = getAllText(doc).join('|')
-    for (let i = 1; i <= MONTHLY_VERIFIED_MAX_PROJECT_COUNT; i++) expect(all).toContain(`월${i}`)
+  it('절대 상한은 100건이고, 그보다 훨씬 적은 수에서 예산이 먼저 차단한다', async () => {
+    expect(MONTHLY_ABSOLUTE_MAX_PROJECT_COUNT).toBe(100)
+    const res: any = await POST(mockRequest(monthlyReq(make(23))))
+    expect(res.status).toBe(400)
+    // 23건은 실제로 2페이지 — 예산 사유로 막혀야 하고 절대 상한 사유가 아니어야 한다.
+    const json = await res.json()
+    expect(json.code).not.toBe(MONTHLY_MAX_PROJECT_COUNT_EXCEEDED_CODE)
   })
 
-  it(`${MONTHLY_VERIFIED_MAX_PROJECT_COUNT + 1}건은 최대 건수 정책으로 400이며 ZIP이 아니다`, async () => {
-    const res: any = await POST(mockRequest(monthlyReq(make(MONTHLY_VERIFIED_MAX_PROJECT_COUNT + 1))))
+  it(`${'절대 상한 초과(101건)'}는 절대 상한 정책으로 400이며 ZIP이 아니다`, async () => {
+    const res: any = await POST(mockRequest(monthlyReq(make(MONTHLY_ABSOLUTE_MAX_PROJECT_COUNT + 1))))
     expect(res.status).toBe(400)
     const contentType = res.headers.get('content-type') || ''
     expect(contentType).toContain('application/json')
     expect(contentType).not.toContain('application/zip')
     const buf = Buffer.from(await res.arrayBuffer())
-    expect(buf.subarray(0, 2).toString('latin1')).not.toBe('PK') // ZIP 시그니처 없음
+    expect(buf.subarray(0, 2).toString('latin1')).not.toBe('PK')
+    expect((await POST(mockRequest(monthlyReq(make(MONTHLY_ABSOLUTE_MAX_PROJECT_COUNT + 1)))) as any).status).toBe(400)
   })
 
-  it('최대 건수 초과 응답은 예산 초과 응답과 코드·메시지로 구분된다', async () => {
-    const res: any = await POST(mockRequest(monthlyReq(make(MONTHLY_VERIFIED_MAX_PROJECT_COUNT + 1))))
+  it('절대 상한 초과 응답은 예산 초과 응답과 코드·메시지로 구분된다', async () => {
+    const over: any = await POST(mockRequest(monthlyReq(make(MONTHLY_ABSOLUTE_MAX_PROJECT_COUNT + 1))))
+    const overJson = await over.json()
+    expect(overJson.code).toBe(MONTHLY_MAX_PROJECT_COUNT_EXCEEDED_CODE)
+    expect(overJson.error).toBe(formatMonthlyMaxProjectCountExceededMessage(MONTHLY_ABSOLUTE_MAX_PROJECT_COUNT + 1))
+    expect(overJson.error).toContain(`최대 프로젝트 수 ${MONTHLY_ABSOLUTE_MAX_PROJECT_COUNT}건을 초과`)
+
+    // 예산 초과는 다른 코드·문구여야 한다(두 제한이 합쳐지지 않았다는 증거).
+    const budgetOver: any = await POST(mockRequest(monthlyReq(make(23))))
+    const budgetJson = await budgetOver.json()
+    expect(budgetJson.error).not.toBe(overJson.error)
+    expect(budgetJson.error).toContain('한 페이지 허용 높이를 초과')
+  })
+
+  it('예산 초과 메시지에 건수·예상 높이·허용 높이가 숫자로 들어간다', async () => {
+    const res: any = await POST(mockRequest(monthlyReq(make(13))))
+    expect(res.status).toBe(400)
     const json = await res.json()
-    expect(json.code).toBe(MONTHLY_MAX_PROJECT_COUNT_EXCEEDED_CODE)
-    expect(json.error).toBe(formatMonthlyMaxProjectCountExceededMessage(MONTHLY_VERIFIED_MAX_PROJECT_COUNT + 1))
-    expect(json.error).toContain(`최대 프로젝트 수 ${MONTHLY_VERIFIED_MAX_PROJECT_COUNT}건을 초과`)
-    // 예산 초과 메시지와 반드시 다른 문구여야 한다(두 제한이 합쳐지지 않았다는 증거).
-    expect(json.error).not.toBe(MONTHLY_PAGE_BUDGET_EXCEEDED_MESSAGE)
-  })
-
-  // 두 제한이 독립임을 보이는 핵심 테스트: renderSafetyReserve를 0으로 낮추면 24건은 산술
-  // 예산상 "들어간다". 그래도 요청 경로는 최대 건수 정책으로 막는다.
-  it('페이지 예산상으로는 24건이 들어가는 설정이어도, 최대 건수 정책이 독립적으로 차단한다', async () => {
-    const budgetAt24WithoutReserve = estimateMonthlyPageBudget({
-      pageHeight: 84188, topMargin: 2835, bottomMargin: 1417,
-      fixedContentHeight: 4604, projectHeaderHeight: 2502, projectRowHeight: 1818,
-      projectRowCount: MONTHLY_VERIFIED_MAX_PROJECT_COUNT + 1,
-      calendarHeight: 25014, objectMargins: 848, calendarVertOffset: 474,
-      renderSafetyReserve: 0,
-    })
-    expect(budgetAt24WithoutReserve.fits).toBe(true) // 예산 단독으로는 24건이 통과하는 조건
-
-    const res: any = await POST(mockRequest(monthlyReq(make(MONTHLY_VERIFIED_MAX_PROJECT_COUNT + 1))))
-    expect(res.status).toBe(400)
-    expect((await res.json()).code).toBe(MONTHLY_MAX_PROJECT_COUNT_EXCEEDED_CODE)
-  })
-
-  it('최대 건수를 크게 넘는 60건도 최대 건수 정책으로 차단되고 파일이 생성되지 않는다', async () => {
-    const res: any = await POST(mockRequest(monthlyReq(make(60))))
-    expect(res.status).toBe(400)
-    expect(res.headers.get('content-type')).toContain('application/json')
-    expect((await res.json()).code).toBe(MONTHLY_MAX_PROJECT_COUNT_EXCEEDED_CODE)
+    expect(json.error).toContain('프로젝트 13건')
+    expect(json.error).toContain('허용 높이 55,276')
+    expect(json.error).toMatch(/예상 높이 [\d,]+/)
   })
 })
 
@@ -1212,9 +1221,11 @@ describe('POST /api/hwpx — 월간 12개 셀 전체 값 검증', () => {
     expect(cellText(cells[IDX.interview])).toBe('5.20')
     expect(cellText(cells[IDX.bid])).toBe('5.22')
     expect(cellText(cells[IDX.note])).toBe('비고내용')
-    // 의도적으로 빈 열 — 템플릿 예시 텍스트가 잔존하지 않아야 한다.
+    // Project List 연계 필드를 붙이지 않은 요청이므로 "-"로 채워진다(빈칸이 아니다 — 기준 파일
+    // CM본부월업무계획(7.24).hwpx가 값 없는 칸에 "-"를 쓴다). 과업설명·도서열람 / 현장조사는
+    // 대응 필드가 없어 항상 "-"다.
     for (const col of [IDX.client, IDX.period, IDX.pages, IDX.taskDesc, IDX.siteCheck]) {
-      expect(cellText(cells[col])).toBe('')
+      expect(cellText(cells[col])).toBe('-')
     }
   })
 
@@ -1231,7 +1242,7 @@ describe('POST /api/hwpx — 월간 12개 셀 전체 값 검증', () => {
     expect(cellText(cells[IDX.note])).toBe('첫째 줄\n둘째 줄\n셋째 줄')
   })
 
-  it('값이 없는 필드는 빈 문자열로 기록되고 템플릿 예시 텍스트가 남지 않는다', async () => {
+  it('값이 없는 필드는 "-"로 기록되고 템플릿 예시 텍스트가 남지 않는다', async () => {
     const performing = [{ status: '개찰', name: 'A용역' }]
     const res: any = await POST(mockRequest(monthlyReq(performing)))
     expect(res.status).toBe(200)
@@ -1240,7 +1251,7 @@ describe('POST /api/hwpx — 월간 12개 셀 전체 값 검증', () => {
     expect(cellText(cells[IDX.name])).toBe('A용역')
     for (const col of [IDX.client, IDX.chief, IDX.fee, IDX.period, IDX.pages,
       IDX.taskDesc, IDX.siteCheck, IDX.submit, IDX.interview, IDX.bid, IDX.note]) {
-      expect(cellText(cells[col])).toBe('')
+      expect(cellText(cells[col])).toBe('-')
     }
   })
 

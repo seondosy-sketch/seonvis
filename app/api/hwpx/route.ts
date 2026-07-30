@@ -15,13 +15,47 @@ import {
   MONTHLY_PROJECT_HEADER_FINGERPRINT, MONTHLY_CALENDAR_HEADER_FINGERPRINT,
 } from '@/lib/hwpx/monthlyHeaderFingerprint'
 import {
-  estimateMonthlyPageBudget, MONTHLY_PAGE_BUDGET_EXCEEDED_MESSAGE, MONTHLY_RENDER_SAFETY_RESERVE,
-  MONTHLY_VERIFIED_MAX_PROJECT_COUNT, MONTHLY_MAX_PROJECT_COUNT_EXCEEDED_CODE,
-  formatMonthlyMaxProjectCountExceededMessage,
+  estimateMonthlyPageBudget, MONTHLY_RENDER_SAFETY_RESERVE,
+  MONTHLY_ABSOLUTE_MAX_PROJECT_COUNT, MONTHLY_MAX_PROJECT_COUNT_EXCEEDED_CODE,
+  formatMonthlyMaxProjectCountExceededMessage, formatMonthlyPageBudgetExceededMessage,
   type MonthlyPageBudgetInput,
 } from '@/lib/hwpx/monthlyPageBudget'
+import {
+  NO_FIELD_CELL, orEmptyCell,
+  formatMonthlyFee, formatMonthlyDurationMonths, formatMonthlyPages,
+  formatMonthlyDate, formatMonthlyInterview, formatMonthlyBid,
+  formatMonthlyNote, formatMonthlyProjectTitle, stripSpaceBeforeParen,
+} from '@/lib/hwpx/monthlyFormat'
+import { formatMonthlyClient } from '@/lib/hwpx/monthlyClient'
+import {
+  estimateMonthlyRowsHeight, estimateMonthlyRowHeight, describeMonthlyRowLines,
+  type MonthlyRowTexts,
+} from '@/lib/hwpx/monthlyRowHeight'
+import {
+  buildCalendarDays, collectCalendarEntries, groupCalendarEntries,
+  estimateCalendarHeight, estimateCalendarWeekHeights,
+  CALENDAR_WEEK_COUNT, DAYS_PER_WEEK,
+  type CalendarDay, type CalendarEntry, type CalendarKind, type CalendarSchedule,
+} from '@/lib/hwpx/monthlyCalendar'
+import {
+  resolveMonthlyPageGeometry, type MonthlyPageGeometry,
+} from '@/lib/hwpx/monthlyPageGeometry'
 
 const HP_NS = 'http://www.hancom.co.kr/hwpml/2011/paragraph'
+const HH_NS = 'http://www.hancom.co.kr/hwpml/2011/head'
+
+// 달력 일정 줄의 글자 스타일 — CM본부월업무계획(7.24).hwpx와 montly.hwpx header.xml 실측 일치.
+//   제출 charPr 15: #FF0000 / 900 / italic Y / bold Y / 자간 -1
+//   면접 charPr 13: #09D909 / 900 / italic Y / bold Y / 자간  0
+//   개찰 charPr 18: #0000FF / 900 / italic Y / bold Y / 자간  0
+// ID를 그대로 쓰되 아래 계약 검증으로 속성이 어긋나면 던진다(템플릿이 바뀌면 조용히 색이 틀리는
+// 것을 막는다). 새 charPr을 만들지 않으므로 header.xml은 수정하지 않는다.
+const MONTHLY_CALENDAR_CHAR_PR: Readonly<Record<CalendarKind, { id: string; textColor: string; spacing: string }>> = {
+  제출: { id: '15', textColor: '#FF0000', spacing: '-1' },
+  면접: { id: '13', textColor: '#09D909', spacing: '0' },
+  개찰: { id: '18', textColor: '#0000FF', spacing: '0' },
+}
+const MONTHLY_CALENDAR_CHAR_HEIGHT = '900'
 
 // 템플릿(weekly.hwpx/montly.hwpx)의 실제 구조가 코드가 가정한 표 개수·열 수·행 수·기준 문구와
 // 다를 때 던진다. 이 예외는 데이터를 절반만 채운 문서를 만들지 않기 위한 것 — 조용히 진행하지 않고
@@ -925,6 +959,11 @@ function elementsOf(scope: XmlDocument | XmlElement, localName: string): XmlElem
   return Array.from(scope.getElementsByTagNameNS(HP_NS, localName))
 }
 
+/** header.xml(hh 네임스페이스) 조회 — 본문(hp)과 네임스페이스가 다르므로 별도 헬퍼를 쓴다. */
+function headElementsOf(scope: XmlDocument | XmlElement, localName: string): XmlElement[] {
+  return Array.from(scope.getElementsByTagNameNS(HH_NS, localName))
+}
+
 // ── Monthly 전용 셀 텍스트 읽기/쓰기 ─────────────────────────────────────────────
 //
 // 기존 공용 setText()는 대상 셀에 hp:t도 hp:run도 없으면 "아무 일도 하지 않고" 조용히 끝난다.
@@ -1222,6 +1261,8 @@ const MONTHLY_CALENDAR_EXPECTED_DATE_ROW_HEIGHT = 7778
 // page budget 계산에 쓰기 때문이다.
 interface MonthlyCalendarTableContract {
   calendarHeight: number
+  calendarHeaderHeight: number
+  calendarWeekHeight: number
   calendarVertOffset: number
   objectMarginsCalendar: number
 }
@@ -1290,7 +1331,11 @@ function assertMonthlyCalendarTableContract(calTbl: XmlElement): MonthlyCalendar
   const outMargin = findDirectChild(calTbl, 'outMargin')
   const objectMarginsCalendar = Number(outMargin?.getAttribute('top') || 0) + Number(outMargin?.getAttribute('bottom') || 0)
 
-  return { calendarHeight: computedHeight, calendarVertOffset: vertOffset, objectMarginsCalendar }
+  return {
+    calendarHeight: computedHeight, calendarHeaderHeight: headerHeight,
+    calendarWeekHeight: uniqueDateHeights[0],
+    calendarVertOffset: vertOffset, objectMarginsCalendar,
+  }
 }
 
 // "N월 N일 현재" 기준일 캡션 형식. generateMonthly는 이 패턴이 "사용자 데이터를 채우기 전"
@@ -1303,13 +1348,18 @@ const MONTHLY_DATE_REGEX = /\d+월\s*\d+일\s*현재/
 // 즉시 던진다. 데이터 행 수는 더 이상 고정 11개를 요구하지 않는다(동적 생성 대상).
 /** page budget 계산에 넘길 실측치 — 전부 검증을 통과한 값만 담긴다. */
 interface MonthlyMeasurements {
+  geometry: MonthlyPageGeometry
+  pageWidth: number
   pageHeight: number
+  usableHeight: number
   topMargin: number
   bottomMargin: number
   fixedContentHeight: number
   projectHeaderHeight: number
   projectRowHeight: number
   calendarHeight: number
+  calendarHeaderHeight: number
+  calendarWeekHeight: number
   objectMargins: number
   calendarVertOffset: number
 }
@@ -1370,6 +1420,19 @@ function assertMonthlyTemplateStructure(doc: XmlDocument): MonthlyTemplateStruct
     throw new TemplateStructureError(`montly.hwpx 템플릿 구조가 예상과 다릅니다: 페이지 설정(pagePr/margin)을 찾지 못했습니다.`, 'INVALID_PAGE_GEOMETRY')
   }
 
+  // A4 가로 계약 검증 — 세로/다른 용지로 바뀌면 조용히 잘못 계산하지 않고 던진다.
+  const geometry = resolveMonthlyPageGeometry({
+    widthAttr: Number(pagePr.getAttribute('width')),
+    heightAttr: Number(pagePr.getAttribute('height')),
+    landscape: pagePr.getAttribute('landscape'),
+    topMargin: Number(margin.getAttribute('top')),
+    bottomMargin: Number(margin.getAttribute('bottom')),
+    leftMargin: Number(margin.getAttribute('left')),
+    rightMargin: Number(margin.getAttribute('right')),
+    headerMargin: Number(margin.getAttribute('header') || 0),
+    footerMargin: Number(margin.getAttribute('footer') || 0),
+  })
+
   const projOutMargin = findDirectChild(projTbl, 'outMargin')
   const objectMarginsProject = Number(projOutMargin?.getAttribute('top') || 0) + Number(projOutMargin?.getAttribute('bottom') || 0)
 
@@ -1378,13 +1441,18 @@ function assertMonthlyTemplateStructure(doc: XmlDocument): MonthlyTemplateStruct
     dataRows: projectContract.dataRows, dataRowTemplate: projectContract.dataRowTemplate,
     yearNode: yearMatches[0], monthNode: monthMatches[0], asOfDateNode: asOfDateMatches[0],
     measurements: {
-      pageHeight: Number(pagePr.getAttribute('height')),
+      geometry,
+      pageWidth: geometry.pageWidth,
+      pageHeight: geometry.pageHeight,
+      usableHeight: geometry.usableHeight,
       topMargin: Number(margin.getAttribute('top')),
       bottomMargin: Number(margin.getAttribute('bottom')),
       fixedContentHeight,
       projectHeaderHeight: projectContract.headerHeight,
       projectRowHeight: projectContract.dataRowHeight,
       calendarHeight: calendarContract.calendarHeight,
+      calendarHeaderHeight: calendarContract.calendarHeaderHeight,
+      calendarWeekHeight: calendarContract.calendarWeekHeight,
       objectMargins: objectMarginsProject + calendarContract.objectMarginsCalendar,
       calendarVertOffset: calendarContract.calendarVertOffset,
     },
@@ -1425,17 +1493,46 @@ interface MonthlyProjectInput {
   interview_date?: unknown
   result_date?: unknown
   note?: unknown
+  // ── Project List(projects + project_tooltips) 연계 필드 — 모두 선택 ──────────
+  // 클라이언트가 붙여 보내지 않으면(구 요청 형식) 해당 열은 "-"가 된다.
+  project_number?: unknown
+  client?: unknown
+  duration_days?: unknown
+  proposal_p?: unknown
+  self_intro_p?: unknown
+  ppt_p?: unknown
+  score_dist?: unknown
+  interview_time?: unknown
+  evaluation?: unknown
+  staff_arch?: unknown
+  staff_civil?: unknown
+  staff_mech?: unknown
+  staff_safety?: unknown
+  /** Project List의 ISO 날짜 — 있으면 상단표·달력이 이 값을 우선한다. */
+  list_submit_date?: unknown
+  list_interview_date?: unknown
+  list_bid_date?: unknown
 }
 
 /** 셀에 그대로 넣을 수 있게 문자열로 확정된 한 건. 표 채우기·사후 검증이 둘 다 이걸 쓴다. */
 interface MonthlyProjectRow {
+  /** 상단표 용역명 — "관리번호_정제명". */
   name: string
+  /** 달력용 정제명 — 관리번호를 붙이지 않는다. */
+  calendarName: string
+  client: string
   director: string
   fee: string
+  period: string
+  pages: string
   submitDate: string
   interviewDate: string
   resultDate: string
   note: string
+  /** 달력 일정 매칭용 원본 ISO 날짜(Project List 값). 상단표에는 쓰지 않는다. */
+  submitIso: unknown
+  interviewIso: unknown
+  bidIso: unknown
 }
 
 // 기존 동작(`p.field || ''`)과 정확히 같은 의미 — falsy면 빈 문자열.
@@ -1444,18 +1541,46 @@ function toReportText(value: unknown): string {
 }
 
 // 요청 본문 → 확정 타입. unknown을 받아 이 한 곳에서만 좁히고, 이후 단계로 any를 넘기지 않는다.
-function normalizeMonthlyProjects(performing: unknown): MonthlyProjectRow[] {
+/** 행 높이 추정에 쓰는 네 열의 확정 텍스트 — 표에 실제로 기록하는 값과 같은 값이다. */
+function monthlyRowText(project: MonthlyProjectRow): MonthlyRowTexts {
+  return { name: project.name, client: project.client, pages: project.pages, note: project.note }
+}
+function monthlyRowTexts(projects: readonly MonthlyProjectRow[]): MonthlyRowTexts[] {
+  return projects.map(monthlyRowText)
+}
+
+function normalizeMonthlyProjects(performing: unknown, baseYear: number): MonthlyProjectRow[] {
   const list: unknown[] = Array.isArray(performing) ? performing : []
   return list.map((raw) => {
     const p: MonthlyProjectInput = typeof raw === 'object' && raw !== null ? raw : {}
+    // 달력과 상단표가 같은 정제 함수를 공유한다. 상단표만 관리번호를 앞에 붙인다.
+    // 여는 괄호 앞 공백은 월간 출력에서만 정리한다(공유 함수는 Weekly도 쓰므로 바꾸지 않는다).
+    const calendarName = stripSpaceBeforeParen(formatProjectNameForReport(toReportText(p.name)))
+
+    // 날짜는 Project List의 ISO 값을 우선하고, 없으면 주간 화면에서 사람이 넣은 표기를 쓴다
+    // ("서면평가"/"추후"처럼 날짜가 아닌 값이 들어올 수 있는 경로다).
+    const submitSource = p.list_submit_date ?? p.submit_date
+    const interviewSource = p.list_interview_date ?? p.interview_date
+    const bidSource = p.list_bid_date ?? p.result_date
+
     return {
-      name: formatProjectNameForReport(toReportText(p.name)),
-      director: toReportText(p.director),
-      fee: p.fee != null ? String(p.fee) : '',
-      submitDate: toReportText(p.submit_date),
-      interviewDate: toReportText(p.interview_date),
-      resultDate: toReportText(p.result_date),
-      note: toReportText(p.note),
+      name: formatMonthlyProjectTitle(p.project_number, calendarName),
+      calendarName,
+      client: orEmptyCell(formatMonthlyClient(p.client)),
+      director: orEmptyCell(p.director),
+      fee: formatMonthlyFee(p.fee),
+      period: formatMonthlyDurationMonths(p.duration_days),
+      pages: formatMonthlyPages(p.proposal_p, p.self_intro_p, p.ppt_p),
+      submitDate: formatMonthlyDate(submitSource, baseYear),
+      interviewDate: formatMonthlyInterview(interviewSource, p.interview_time, baseYear),
+      resultDate: formatMonthlyBid(bidSource, p.evaluation, baseYear),
+      note: formatMonthlyNote({
+        scoreDist: p.score_dist, staffArch: p.staff_arch, staffCivil: p.staff_civil,
+        staffMech: p.staff_mech, staffSafety: p.staff_safety, note: p.note,
+      }),
+      submitIso: p.list_submit_date ?? p.submit_date,
+      interviewIso: p.list_interview_date ?? p.interview_date,
+      bidIso: p.list_bid_date ?? p.result_date,
     }
   })
 }
@@ -1463,15 +1588,20 @@ function normalizeMonthlyProjects(performing: unknown): MonthlyProjectRow[] {
 // 한 데이터 행의 12개 열에 들어갈 값을 확정한다. 기록(fill)과 사후 검증(postcondition)이 둘 다
 // 이 함수 하나만 쓰기 때문에 "쓴 값"과 "검사하는 값"이 어긋날 수 없다.
 // project가 undefined면(0건 정책의 빈 행) 12칸 모두 빈 문자열이다.
-// 의도적으로 빈 열: 발주처·기간(개월)·쪽수·과업설명도서열람·현장조사 — 현재 입력 폼에 대응하는
-// 항목이 없어 비워 둔다. 월간 표에는 연번(번호) 열이 아예 없다(헤더 12칸 실측 확인).
+// 과업설명·도서열람 / 현장조사는 Project List에 대응 필드가 없어 항상 "-"다(확정사항).
+// 월간 표에는 연번(번호) 열이 아예 없다(헤더 12칸 실측 확인).
 function expectedMonthlyRowTexts(project: MonthlyProjectRow | undefined): string[] {
   const IDX = MONTHLY_PROJECT_IDX
   const values: string[] = Array.from({ length: 12 }, () => '')
   if (!project) return values
   values[IDX.name] = project.name
+  values[IDX.client] = project.client
   values[IDX.chief] = project.director
   values[IDX.fee] = project.fee
+  values[IDX.period] = project.period
+  values[IDX.pages] = project.pages
+  values[IDX.taskDesc] = NO_FIELD_CELL
+  values[IDX.siteCheck] = NO_FIELD_CELL
   values[IDX.submit] = project.submitDate
   values[IDX.interview] = project.interviewDate
   values[IDX.bid] = project.resultDate
@@ -1492,6 +1622,189 @@ function fillMonthlyProjectRows(dataRows: readonly ProjectRowCells[], projects: 
     cells.forEach((tc, colIdx) => {
       replaceMonthlyCellText(tc, values[colIdx], `${i}번째 데이터 행 ${colIdx}열`)
     })
+  }
+}
+
+// ── 하단 달력 ────────────────────────────────────────────────────────────────
+//
+// 달력 셀은 "날짜 문단 1개 + 일정 문단 N개"로 만든다. 날짜 문단의 run charPr은 손대지 않는다
+// (일요일 빨강 / 평일 검정 / 토요일 파랑이 템플릿 charPr에 이미 들어 있다). 일정 문단은 날짜
+// 문단을 복제해 문단 속성(paraPr 20: 줄간격 90%, 문단 위 여백 250, 좌우 200)을 그대로 물려받고,
+// 첫 run의 charPrIDRef만 일정 종류별 색으로 바꾼다. 일정 사이에 빈 문단은 넣지 않는다.
+
+/** 템플릿 header.xml의 charPr이 달력 일정 색상 계약과 일치하는지 확인한다. */
+function assertMonthlyCalendarCharPr(headerDoc: XmlDocument): void {
+  const charPrs = headElementsOf(headerDoc, 'charPr')
+  for (const [kind, spec] of Object.entries(MONTHLY_CALENDAR_CHAR_PR)) {
+    const found = charPrs.find((c) => c.getAttribute('id') === spec.id)
+    if (!found) {
+      throw new TemplateStructureError(
+        `montly.hwpx 템플릿 구조가 예상과 다릅니다: 달력 ${kind} 일정용 charPr ${spec.id}이 header.xml에 없습니다.`,
+        'MISSING_CALENDAR_CHAR_PR'
+      )
+    }
+    const actualColor = found.getAttribute('textColor')
+    if (actualColor !== spec.textColor) {
+      throw new TemplateStructureError(
+        `montly.hwpx 템플릿 구조가 예상과 다릅니다: 달력 ${kind} 일정용 charPr ${spec.id}의 textColor가 ${spec.textColor}이 아니라 ${actualColor}입니다.`,
+        'INVALID_CALENDAR_CHAR_PR'
+      )
+    }
+    const actualHeight = found.getAttribute('height')
+    if (actualHeight !== MONTHLY_CALENDAR_CHAR_HEIGHT) {
+      throw new TemplateStructureError(
+        `montly.hwpx 템플릿 구조가 예상과 다릅니다: 달력 ${kind} 일정용 charPr ${spec.id}의 height가 ${MONTHLY_CALENDAR_CHAR_HEIGHT}이 아니라 ${actualHeight}입니다.`,
+        'INVALID_CALENDAR_CHAR_PR'
+      )
+    }
+    // 기준 파일과 동일하게 이탤릭·굵게여야 한다.
+    for (const tag of ['italic', 'bold']) {
+      if (headElementsOf(found, tag).length === 0) {
+        throw new TemplateStructureError(
+          `montly.hwpx 템플릿 구조가 예상과 다릅니다: 달력 ${kind} 일정용 charPr ${spec.id}에 ${tag}가 없습니다.`,
+          'INVALID_CALENDAR_CHAR_PR'
+        )
+      }
+    }
+    const spacing = headElementsOf(found, 'spacing')[0]
+    const actualSpacing = spacing ? spacing.getAttribute('hangul') : null
+    if (actualSpacing !== spec.spacing) {
+      throw new TemplateStructureError(
+        `montly.hwpx 템플릿 구조가 예상과 다릅니다: 달력 ${kind} 일정용 charPr ${spec.id}의 자간이 ${spec.spacing}이 아니라 ${actualSpacing}입니다.`,
+        'INVALID_CALENDAR_CHAR_PR'
+      )
+    }
+  }
+}
+
+/** 한 달력 셀에 날짜와 일정을 기록한다. 문단 = 날짜 1개 + 일정 N개. */
+function writeMonthlyCalendarCell(
+  tc: XmlElement, day: CalendarDay, entries: readonly CalendarEntry[], cellLabel: string
+): void {
+  const subList = findDirectChild(tc, 'subList')
+  if (!subList) {
+    throw new TemplateStructureError(
+      `montly.hwpx 셀 구조가 예상과 다릅니다: ${cellLabel}에 hp:subList가 없습니다.`,
+      'INVALID_CELL_TEXT_CONTAINER'
+    )
+  }
+  const paras = getDirectChildren(subList, 'p')
+  if (paras.length === 0) {
+    throw new TemplateStructureError(
+      `montly.hwpx 셀 구조가 예상과 다릅니다: ${cellLabel}에 문단(hp:p)이 없습니다.`,
+      'INVALID_CELL_TEXT_CONTAINER'
+    )
+  }
+
+  // 날짜 문단만 남기고 템플릿에 남아 있던 나머지 문단은 지운다.
+  const datePara = paras[0]
+  for (const p of paras.slice(1)) subList.removeChild(p)
+  writeMonthlyParagraphText(datePara, day.label, cellLabel)
+
+  for (const entry of entries) {
+    const clone = datePara.cloneNode(true) as XmlElement
+    const runs = getDirectChildren(clone, 'run')
+    if (runs.length === 0) {
+      throw new TemplateStructureError(
+        `montly.hwpx 셀 구조가 예상과 다릅니다: ${cellLabel}의 일정 문단에 hp:run이 없습니다.`,
+        'INVALID_CELL_TEXT_CONTAINER'
+      )
+    }
+    runs[0].setAttribute('charPrIDRef', MONTHLY_CALENDAR_CHAR_PR[entry.kind].id)
+    writeMonthlyParagraphText(clone, entry.text, cellLabel)
+    subList.appendChild(clone)
+  }
+
+  const written = readMonthlyCellLines(tc)
+  const expected = [day.label, ...entries.map((e) => e.text)]
+  if (written.length !== expected.length || written.some((line, i) => line !== expected[i])) {
+    throw new TemplateStructureError(
+      `montly.hwpx 달력 셀 기록 결과가 기대값과 다릅니다: ${cellLabel} 실제=${JSON.stringify(written)} 기대=${JSON.stringify(expected)}.`,
+      'CELL_TEXT_WRITE_MISMATCH'
+    )
+  }
+}
+
+/** 달력 표 전체(3주 × 7일)를 채운다. 헤더 행(일~토)은 건드리지 않는다. */
+function fillMonthlyCalendar(
+  calTbl: XmlElement, days: readonly CalendarDay[], entries: readonly CalendarEntry[]
+): void {
+  const rows = getDirectChildren(calTbl, 'tr')
+  const weekRows = rows.slice(1)
+  if (weekRows.length !== CALENDAR_WEEK_COUNT) {
+    throw new TemplateStructureError(
+      `montly.hwpx 템플릿 구조가 예상과 다릅니다: 달력 주 행 수가 ${CALENDAR_WEEK_COUNT}이 아니라 ${weekRows.length}입니다.`,
+      'INVALID_ROW_COUNT'
+    )
+  }
+  if (days.length !== CALENDAR_WEEK_COUNT * DAYS_PER_WEEK) {
+    throw new TemplateStructureError(
+      `달력 날짜 수가 ${CALENDAR_WEEK_COUNT * DAYS_PER_WEEK}이 아니라 ${days.length}입니다.`,
+      'INVALID_CALENDAR_DAYS'
+    )
+  }
+  const byDate = groupCalendarEntries(entries)
+
+  weekRows.forEach((tr, weekIdx) => {
+    const cells = getDirectChildren(tr, 'tc')
+    if (cells.length !== DAYS_PER_WEEK) {
+      throw new TemplateStructureError(
+        `montly.hwpx 템플릿 구조가 예상과 다릅니다: 달력 ${weekIdx + 1}주 행의 셀 수가 ${DAYS_PER_WEEK}이 아니라 ${cells.length}입니다.`,
+        'INVALID_TABLE_LAYOUT'
+      )
+    }
+    cells.forEach((tc, dayIdx) => {
+      const day = days[weekIdx * DAYS_PER_WEEK + dayIdx]
+      writeMonthlyCalendarCell(tc, day, byDate.get(day.iso) ?? [], `달력 ${weekIdx + 1}주 ${dayIdx}열`)
+    })
+  })
+}
+
+/**
+ * 달력 사후 검증 — 21개 셀 전부가 "날짜 + 그 날짜의 일정"과 정확히 일치하는지 확인한다.
+ * 일정 총수도 대조해 어느 셀에도 누락·중복이 없음을 보장한다.
+ */
+function assertMonthlyCalendarPostcondition(
+  calTbl: XmlElement, days: readonly CalendarDay[], entries: readonly CalendarEntry[]
+): void {
+  const rows = getDirectChildren(calTbl, 'tr')
+  const weekRows = rows.slice(1)
+  if (weekRows.length !== CALENDAR_WEEK_COUNT) {
+    throw new TemplateStructureError(
+      `생성된 문서의 달력 주 행 수(${weekRows.length})가 기대값(${CALENDAR_WEEK_COUNT})과 다릅니다.`,
+      'INVALID_POSTCONDITION'
+    )
+  }
+  const byDate = groupCalendarEntries(entries)
+  let writtenEntryCount = 0
+
+  weekRows.forEach((tr, weekIdx) => {
+    const cells = getDirectChildren(tr, 'tc')
+    if (cells.length !== DAYS_PER_WEEK) {
+      throw new TemplateStructureError(
+        `생성된 문서의 달력 ${weekIdx + 1}주 행 셀 수(${cells.length})가 기대값(${DAYS_PER_WEEK})과 다릅니다.`,
+        'INVALID_POSTCONDITION'
+      )
+    }
+    cells.forEach((tc, dayIdx) => {
+      const day = days[weekIdx * DAYS_PER_WEEK + dayIdx]
+      const expected = [day.label, ...(byDate.get(day.iso) ?? []).map((e) => e.text)]
+      const actual = readMonthlyCellLines(tc)
+      if (actual.length !== expected.length || actual.some((line, i) => line !== expected[i])) {
+        throw new TemplateStructureError(
+          `생성된 문서의 달력 ${weekIdx + 1}주 ${dayIdx}열이 기대값과 다릅니다: 실제=${JSON.stringify(actual)} 기대=${JSON.stringify(expected)}.`,
+          'INVALID_POSTCONDITION'
+        )
+      }
+      writtenEntryCount += actual.length - 1
+    })
+  })
+
+  if (writtenEntryCount !== entries.length) {
+    throw new TemplateStructureError(
+      `생성된 문서의 달력 일정 수(${writtenEntryCount})가 기대값(${entries.length})과 다릅니다.`,
+      'INVALID_POSTCONDITION'
+    )
   }
 }
 
@@ -1579,15 +1892,15 @@ async function generateMonthly(
   const reportDate: MonthlyReportDate = parseMonthlyReportDate({
     reportYear: data.reportYear, reportMonth: data.reportMonth, asOfDate: data.asOfDate,
   })
-  const projects: MonthlyProjectRow[] = normalizeMonthlyProjects(data.performing)
+  const projects: MonthlyProjectRow[] = normalizeMonthlyProjects(data.performing, reportDate.reportYear)
 
-  // 제한 1 — 수동 검증된 최대 건수. 아래 page budget 검사와 별개이며 먼저 판정한다.
-  // 산술 예산에는 들어도(예: renderSafetyReserve를 줄이면 24건도 계산상 들어간다) 사람이 한글로
-  // 확인하지 않은 범위의 문서는 만들지 않는다. 템플릿을 읽기도 전에 걸러낸다.
-  if (projects.length > MONTHLY_VERIFIED_MAX_PROJECT_COUNT) {
+  // 제한 1 — 절대 상한(비정상 입력·성능 보호). 실질 판단은 아래 page budget이 한다.
+  // 예산 경계는 11건 이상을 이미 차단하므로 이 상한에 닿는 정상 입력은 없다. 템플릿을 읽기도
+  // 전에 걸러내 터무니없는 건수로 XML 복제·사후 검증에 서버 시간을 쓰지 않게 한다.
+  if (projects.length > MONTHLY_ABSOLUTE_MAX_PROJECT_COUNT) {
     console.error('[Monthly HWPX Max Project Count Exceeded]', {
       code: MONTHLY_MAX_PROJECT_COUNT_EXCEEDED_CODE,
-      actual: projects.length, verifiedMax: MONTHLY_VERIFIED_MAX_PROJECT_COUNT,
+      actual: projects.length, absoluteMax: MONTHLY_ABSOLUTE_MAX_PROJECT_COUNT,
     })
     throw new MonthlyProjectCountExceededError(formatMonthlyMaxProjectCountExceededMessage(projects.length))
   }
@@ -1601,11 +1914,38 @@ async function generateMonthly(
 
   const structure = assertMonthlyTemplateStructure(doc)
 
+  // 달력 일정 색상 계약 — header.xml은 읽기만 하고 수정하지 않는다(새 charPr을 만들지 않는다).
+  const headerDoc = toXmlDocument(new DOMParser().parseFromString(zip.readAsText('Contents/header.xml'), 'text/xml'))
+  assertMonthlyCalendarCharPr(headerDoc)
+
   // 제한 2 — 템플릿 실측치 기반 높이 예산. 위 최대 건수 정책과 합치지 않는다: 최대 건수 이내라도
   // 템플릿이 바뀌어(고정 콘텐츠 증가 등) 예산이 안 맞으면 여기서 별도 사유로 거절해야 한다.
   // 행을 실제로 만들거나 데이터를 채우기 전에 판정한다. renderSafetyReserve는 한글 수동 경계
   // 검증(0/13/20/23건)으로 확정된 값 — 근거는 lib/hwpx/monthlyPageBudget.ts 주석 참고.
+  // 달력 일정은 순수 계산이므로 예산 판정 전에 미리 구한다 — 달력도 일정 줄 수에 따라
+  // 주 행이 늘어나므로 예산에 반영해야 한다(달력 때문에 2페이지가 되는 경우를 놓치지 않게).
+  const calendarDays = buildCalendarDays(reportDate.asOf)
+  const calendarEntries = collectCalendarEntries(
+    projects.map((p): CalendarSchedule => ({
+      name: p.calendarName,
+      submitDate: p.submitIso, interviewDate: p.interviewIso, bidDate: p.bidIso,
+    })),
+    calendarDays
+  )
+
+  const rowTexts = monthlyRowTexts(projects)
+  const estimatedProjectRowsHeight = estimateMonthlyRowsHeight(
+    rowTexts, structure.measurements.projectRowHeight
+  )
+  const estimatedCalendarHeight = estimateCalendarHeight(
+    calendarDays, calendarEntries,
+    structure.measurements.calendarHeaderHeight,
+    structure.measurements.calendarWeekHeight
+  )
+
   const budget = estimateMonthlyPageBudget({
+    usableHeight: structure.measurements.usableHeight,
+    pageWidth: structure.measurements.pageWidth,
     pageHeight: structure.measurements.pageHeight,
     topMargin: structure.measurements.topMargin,
     bottomMargin: structure.measurements.bottomMargin,
@@ -1613,14 +1953,41 @@ async function generateMonthly(
     projectHeaderHeight: structure.measurements.projectHeaderHeight,
     projectRowHeight: structure.measurements.projectRowHeight,
     projectRowCount: projects.length,
+    // 셀 텍스트가 셀 폭을 넘어 행이 자동으로 늘어나는 만큼을 반영한다. 선언 행 높이만 곱하면
+    // 예산은 1페이지라고 판정하는데 실제로는 2페이지가 되는 불일치가 생긴다(한글 렌더 실측).
+    estimatedProjectRowsHeight,
     calendarHeight: structure.measurements.calendarHeight,
+    estimatedCalendarHeight,
     objectMargins: structure.measurements.objectMargins,
     calendarVertOffset: structure.measurements.calendarVertOffset,
     renderSafetyReserve: MONTHLY_RENDER_SAFETY_RESERVE,
   } satisfies MonthlyPageBudgetInput)
   if (!budget.fits) {
-    console.error('[Monthly HWPX Page Budget Exceeded]', { projectCount: projects.length, ...budget })
-    throw new PageBudgetExceededError(MONTHLY_PAGE_BUDGET_EXCEEDED_MESSAGE)
+    const rowLines = rowTexts.map((r, i) => ({
+      row: i + 1, name: projects[i]?.name ?? '',
+      ...describeMonthlyRowLines(r),
+      height: estimateMonthlyRowHeight(r, structure.measurements.projectRowHeight),
+    }))
+    const weeks = estimateCalendarWeekHeights(
+      calendarDays, calendarEntries, structure.measurements.calendarWeekHeight
+    )
+    const tallestRow = rowLines.reduce((a, b) => (b.height > a.height ? b : a), rowLines[0])
+    const tallestWeek = weeks.reduce((a, b) => (b.height > a.height ? b : a), weeks[0])
+    console.error('[Monthly HWPX Page Budget Exceeded]', {
+      projectCount: projects.length,
+      projectTableHeight: budget.projectHeight,
+      calendarTableHeight: budget.calendarHeight,
+      tallestRow, tallestWeek, weeks,
+      renderSafetyReserve: budget.renderSafetyReserve,
+      overflowHeight: budget.overflowHeight,
+      rowLines,
+      ...budget,
+    })
+    throw new PageBudgetExceededError(formatMonthlyPageBudgetExceededMessage({
+      projectCount: projects.length,
+      requiredHeight: budget.requiredHeight,
+      usableHeight: budget.usableHeight,
+    }))
   }
 
   // 프로젝트 표를 실제 건수에 맞춰 재구성 — rowAddr·rowCnt·표 높이까지 함께 갱신.
@@ -1631,6 +1998,9 @@ async function generateMonthly(
 
   fillMonthlyProjectRows(newDataRows, projects)
 
+  // 하단 달력 — 위에서 이미 구한 날짜·일정을 그대로 기록한다(예산 판정과 같은 값).
+  fillMonthlyCalendar(structure.calTbl, calendarDays, calendarEntries)
+
   // 제목의 연·월, 기준일 캡션 — assertMonthlyTemplateStructure가 데이터 채우기 전에 미리
   // 특정해 둔 노드만 갱신한다(전체 문서 재검색 없음 — note 등 사용자 데이터를 건드리지 않는다).
   structure.yearNode.textContent = `${reportDate.reportYear}년`
@@ -1639,6 +2009,7 @@ async function generateMonthly(
 
   // zip.updateFile로 실제 파일을 갱신하기 전에 마지막으로 결과 문서 자체를 검증한다.
   assertMonthlyPostcondition(structure.projTbl, projects)
+  assertMonthlyCalendarPostcondition(structure.calTbl, calendarDays, calendarEntries)
 
   removeLinesegarray(doc)
 

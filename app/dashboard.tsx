@@ -39,6 +39,34 @@ const EMPTY_EXPECTED = (order: number, week: string): ExpectedProject => ({
   order_month: '', fee: '', note: '', sort_order: order, week
 })
 
+// 월간 HWPX 전용 — Project List에서 읽어 서버로 넘기는 값들. 주간 표시에는 쓰지 않는다.
+type TooltipRow = {
+  project_number: string
+  proposal_p: string | null
+  self_intro_p: string | null
+  ppt_p: string | null
+  score_dist: string | null
+  interview_time: string | null
+}
+type MonthlyProjectRefRow = ProjectRef & {
+  project_number: string
+  duration_days: string | null
+  note: string | null
+}
+type MonthlyExtra = {
+  project_number: string
+  client: string
+  duration_days: string
+  evaluation: string
+  staff_arch: string; staff_civil: string; staff_mech: string; staff_safety: string
+  note: string
+  list_submit_date: string | null
+  list_interview_date: string | null
+  list_bid_date: string | null
+  proposal_p: string; self_intro_p: string; ppt_p: string
+  score_dist: string; interview_time: string
+}
+
 // 월간 보고 화면에 별도 월 선택 UI가 없어, 현재 선택된 ISO 주(week)의 월요일이 속한 연·월을
 // 그대로 월간 보고 대상 연·월로 쓴다. weekLabel/shiftWeek와 동일한 ISO 주→그레고리력 계산이다.
 function weekToReportYearMonth(week: string): { reportYear: number; reportMonth: number } {
@@ -87,6 +115,9 @@ export default function Dashboard() {
   const [projectRefs, setProjectRefs] = useState<ProjectRef[]>([])
   const [copying, setCopying] = useState(false)
   const [calNotes, setCalNotes] = useState<Record<string, Record<string, string>>>({})
+  // 월간 HWPX 전용 — Project List(projects + project_tooltips)에서만 오는 값. 용역명으로 맞춘다.
+  // 주간 화면 표시에는 쓰지 않는다(주간 동작 불변).
+  const [monthlyExtras, setMonthlyExtras] = useState<Record<string, MonthlyExtra>>({})
 
   const loadRefs = useCallback(async () => {
     const { data } = await createSupabaseBrowserClient()
@@ -107,11 +138,37 @@ export default function Dashboard() {
       supabase.from('performing_projects').select('*').eq('week', week).order('sort_order'),
       supabase.from('expected_projects').select('*').eq('week', week).order('sort_order'),
       supabase.from('weekly_meta').select('*').eq('week', week).maybeSingle(),
-      createSupabaseBrowserClient().from('projects').select('name,project_number,director,client,fee,submit_date,interview_date,bid_date,result_score,evaluation,participants,status_override,staff_arch,staff_civil,staff_mech,staff_safety').order('project_number', { ascending: false }),
+      createSupabaseBrowserClient().from('projects').select('name,project_number,director,client,fee,duration_days,note,submit_date,interview_date,bid_date,result_score,evaluation,participants,status_override,staff_arch,staff_civil,staff_mech,staff_safety').order('project_number', { ascending: false }),
       createSupabaseBrowserClient().from('project_notes').select('*'),
     ])
-    const allRefs = (refs ?? []) as (ProjectRef & { project_number: string })[]
-    setProjectRefs(allRefs)
+    const allRefs = (refs ?? []) as MonthlyProjectRefRow[]
+    setProjectRefs(allRefs as ProjectRef[])
+
+    // 월간 표의 쪽수·비고(점수 구성)·서면평가 판정은 project_tooltips에만 있다. 주간에는 쓰지 않아
+    // 별도로 읽고 용역명 기준 맵으로 보관한다.
+    const { data: tips } = await createSupabaseBrowserClient()
+      .from('project_tooltips')
+      .select('project_number,proposal_p,self_intro_p,ppt_p,score_dist,interview_time')
+    const tipByNumber = new Map((tips ?? []).map((t: TooltipRow) => [t.project_number, t]))
+    const extras: Record<string, MonthlyExtra> = {}
+    for (const r of allRefs) {
+      const t = tipByNumber.get(r.project_number)
+      extras[r.name] = {
+        project_number: r.project_number,
+        client: r.client ?? '',
+        duration_days: r.duration_days ?? '',
+        evaluation: r.evaluation ?? '',
+        staff_arch: r.staff_arch ?? '', staff_civil: r.staff_civil ?? '',
+        staff_mech: r.staff_mech ?? '', staff_safety: r.staff_safety ?? '',
+        note: r.note ?? '',
+        list_submit_date: r.submit_date ?? null,
+        list_interview_date: r.interview_date ?? null,
+        list_bid_date: r.bid_date ?? null,
+        proposal_p: t?.proposal_p ?? '', self_intro_p: t?.self_intro_p ?? '', ppt_p: t?.ppt_p ?? '',
+        score_dist: t?.score_dist ?? '', interview_time: t?.interview_time ?? '',
+      }
+    }
+    setMonthlyExtras(extras)
 
     if (notesData) {
       const map: Record<string, Record<string, string>> = {}
@@ -299,8 +356,14 @@ export default function Dashboard() {
 
     setDownloading(type)
     try {
+      // 월간은 주간 화면의 행 집합을 그대로 쓰되, Project List에만 있는 값(발주처·기간·쪽수·
+      // 점수 구성·ISO 날짜)을 용역명으로 맞춰 붙여 보낸다. 맞는 항목이 없으면 서버가 "-"로 채운다.
       const body = type === 'monthly'
-        ? { type, performing, ...weekToReportYearMonth(week) }
+        ? {
+          type,
+          performing: performing.map(p => ({ ...p, ...(monthlyExtras[p.name] ?? {}) })),
+          ...weekToReportYearMonth(week),
+        }
         : { type, week, performing, expected, meta }
       const res = await fetch('/api/hwpx', {
         method: 'POST',

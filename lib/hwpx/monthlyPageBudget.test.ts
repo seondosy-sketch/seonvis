@@ -4,12 +4,16 @@ import {
   type MonthlyPageBudgetInput,
   MONTHLY_RENDER_SAFETY_RESERVE,
   MONTHLY_RENDER_SAFETY_RESERVE_CONFIRMED,
-  MONTHLY_VERIFIED_MAX_PROJECT_COUNT,
+  MONTHLY_ABSOLUTE_MAX_PROJECT_COUNT,
+  MONTHLY_RESERVE_CALIBRATION_SAMPLES,
 } from './monthlyPageBudget'
 
 // 실측값(lib/templates/montly.hwpx, 직접 확인) — Sprint M1 Rev.2 12번 항목과 동일
 const REAL_INPUT: Omit<MonthlyPageBudgetInput, 'projectRowCount'> = {
-  pageHeight: 84188,
+  // A4 가로 — 실제 인쇄 기준. hp:pagePr의 width/height 속성과 뒤바뀐다.
+  usableHeight: 55276,
+  pageWidth: 84188,
+  pageHeight: 59528,
   topMargin: 2835,
   bottomMargin: 1417,
   fixedContentHeight: 4604, // 제목 2300 + 빈 문단 1152 + 1152
@@ -22,14 +26,17 @@ const REAL_INPUT: Omit<MonthlyPageBudgetInput, 'projectRowCount'> = {
 }
 
 describe('estimateMonthlyPageBudget', () => {
-  it('usableHeight는 pageHeight - topMargin - bottomMargin이다(실측: 79936)', () => {
-    const result = estimateMonthlyPageBudget({ ...REAL_INPUT, projectRowCount: 11 })
-    expect(result.usableHeight).toBe(84188 - 2835 - 1417)
-    expect(result.usableHeight).toBe(79936)
+  it('usableHeight는 입력값(A4 가로 실측 55,276)을 그대로 쓴다', () => {
+    const result = estimateMonthlyPageBudget({ ...REAL_INPUT, projectRowCount: 10 })
+    expect(result.usableHeight).toBe(55276)
+    // 세로 높이(84,188)로 계산하던 옛 값이 되살아나지 않게 잠근다.
+    expect(result.usableHeight).not.toBe(79936)
+    expect(result.pageWidth).toBe(84188)
+    expect(result.pageHeight).toBe(59528)
   })
 
-  it('현재 템플릿 원래 용량(11행)은 예산 안에 든다', () => {
-    const result = estimateMonthlyPageBudget({ ...REAL_INPUT, projectRowCount: 11 })
+  it('선언 행 높이 기준 10행은 예산 안에 든다', () => {
+    const result = estimateMonthlyPageBudget({ ...REAL_INPUT, projectRowCount: 10 })
     expect(result.fits).toBe(true)
   })
 
@@ -73,39 +80,97 @@ describe('estimateMonthlyPageBudget', () => {
   })
 })
 
-// ── 수동 한글 검증으로 확정된 값 고정 ────────────────────────────────────────────────
+// ── 한글 실측으로 재보정한 값 고정 ──────────────────────────────────────────────
 //
-// 근거: renderSafetyReserve=3000으로 생성한 manual-review/monthly-dynamic-{0,13,20,23}.hwpx를
-// 한글에서 직접 열어 "정상 열림 / 한 페이지 유지 / 달력 전체가 같은 페이지에 유지 / 프로젝트
-// 누락 없음 / 입력 순서 정상 / 표 테두리·열 너비 정상 / 제목·기준일 정상 / 저장 후 재오픈 정상"
-// 을 모두 확인했다. 특히 잔여 높이가 1680뿐인 23건에서도 달력이 같은 페이지에 유지됐다.
-// 이 테스트는 그 확정 결과가 실수로 되돌아가는 것을 막는 잠금 장치다.
-describe('확정된 renderSafetyReserve / 최대 프로젝트 수', () => {
-  it('renderSafetyReserve는 3000으로 확정되었고 확정 플래그가 true다', () => {
-    expect(MONTHLY_RENDER_SAFETY_RESERVE).toBe(3000)
+// 이전 값(reserve 3000 / 최대 23건)은 usableHeight를 세로 용지 높이(79,936)로 잘못 계산한
+// 상태에서 정한 것이라 근거가 무효였다. A4 가로 실제 사용 가능 높이(55,276)로 바로잡고
+// 0/5/10/11/12/13/20/23건을 한글 COM으로 생성·렌더해 재측정한 결과로 다시 정했다.
+// MONTHLY_RESERVE_CALIBRATION_SAMPLES에 그 실측 표본이 그대로 들어 있다.
+describe('재보정된 renderSafetyReserve / 프로젝트 수 정책', () => {
+  it('renderSafetyReserve는 500으로 재확정되었고 확정 플래그가 true다', () => {
+    expect(MONTHLY_RENDER_SAFETY_RESERVE).toBe(500)
     expect(MONTHLY_RENDER_SAFETY_RESERVE_CONFIRMED).toBe(true)
+    // 잘못된 usableHeight 전제로 정했던 옛 값이 되살아나지 않게 잠근다.
+    expect(MONTHLY_RENDER_SAFETY_RESERVE).not.toBe(3000)
   })
 
-  it('검증된 최대 프로젝트 수는 23건이다', () => {
-    expect(MONTHLY_VERIFIED_MAX_PROJECT_COUNT).toBe(23)
+  it('안전여유는 실측 최대 오차(499)를 덮는 최소 보수값이다', () => {
+    const errors = MONTHLY_RESERVE_CALIBRATION_SAMPLES
+      .filter((s) => s.actualOccupied != null)
+      .map((s) => s.computedWithoutReserve - (s.actualOccupied as number))
+    // 계산값은 항상 실제보다 크다(안전한 방향) — 음수 오차가 있으면 모델이 위험하다.
+    expect(Math.min(...errors)).toBeGreaterThan(0)
+    expect(Math.max(...errors)).toBe(499)
+    expect(MONTHLY_RENDER_SAFETY_RESERVE).toBeGreaterThanOrEqual(Math.max(...errors))
+    // 500 미만으로 낮추면 실측 오차를 못 덮고, 크게 올리면 10건을 차단한다.
+    expect(MONTHLY_RENDER_SAFETY_RESERVE).toBeLessThan(1662)
   })
 
-  it('확정값 기준으로 23건은 예산에 들고(잔여 1680), 24건은 초과한다(초과 138)', () => {
-    const at23 = estimateMonthlyPageBudget({ ...REAL_INPUT, projectRowCount: MONTHLY_VERIFIED_MAX_PROJECT_COUNT })
-    expect(at23.fits).toBe(true)
-    expect(at23.requiredHeight).toBe(78256)
-    expect(at23.usableHeight).toBe(79936)
-    expect(at23.overflowHeight).toBe(-1680)
-
-    const at24 = estimateMonthlyPageBudget({ ...REAL_INPUT, projectRowCount: MONTHLY_VERIFIED_MAX_PROJECT_COUNT + 1 })
-    expect(at24.fits).toBe(false)
-    expect(at24.requiredHeight).toBe(80074)
-    expect(at24.overflowHeight).toBe(138)
-  })
-
-  it('수동으로 정상 확인한 0/13/20/23건은 모두 예산에 든다', () => {
-    for (const n of [0, 13, 20, 23]) {
-      expect(estimateMonthlyPageBudget({ ...REAL_INPUT, projectRowCount: n }).fits).toBe(true)
+  it('실측 표본의 계산값이 현재 모델과 일치한다(모델이 바뀌면 실패)', () => {
+    const FIXED = 4604 + 2502 + 25014 + 848 + 474 // 제목·기준일·빈문단 + 표 헤더 + 달력 + 여백 + 오프셋
+    for (const s of MONTHLY_RESERVE_CALIBRATION_SAMPLES) {
+      const rowsHeight = s.computedWithoutReserve - FIXED
+      const result = estimateMonthlyPageBudget({
+        ...REAL_INPUT, projectRowCount: Math.max(s.projectCount, 1),
+        estimatedProjectRowsHeight: rowsHeight, renderSafetyReserve: 0,
+      })
+      expect(result.requiredHeight, `${s.projectCount}건`).toBe(s.computedWithoutReserve)
     }
+  })
+
+  it('10건은 통과하고 12건 이상은 차단된다(실측 PageCount와 일치)', () => {
+    const FIXED = 4604 + 2502 + 25014 + 848 + 474
+    for (const s of MONTHLY_RESERVE_CALIBRATION_SAMPLES) {
+      const result = estimateMonthlyPageBudget({
+        ...REAL_INPUT, projectRowCount: Math.max(s.projectCount, 1),
+        estimatedProjectRowsHeight: s.computedWithoutReserve - FIXED,
+      })
+      if (s.pageCount === 1 && s.projectCount <= 10) {
+        expect(result.fits, `${s.projectCount}건은 통과해야 한다`).toBe(true)
+      }
+      if (s.pageCount >= 2) {
+        expect(result.fits, `${s.projectCount}건은 차단해야 한다`).toBe(false)
+      }
+    }
+  })
+
+  it('안전여유 경계 ±1 — 10건 기준 통과/차단이 정확히 갈린다', () => {
+    const FIXED = 4604 + 2502 + 25014 + 848 + 474
+    const rowsAt10 = 53614 - FIXED // 20,172
+    const limit = 55276 - FIXED - rowsAt10 // 10건에서 허용되는 최대 reserve = 1,662
+    const at = (reserve: number) => estimateMonthlyPageBudget({
+      ...REAL_INPUT, projectRowCount: 10,
+      estimatedProjectRowsHeight: rowsAt10, renderSafetyReserve: reserve,
+    })
+    expect(limit).toBe(1662)
+    expect(at(limit).fits).toBe(true)
+    expect(at(limit).overflowHeight).toBe(0)
+    expect(at(limit + 1).fits).toBe(false)
+    expect(at(limit + 1).overflowHeight).toBe(1)
+    expect(at(MONTHLY_RENDER_SAFETY_RESERVE).fits).toBe(true)
+  })
+
+  it('프로젝트 수 상한은 성능 보호용 절대 상한이며 예산이 1차 판단이다', () => {
+    expect(MONTHLY_ABSOLUTE_MAX_PROJECT_COUNT).toBe(100)
+    // 옛 "검증된 최대 건수" 23이 되살아나지 않게 잠근다.
+    expect(MONTHLY_ABSOLUTE_MAX_PROJECT_COUNT).not.toBe(23)
+    // 절대 상한에 닿기 전에 예산이 먼저 차단한다.
+    const atAbsolute = estimateMonthlyPageBudget({
+      ...REAL_INPUT, projectRowCount: MONTHLY_ABSOLUTE_MAX_PROJECT_COUNT,
+    })
+    expect(atAbsolute.fits).toBe(false)
+  })
+
+  it('달력 예상 높이를 주면 선언 높이보다 큰 값이 쓰이고, 작은 값은 무시된다', () => {
+    const bigger = estimateMonthlyPageBudget({
+      ...REAL_INPUT, projectRowCount: 5, estimatedCalendarHeight: 27148,
+    })
+    expect(bigger.calendarHeight).toBe(27148)
+    expect(bigger.declaredCalendarHeight).toBe(25014)
+
+    const smaller = estimateMonthlyPageBudget({
+      ...REAL_INPUT, projectRowCount: 5, estimatedCalendarHeight: 100,
+    })
+    expect(smaller.calendarHeight).toBe(25014)
   })
 })
