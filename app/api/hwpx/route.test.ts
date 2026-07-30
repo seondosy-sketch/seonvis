@@ -1788,7 +1788,9 @@ describe('weekly.hwpx 마지막 문단 여백 계약 (변형 템플릿 주입)',
 // 적용 항목: 두 표 wrapper 문단 줄간격 160%→100%(spacing 720→0, 전용 신규 paraPr),
 // 두 표 outMargin top/bottom→0(좌우 불변), 교육 문단 전용 신규 paraPr 160%→140%
 // (줄 높이 1,600→1,400), 발주예상 데이터행 1,992→1,700, "4) 기 타" 직전 빈 문단 1개 삭제.
-// 수행표 데이터행(3,259)·글자 크기·글꼴·열 너비·셀 병합·테두리는 변경하지 않았다.
+// 수행표 데이터행(3,259)·글자 크기·글꼴·셀 병합·테두리는 변경하지 않았다.
+// 열 너비는 이후 별건으로 한 번 바뀌었다 — 용역비 6자리 줄바꿈을 없애기 위해 날짜 3열에서
+// 각 100씩 가져와 용역비를 3,657→3,957로 넓혔다(합계 50,685 불변, 아래 열 너비 테스트 참고).
 // ════════════════════════════════════════════════════════════════════════════════
 describe('weekly.hwpx 서식 실측값 고정 (한글 렌더 검증 기준)', () => {
   const tpl = path.join(process.cwd(), 'lib', 'templates', 'weekly.hwpx')
@@ -1924,11 +1926,41 @@ describe('weekly.hwpx 서식 실측값 고정 (한글 렌더 검증 기준)', ()
     expect(usable).toBe(76534)
   })
 
-  it('수행표 열 너비는 변경되지 않았다', () => {
+  // 용역비 열은 3,657에서 6자리(예: 115.44)가 두 줄로 깨졌다. 이 열의 실제 텍스트 폭은
+  // width − 1(테두리) − 400(paraPr 13의 오른쪽 여백) = 3,256이고 "115.44"는 약 3,434가
+  // 필요하다(cellMargin 좌우 510은 텍스트 폭에 반영되지 않는다 — 한글 렌더 실측). 3,957로
+  // 넓혀 텍스트 폭 3,556을 확보했고, 5자리+소수점 조합 전부가 한 줄로 들어간다(한글 렌더 확인).
+  //
+  // 늘린 300은 내용 열이 아니라 날짜 3열(제출일/발표·면접/개찰일)에서 각 100씩 가져왔다.
+  // 내용 열은 운영 문구 "-건축 고평 -토목 미정(수성)"이 현재 폭에서 겨우 한 줄이어서, 40만
+  // 줄여도(텍스트 폭 14,156→14,116) 두 줄로 깨지는 것을 한글 렌더로 확인했다. 반면 날짜 열은
+  // "7.21" 4자리에 텍스트 폭 4,120이 남아 여유가 크고, 헤더 "제출일"·"개찰일"(3자리)과
+  // 2문단으로 고정된 "발표/면접"도 줄 수가 그대로였다(한글 렌더 확인).
+  //
+  // 합계 50,685는 반드시 유지해야 한다 — 표 hp:sz width와 어긋나면 표가 페이지 폭을 넘거나
+  // 우측 경계가 어긋난다. 용역명(13,054)은 건드리지 않는다: 줄 수가 바뀌면 행 높이가 바뀌어
+  // 1페이지 예산이 무너진다.
+  it('수행표 열 너비 = 2967 / 13054 / 3679 / 4123×3 / 3957 / 14659 (합계 50,685)', () => {
     const { sec } = load()
-    const header = dcb(elsb(sec, 'tbl')[0], 'tr')[0]
-    expect(dcb(header, 'tc').map((tc: any) => Number(dcb(tc, 'cellSz')[0].getAttribute('width'))))
-      .toEqual([2967, 13054, 3679, 4223, 4223, 4223, 3657, 14659])
+    const perf = elsb(sec, 'tbl')[0]
+    const widths = [2967, 13054, 3679, 4123, 4123, 4123, 3957, 14659]
+    expect(widths.reduce((a, b) => a + b, 0)).toBe(50685)
+    expect(Number(dcb(perf, 'sz')[0].getAttribute('width'))).toBe(50685)
+
+    const rows = dcb(perf, 'tr')
+    const cellWidths = (tr: any) =>
+      dcb(tr, 'tc').map((tc: any) => Number(dcb(tc, 'cellSz')[0].getAttribute('width')))
+    expect(cellWidths(rows[0])).toEqual(widths)
+
+    // 데이터 행도 같은 열 경계를 써야 한다 — 헤더에서 colSpan=2로 병합된 구분 열만
+    // 라벨(1,625)+연번(1,342)=2,967로 쪼개져 있고, 용역명~내용 7열은 헤더와 동일하다.
+    for (const tr of rows.slice(1)) {
+      const w = cellWidths(tr)
+      expect(w.slice(-7)).toEqual(widths.slice(1))
+      const head = w.slice(0, -7)
+      expect(head).toEqual(head.length === 2 ? [1625, 1342] : [1342])
+      expect(head.reduce((a: number, b: number) => a + b, 0)).toBe(head.length === 2 ? widths[0] : 1342)
+    }
   })
 
   it('보고기간 → "1) 수행 Project", 교육 마지막 줄 → "4) 기 타" 구간은 그대로 남아 있다', () => {
