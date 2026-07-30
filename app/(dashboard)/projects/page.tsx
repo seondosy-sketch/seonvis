@@ -6,6 +6,7 @@ import { useIsMobile } from '@/lib/useIsMobile'
 import AddressMapPreview from '@/app/components/AddressMapPreview'
 import { openDirectionsFromOffice } from '@/lib/kakaoMap'
 import { useMenuPermission } from '@/app/components/PermissionsProvider'
+import { syncProjectCalendar } from '@/lib/googleCalendar/trigger'
 
 type ProjectStatus = '진행중' | '수주' | '탈락' | '취소'
 type ProjectType = '면접' | 'SOQ' | '종심제' | 'TP' | 'PQ' | '기타' | ''
@@ -294,9 +295,13 @@ export default function ProjectsPage() {
         .filter(([k]) => k !== 'project_number')
         .some(([, v]) => v && String(v).trim() !== '')
 
+      // 캘린더 동기화에 넘길 프로젝트 id — 신규 등록이면 방금 만들어진 행의 id를 받아온다.
+      let savedProjectId: string | null = null
+
       if (modal.editId) {
         const { error: projErr } = await supabase.from('projects').update({ ...projectPayload, updated_at: new Date().toISOString() }).eq('id', modal.editId)
         if (projErr) { setSaveError(`저장 실패: ${projErr.message}`); return }
+        savedProjectId = modal.editId
         if (hasTooltipData) {
           const { error: tipErr } = await supabase.from('project_tooltips').upsert({ ...tooltipPayload, updated_at: new Date().toISOString() }, { onConflict: 'project_number' })
           if (tipErr) { setSaveError(`상세정보 저장 실패: ${tipErr.message}`); return }
@@ -307,13 +312,18 @@ export default function ProjectsPage() {
           await supabase.from('performing_projects').update({ name: f.name }).eq('name', oldProject.name)
         }
       } else {
-        const { error: projErr } = await supabase.from('projects').insert(projectPayload)
+        const { data: inserted, error: projErr } = await supabase.from('projects').insert(projectPayload).select('id').single()
         if (projErr) { setSaveError(`저장 실패: ${projErr.message}`); return }
+        savedProjectId = inserted?.id ?? null
         if (hasTooltipData) {
           const { error: tipErr } = await supabase.from('project_tooltips').insert(tooltipPayload)
           if (tipErr) { setSaveError(`상세정보 저장 실패: ${tipErr.message}`); return }
         }
       }
+
+      // Google Calendar 동기화 — 저장이 끝난 뒤 별도 요청으로 보낸다(기다리지 않고, 실패해도
+      // 저장에는 영향 없음). lib/googleCalendar/trigger.ts 참고.
+      if (savedProjectId) syncProjectCalendar(savedProjectId)
 
       await Promise.all([load(), loadTooltips()])
       closeModal()
@@ -327,6 +337,8 @@ export default function ProjectsPage() {
       supabase.from('projects').delete().eq('id', id),
       supabase.from('project_tooltips').delete().eq('project_number', projectNumber),
     ])
+    // 프로젝트가 사라졌으므로 연결된 캘린더 일정도 지워야 한다 — 서버가 고아 행을 보고 삭제한다.
+    syncProjectCalendar(id)
     await load()
     setDeleting(null)
   }

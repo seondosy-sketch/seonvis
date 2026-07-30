@@ -233,6 +233,20 @@ export default function Sidebar({ isAdmin, userEmail, hiddenMenuItems = [], onCl
                 }}>사용자 관리</span>
               </div>
             </Link>
+            <Link href="/admin/calendar" style={{ textDecoration: 'none' }}>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '6px 10px', cursor: 'pointer',
+                background: pathname === '/admin/calendar' ? '#f0f7ff' : 'transparent',
+                borderRight: pathname === '/admin/calendar' ? '2px solid #0ea5e9' : '2px solid transparent',
+              }}>
+                <span style={{
+                  fontSize: 13, flex: 1,
+                  color: pathname === '/admin/calendar' ? '#111' : '#444',
+                  fontWeight: pathname === '/admin/calendar' ? 600 : 400,
+                }}>Google Calendar 연동</span>
+              </div>
+            </Link>
           </div>
         )}
       </nav>

@@ -40,7 +40,14 @@ import {
   weekdayIndex,
 } from '@/lib/widget/calendar'
 
-const KST_OFFSET_MS = 9 * 60 * 60 * 1000
+/**
+ * KST 날짜 계산은 lib/kstDate.ts 한 곳에 둔다 — Google Calendar 연동(lib/googleCalendar)도 같은
+ * 함수를 쓰므로, 위젯과 캘린더가 서로 다른 "오늘"을 보지 않게 하려는 것이다.
+ * 기존 호출부·테스트가 이 모듈에서 가져다 쓰고 있어 그대로 재수출한다.
+ */
+import { kstTimeLabel, kstToday, toDateKey } from '@/lib/kstDate'
+export { kstTimeLabel, kstToday, toDateKey }
+
 const DOW = ['일', '월', '화', '수', '목', '금', '토']
 
 /** 하단 "다가오는 일정"을 몇 건까지 준비할지 (렌더 쪽에서 크기별로 잘라 쓴다) */
@@ -111,31 +118,13 @@ export interface WidgetSummary {
   showProjects: boolean
 }
 
-/** 기준 시각(기본 now)의 KST 달력 날짜 — 시:분 없는 로컬 자정 Date. */
-export function kstToday(now: Date = new Date()): Date {
-  const shifted = new Date(now.getTime() + KST_OFFSET_MS)
-  return new Date(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate())
-}
-
 /**
- * KST 시:분 — 위젯 "업데이트 HH:MM"에 쓴다.
- *
- * 이 값의 의미는 **이 요약을 만든 시각(= DB를 조회하고 그 응답으로 PNG를 그린 시각)** 하나로
- * 고정한다. 라우트가 모든 응답을 `private, no-store`로 내리고 조건부 응답(304)도 쓰지 않으므로,
- * "캐시된 그림인데 현재 시각처럼 보이는" 상황이 생길 수 없다. 반대로 iOS 홈화면 썸네일이 예전
- * 그림이면 예전 시각이 그대로 찍혀 있어 얼마나 묵은 화면인지 알 수 있다.
+ * 위젯 "업데이트 HH:MM"은 **이 요약을 만든 시각(= DB를 조회하고 그 응답으로 PNG를 그린 시각)** 이다.
+ * 라우트가 모든 응답을 `private, no-store`로 내리고 조건부 응답(304)도 쓰지 않으므로 "캐시된
+ * 그림인데 현재 시각처럼 보이는" 상황이 생길 수 없다. 반대로 iOS 홈화면 썸네일이 예전 그림이면
+ * 예전 시각이 그대로 찍혀 있어 얼마나 묵은 화면인지 알 수 있다.
+ * (kstToday/kstTimeLabel/toDateKey 구현은 lib/kstDate.ts — 위에서 재수출한다.)
  */
-export function kstTimeLabel(now: Date = new Date()): string {
-  const shifted = new Date(now.getTime() + KST_OFFSET_MS)
-  const hh = String(shifted.getUTCHours()).padStart(2, '0')
-  const mm = String(shifted.getUTCMinutes()).padStart(2, '0')
-  return `${hh}:${mm}`
-}
-
-export function toDateKey(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
 export function dayLabel(d: Date): string {
   return `${d.getMonth() + 1}/${d.getDate()}(${DOW[d.getDay()]})`
 }

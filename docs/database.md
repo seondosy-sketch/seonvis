@@ -36,6 +36,8 @@
 | `attendance_audit_log` | 기술인 출근부 — 마감취소·과거기록수정 등 감사이력 |
 | `project_participant_links` | 기술인 출근부 — Project List 슬롯(director/staff_*) ↔ engineer_contacts 확정 연결(Phase 3) |
 | `widget_tokens` | 홈화면 위젯 — 사용자별 위젯 이미지 접근 토큰 |
+| `google_calendar_connection` | Google Calendar 연동 — 연결 정보(대상 캘린더·색상 매핑·상태) |
+| `project_calendar_events` | Google Calendar 연동 — Hub 일정 ↔ Google 이벤트 연결 |
 
 ---
 
@@ -409,3 +411,34 @@ result_score 또는 evaluation 비어있으면 → "진행중"
 `BEGIN...ROLLBACK` 검증 후 **2026-07-30 실사용 DB(seonvis)에 적용 완료**(사용자 승인). 적용 후 Supabase 보안
 어드바이저에 `rls_enabled_no_policy`(INFO, `public.widget_tokens`)가 뜨는데 이는 **의도된 상태**다 — 정책 없이
 RLS만 켜서 클라이언트 접근을 전면 차단하고 service role로만 다루는 설계이기 때문이다.
+---
+
+## Google Calendar 연동 테이블 (google_calendar_connection, project_calendar_events)
+
+상세는 [docs/google-calendar/README.md](./google-calendar/README.md) 참고. 프로젝트 일정을 Google
+Calendar `미래사업팀` 캘린더로 **단방향** 전송한다(Hub가 원본, Google 변경사항은 가져오지 않음).
+
+- `google_calendar_connection(id boolean PK check(id), auth_mode, google_account_email, calendar_id,
+  calendar_summary, calendar_time_zone, color_map jsonb, status, last_ok_at, last_synced_at, last_error,
+  connected_by_email, created_at, updated_at)` — 팀 전체가 캘린더 하나를 쓰므로 `id`를
+  `boolean + check(id)`로 두어 **행이 하나만** 존재하게 강제한다. 인증이 **서비스 계정** 방식이라
+  **refresh token을 저장하는 컬럼이 없다** — 개인키는 Vercel 환경변수(`GOOGLE_SA_PRIVATE_KEY`)에만 둔다.
+  `color_map`은 연결 시점에 `colors.get`으로 조회·매칭한 `{행위: colorId}` 결과다(하드코딩 아님).
+- `project_calendar_events(project_id uuid, action, calendar_id, google_event_id, event_date, title,
+  fingerprint, sync_state, retry_count, last_synced_at, last_error, created_at, updated_at)` —
+  **PK는 `(project_id, action)`**. Hub는 일정 테이블 없이 프로젝트 행에 날짜 컬럼이 흩어져 있어
+  (`announce_date`/`submit_date`/`interview_date`/`bid_date` + `project_tooltips`의
+  `pq_date`/`soq_date`/`notify_date`) 프로젝트 ID와 일정 유형을 합친 키를 쓴다. `project_number`는
+  사용자가 편집할 수 있어 키로 쓰지 않는다.
+  - **`projects.id`에 FK를 걸지 않는다** — 프로젝트가 삭제돼도 "지워야 할 Google 이벤트 ID"를 알아야
+    하므로 이 행이 남아야 한다. 남은 고아 행은 동기화가 감지해 이벤트를 삭제한 뒤 정리한다.
+  - `fingerprint`(날짜|제목|색)가 같으면 Google을 다시 부르지 않는다. 이벤트에도
+    `extendedProperties.private.hub_key`를 심어 표가 유실돼도 기존 이벤트를 되찾는다.
+  - `(calendar_id, google_event_id)` 부분 유니크 인덱스로 한 이벤트를 두 행이 물지 못하게 막는다.
+- 두 테이블 모두 **RLS를 켜고 정책을 만들지 않는다** = anon/authenticated 전부 거부. 접근은 전부
+  service role(`lib/supabase-admin.ts`)이고 관리자 화면도 서버 API를 경유한다.
+
+**마이그레이션**: `supabase/migration_google_calendar.sql` (신규 테이블 2개, 기존 테이블 변경 없음) —
+`BEGIN...ROLLBACK`으로 단일 행 강제·`(project_id, action)` 중복·`google_event_id` 중복·정의되지 않은
+`action` 차단을 검증한 뒤 **2026-07-30 실사용 DB(seonvis)에 적용 완료**(사용자 승인).
+적용 후 보안 어드바이저에 `rls_enabled_no_policy`(INFO) 2건이 뜨는데 **의도된 상태**다.
