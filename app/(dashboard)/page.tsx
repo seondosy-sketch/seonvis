@@ -239,7 +239,7 @@ export default function DashboardPage() {
         </div>
 
         {/* 달력 */}
-        <div style={{ margin: '10px 12px 0', border: '1px solid #e8e8e6', borderRadius: 8, overflow: 'hidden', background: '#fff' }}>
+        <div style={{ margin: '10px 12px 0' }}>
           <WeeklyCalendar week={week} performing={performing} notes={calNotes} holidays={holidays} teamEvents={teamEvents} onDateClick={d => { setAddEventPopup({ date: d }); setNewEventTitle(''); setNewEventColor('#7c3aed') }} onTeamEventClick={(id, title) => setDeleteConfirm({ id, title })} />
         </div>
 
@@ -374,12 +374,10 @@ export default function DashboardPage() {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gridTemplateRows: '58vh 42vh', height: '100vh', overflow: 'hidden', background: '#f8f8f7', gap: 0 }}>
 
-      {/* 상단 좌 — 달력 */}
+      {/* 상단 좌 — 달력 (스크롤 없이 한 박스에 표시, 휠로 강조 주 이동) */}
       <div style={{ overflow: 'hidden', padding: '16px 16px 8px 24px', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ flex: 1, overflow: 'hidden', borderRadius: 8, border: '1px solid #e8e8e6', background: '#fff' }}>
-          <div style={{ height: '100%', overflow: 'auto' }}>
-            <WeeklyCalendar week={week} performing={performing} notes={calNotes} holidays={holidays} teamEvents={teamEvents} onDateClick={d => { setAddEventPopup({ date: d }); setNewEventTitle(''); setNewEventColor('#7c3aed') }} onTeamEventClick={(id, title) => setDeleteConfirm({ id, title })} />
-          </div>
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          <WeeklyCalendar week={week} performing={performing} notes={calNotes} holidays={holidays} teamEvents={teamEvents} onDateClick={d => { setAddEventPopup({ date: d }); setNewEventTitle(''); setNewEventColor('#7c3aed') }} onTeamEventClick={(id, title) => setDeleteConfirm({ id, title })} />
         </div>
       </div>
 
