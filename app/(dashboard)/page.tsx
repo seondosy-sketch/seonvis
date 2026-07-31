@@ -6,7 +6,7 @@ import WeeklyCalendar, { Holiday, TeamEvent } from '../components/WeeklyCalendar
 import { PerformingProject } from '@/lib/supabase'
 import { useIsMobile } from '@/lib/useIsMobile'
 // 주차·일정 계산은 홈화면 위젯(app/api/widget/summary)과 공유한다 — lib/weekSchedule.ts 참고.
-import { getCurrentWeek, getWeekBounds, fmtDate, buildSchedule } from '@/lib/weekSchedule'
+import { getCurrentWeek, getWeekBounds, buildSchedule } from '@/lib/weekSchedule'
 
 interface PendingAction { name: string; args: Record<string, unknown> }
 interface Message {
@@ -45,13 +45,21 @@ export default function DashboardPage() {
     const projByName: Record<string, any> = {}
     if (projs) for (const p of projs) projByName[p.name] = p
 
+    // 달력과 금주 일정에는 연도가 살아 있는 ISO 날짜(YYYY-MM-DD)를 그대로 넘긴다.
+    // 예전에는 fmtDate로 "M/D"까지 줄여서 넘겼는데, 그러면 연도가 사라지고 받는 쪽
+    // (WeeklyCalendar / buildSchedule)이 현재 주의 연도를 다시 붙여버려서 2025년 일정이
+    // 2026년 같은 월·일에 찍혔다(예: 2025-11-25 잠실5단지 → 2026-11-25).
+    // 화면에 보여줄 "M/D" 변환은 표시하는 쪽에서 한다.
+    const keepYear = (raw: string | null | undefined): string => (raw?.trim() ? raw : '추후')
+
     if (perf && perf.length > 0) {
-      // performing_projects 날짜가 비어 있으면 projects.bid_date로 보완
+      // 날짜는 Project List(projects)를 우선한다 — 주간보고 화면(app/dashboard.tsx)도 같은 규칙이다.
+      // Project List에 없는 수동 추가 행만 저장된 "M/D"를 그대로 쓴다(애초에 연도 정보가 없다).
       const merged = (perf as PerformingProject[]).map(p => ({
         ...p,
-        result_date: p.result_date?.trim() ? p.result_date : fmtDate(projByName[p.name]?.bid_date ?? null),
-        submit_date: p.submit_date?.trim() ? p.submit_date : fmtDate(projByName[p.name]?.submit_date ?? null),
-        interview_date: p.interview_date?.trim() ? p.interview_date : fmtDate(projByName[p.name]?.interview_date ?? null),
+        submit_date: keepYear(projByName[p.name]?.submit_date ?? p.submit_date),
+        interview_date: keepYear(projByName[p.name]?.interview_date ?? p.interview_date),
+        result_date: keepYear(projByName[p.name]?.bid_date ?? p.result_date),
       }))
       setPerforming(merged)
     } else {
@@ -68,9 +76,9 @@ export default function DashboardPage() {
             status: '진행중' as const,
             name: p.name,
             director: '',
-            submit_date: fmtDate(p.submit_date),
-            interview_date: fmtDate(p.interview_date),
-            result_date: fmtDate(p.bid_date),
+            submit_date: keepYear(p.submit_date),
+            interview_date: keepYear(p.interview_date),
+            result_date: keepYear(p.bid_date),
             fee: null,
             note: '',
             sort_order: i,

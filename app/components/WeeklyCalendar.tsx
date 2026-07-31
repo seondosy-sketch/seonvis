@@ -3,6 +3,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { PerformingProject } from '@/lib/supabase'
 import { useIsMobile } from '@/lib/useIsMobile'
+// 날짜 파싱은 금주 일정·홈화면 위젯과 같은 함수를 쓴다 — 따로 복사해두면 연도 처리가
+// 어긋나서 지난해 일정이 올해 달력에 찍히는 종류의 버그가 다시 생긴다.
+import { parseDate } from '@/lib/weekSchedule'
 // 보이는 주 창(window) 계산 — 계산 규칙과 테스트는 lib/calendarWindow.ts 참고
 import {
   HOME_ROW,
@@ -43,15 +46,6 @@ const TYPE_META = {
   submit:    { label: '제출', color: '#1d4ed8', bg: '#eff6ff' },
   interview: { label: '발표', color: '#b45309', bg: '#fffbeb' },
   result:    { label: '개찰', color: '#15803d', bg: '#f0fdf4' },
-}
-
-function parseDate(raw: string, refYear: number): Date | null {
-  if (!raw || raw === '추후' || raw === '-') return null
-  const m1 = raw.match(/^(\d{1,2})\/(\d{1,2})$/)
-  if (m1) return new Date(refYear, parseInt(m1[1]) - 1, parseInt(m1[2]))
-  const m2 = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/)
-  if (m2) return new Date(parseInt(m2[1]), parseInt(m2[2]) - 1, parseInt(m2[3]))
-  return null
 }
 
 function parseDateISO(iso: string): Date | null {

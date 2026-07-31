@@ -26,7 +26,7 @@
 import { createSupabaseAdminClient } from '@/lib/supabase-admin'
 import type { PerformingProject } from '@/lib/supabase'
 import { permissionFor, type MenuPermission } from '@/lib/menuConfig'
-import { buildSchedule, fmtDate, getWeekBounds, parseDate, type WeekSchedule } from '@/lib/weekSchedule'
+import { buildSchedule, getWeekBounds, parseDate, type WeekSchedule } from '@/lib/weekSchedule'
 // 프로젝트명 정제는 HWPX 보고서와 같은 규칙을 재사용한다 — 위젯 전용 규칙을 새로 만들면
 // 같은 프로젝트가 문서와 위젯에서 다른 이름으로 보인다.
 import { formatProjectNameForReport } from '@/lib/hwpx/projectName'
@@ -282,6 +282,14 @@ export async function loadWidgetSummary(
 type AdminClient = ReturnType<typeof createSupabaseAdminClient>
 
 /**
+ * 날짜는 연도가 살아 있는 ISO(YYYY-MM-DD)로 그대로 넘긴다.
+ * fmtDate로 "M/D"까지 줄이면 연도가 사라지고, buildSchedule/parseDate가 기준 주의 연도를
+ * 다시 붙여 2025년 일정이 2026년 같은 월·일에 찍힌다. 표시용 "M/D"는 렌더 단계에서 만든다.
+ * 웹 대시보드(app/(dashboard)/page.tsx)도 같은 규칙 — 두 화면이 어긋나면 안 된다.
+ */
+const keepYear = (raw: string | null | undefined): string => (raw?.trim() ? raw : '추후')
+
+/**
  * 주차별 수행 프로젝트 — 대시보드 홈의 loadPerforming과 같은 규칙을 주차 여러 개로 확장한다.
  * 해당 주차 performing_projects가 있으면 그것을 쓰고 빈 날짜는 projects로 보완한다.
  * 아직 그 주차 데이터를 만들지 않았으면 projects에서 직접 만든다(취소·드랍·자사평가 제외).
@@ -328,9 +336,9 @@ async function loadPerformingByWeek(
           const src = projByName.get(p.name)
           return {
             ...p,
-            result_date: p.result_date?.trim() ? p.result_date : fmtDate(src?.bid_date ?? null),
-            submit_date: p.submit_date?.trim() ? p.submit_date : fmtDate(src?.submit_date ?? null),
-            interview_date: p.interview_date?.trim() ? p.interview_date : fmtDate(src?.interview_date ?? null),
+            submit_date: keepYear(src?.submit_date ?? p.submit_date),
+            interview_date: keepYear(src?.interview_date ?? p.interview_date),
+            result_date: keepYear(src?.bid_date ?? p.result_date),
           }
         }),
       )
@@ -342,9 +350,9 @@ async function loadPerformingByWeek(
         status: '진행중' as const,
         name: p.name,
         director: '',
-        submit_date: fmtDate(p.submit_date),
-        interview_date: fmtDate(p.interview_date),
-        result_date: fmtDate(p.bid_date),
+        submit_date: keepYear(p.submit_date),
+        interview_date: keepYear(p.interview_date),
+        result_date: keepYear(p.bid_date),
         fee: null,
         note: '',
         sort_order: i,
