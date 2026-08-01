@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { checkInIsInMonth, isDateOccupied, monthBounds, nightsOverlappingMonth } from './monthRange'
+import { checkInIsInMonth, isDateOccupied, monthBounds, monthRangeInclusive, nightsOverlappingMonth } from './monthRange'
 
 describe('monthBounds', () => {
   it('일반적인 달', () => {
@@ -47,6 +47,17 @@ describe('월 경계를 걸치는 숙박 (1/31 체크인 ~ 2/2 체크아웃)', (
   it('체크인월(1월)에만 재무 귀속 대상', () => {
     expect(checkInIsInMonth(stay, 2026, 1)).toBe(true)
     expect(checkInIsInMonth(stay, 2026, 2)).toBe(false)
+  })
+})
+
+describe('monthRangeInclusive', () => {
+  it('말일을 포함하는 범위를 준다', () => {
+    expect(monthRangeInclusive(2026, 8)).toEqual({ start: '2026-08-01', end: '2026-08-31' })
+    expect(monthRangeInclusive(2026, 4)).toEqual({ start: '2026-04-01', end: '2026-04-30' })
+  })
+  it('2월 말일은 윤년 여부를 따른다', () => {
+    expect(monthRangeInclusive(2026, 2).end).toBe('2026-02-28')
+    expect(monthRangeInclusive(2028, 2).end).toBe('2028-02-29')
   })
 })
 

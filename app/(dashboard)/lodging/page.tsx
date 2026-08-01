@@ -6,7 +6,7 @@ import { useIsMobile } from '@/lib/useIsMobile'
 import { useMenuPermission } from '@/app/components/PermissionsProvider'
 import { LodgingHotel, LodgingRecord } from '@/lib/lodging/types'
 import { buildGuestDirectory } from '@/lib/lodging/guestDirectory'
-import { isDateOccupied, monthOverlapQuery } from '@/lib/lodging/monthRange'
+import { isDateOccupied, monthOverlapQuery, monthRangeInclusive } from '@/lib/lodging/monthRange'
 import { buildFinancialSummary, buildOccupancySummary } from '@/lib/lodging/summary'
 import { formatStayPeriod } from '@/lib/lodging/period'
 import { LodgingEmployeeRef, LodgingEngineerRef, LodgingProjectRef } from './types'
@@ -72,9 +72,14 @@ export default function LodgingPage() {
 
   const loadProjects = useCallback(() => {
     // 프로젝트 선택 목록도 프로젝트 List와 같은 공사번호 순으로 보여준다(lib/projectOrder.ts).
-    supabase.from('projects').select('id,name').order('project_number', { ascending: true }).then(({ data }) => {
-      setProjects((data ?? []) as LodgingProjectRef[])
-    })
+    // 날짜·상태까지 읽는 건 기술인 출근부와 같은 일정 기준으로 목록을 거르기 위함이다.
+    supabase
+      .from('projects')
+      .select('id,name,project_number,announce_date,interview_date,bid_date,status')
+      .order('project_number', { ascending: true })
+      .then(({ data }) => {
+        setProjects((data ?? []) as LodgingProjectRef[])
+      })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -224,7 +229,10 @@ export default function LodgingPage() {
                         {r.project_name_snapshot || '(비프로젝트)'} · {r.hotel_name_snapshot} · {r.room_type} · {formatStayPeriod(r.check_in, r.check_out)}
                       </span>
                       {canWrite && (
-                        <button onClick={() => setFormModal({ record: r })} style={{ ...miniBtn, marginLeft: 8 }}>수정</button>
+                        <>
+                          <button onClick={() => setFormModal({ record: r })} style={{ ...miniBtn, marginLeft: 8 }}>수정</button>
+                          <button onClick={() => handleDelete(r)} style={{ ...miniBtn, marginLeft: 4, color: '#b91c1c' }}>삭제</button>
+                        </>
                       )}
                     </div>
                   ))
@@ -251,6 +259,7 @@ export default function LodgingPage() {
           guestCandidates={guestDirectory}
           projects={projects}
           hotels={hotels}
+          fallbackPeriod={monthRangeInclusive(viewYear, viewMonth)}
           currentUserEmail={currentUserEmail}
           onClose={() => setFormModal(null)}
           onSaved={handleSaved}

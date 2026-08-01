@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import { GuestCandidate, LodgingHotel, LodgingRecord, WorkDateType } from '@/lib/lodging/types'
 import { searchGuestDirectory } from '@/lib/lodging/guestDirectory'
@@ -8,6 +8,7 @@ import { findOverlappingStays } from '@/lib/lodging/duplicateCheck'
 import { formatStayPeriod, nightsBetween, previewTotalPrice } from '@/lib/lodging/period'
 import { lodgingRecordErrorMessage } from '@/lib/lodging/errors'
 import { formatWon } from '@/lib/export/format'
+import { buildProjectOptions, projectFilterPeriod } from '@/lib/lodging/projectOptions'
 import { LodgingProjectRef } from '../types'
 
 const PURPOSE_OPTIONS = ['면접 준비', '기술제안서 작성', '현장조사', '교육', '출장', '회의', '워크샵', '기타']
@@ -24,6 +25,8 @@ interface LodgingFormModalProps {
   guestCandidates: GuestCandidate[]
   projects: LodgingProjectRef[]
   hotels: LodgingHotel[]
+  /** 체크인·체크아웃을 아직 안 넣었을 때 프로젝트 목록을 거를 기간(보고 있는 달). */
+  fallbackPeriod: { start: string; end: string }
   currentUserEmail: string
   onClose: () => void
   onSaved: (record: LodgingRecord) => void
@@ -37,7 +40,7 @@ interface SelectedGuest {
 }
 
 export default function LodgingFormModal({
-  record, existingRecords, guestCandidates, projects, hotels, currentUserEmail, onClose, onSaved, onToast,
+  record, existingRecords, guestCandidates, projects, hotels, fallbackPeriod, currentUserEmail, onClose, onSaved, onToast,
 }: LodgingFormModalProps) {
   const supabase = createSupabaseBrowserClient()
   const [busy, setBusy] = useState(false)
@@ -50,7 +53,7 @@ export default function LodgingFormModal({
   const [guestDropdownOpen, setGuestDropdownOpen] = useState(false)
 
   const [projectQuery, setProjectQuery] = useState(record?.project_name_snapshot ?? '')
-  const [selectedProject, setSelectedProject] = useState<LodgingProjectRef | null>(
+  const [selectedProject, setSelectedProject] = useState<{ id: string; name: string } | null>(
     record?.project_id ? { id: record.project_id, name: record.project_name_snapshot } : null,
   )
   const [projectDropdownOpen, setProjectDropdownOpen] = useState(false)
@@ -73,16 +76,33 @@ export default function LodgingFormModal({
   const [memo, setMemo] = useState(record?.memo ?? '')
 
   const guestMatches = useMemo(() => searchGuestDirectory(guestCandidates, guestQuery), [guestCandidates, guestQuery])
-  const projectMatches = useMemo(() => {
-    const q = projectQuery.trim()
-    if (!q) return []
-    return projects.filter(p => p.name.includes(q)).slice(0, 20)
-  }, [projects, projectQuery])
+  // 프로젝트 목록은 기술인 출근부와 같은 일정 기준으로 거른다 — 검색어를 비워두면 이 숙박 기간에
+  // 해당하는 프로젝트만, 검색하면 기간 밖 프로젝트까지 찾아준다(lib/lodging/projectOptions.ts).
+  const projectPeriod = useMemo(
+    () => projectFilterPeriod(checkIn, checkOut, fallbackPeriod),
+    [checkIn, checkOut, fallbackPeriod],
+  )
+  const projectMatches = useMemo(
+    () => buildProjectOptions({
+      projects,
+      periodStart: projectPeriod.start,
+      periodEnd: projectPeriod.end,
+      query: projectQuery === selectedProject?.name ? '' : projectQuery,
+    }),
+    [projects, projectPeriod, projectQuery, selectedProject],
+  )
+  // 숙소는 등록된 목록이 많지 않아 열면 전부 보여주고, 입력하면 좁힌다. 이미 고른 숙소의 이름이
+  // 그대로 들어 있을 때(다시 펼친 경우)도 그 한 건만 남기지 않고 전체를 보여준다.
+  const selectedHotelName = useMemo(
+    () => hotels.find(h => h.id === selectedHotelId)?.name ?? null,
+    [hotels, selectedHotelId],
+  )
   const hotelMatches = useMemo(() => {
     const q = hotelQuery.trim()
-    if (!q) return []
-    return hotels.filter(h => h.name.includes(q)).slice(0, 20)
-  }, [hotels, hotelQuery])
+    const showAll = !q || q === selectedHotelName
+    const list = showAll ? hotels : hotels.filter(h => h.name.includes(q))
+    return list.slice(0, 30)
+  }, [hotels, hotelQuery, selectedHotelName])
 
   const nights = nightsBetween(checkIn, checkOut)
   const previewTotal = previewTotalPrice(Number(pricePerNight) || 0, nights, Number(roomCount) || 0)
@@ -101,6 +121,11 @@ export default function LodgingFormModal({
       record?.id,
     )
   }, [existingRecords, selectedGuest, checkIn, checkOut, record?.id])
+
+  const closeProjectDropdown = useCallback(() => setProjectDropdownOpen(false), [])
+  const closeHotelDropdown = useCallback(() => setHotelDropdownOpen(false), [])
+  const projectBoxRef = useCloseOnOutsideClick(projectDropdownOpen, closeProjectDropdown)
+  const hotelBoxRef = useCloseOnOutsideClick(hotelDropdownOpen, closeHotelDropdown)
 
   function pickHotel(hotel: LodgingHotel) {
     setSelectedHotelId(hotel.id)
@@ -207,23 +232,58 @@ export default function LodgingFormModal({
           </Field>
 
           <Field label="프로젝트 (선택)">
-            <div style={{ position: 'relative' }}>
-              <input
-                value={projectQuery}
-                onChange={e => { setProjectQuery(e.target.value); setSelectedProject(null); setProjectDropdownOpen(true) }}
-                onFocus={() => setProjectDropdownOpen(true)}
-                placeholder="프로젝트명 검색 (비워두면 비프로젝트 숙박)"
-                style={inp}
-              />
-              {projectDropdownOpen && projectMatches.length > 0 && (
+            <div ref={projectBoxRef} style={{ position: 'relative' }}>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input
+                  value={projectQuery}
+                  onChange={e => { setProjectQuery(e.target.value); setSelectedProject(null); setProjectDropdownOpen(true) }}
+                  onFocus={() => setProjectDropdownOpen(true)}
+                  placeholder="목록에서 선택하거나 검색 (비워두면 비프로젝트 숙박)"
+                  style={inp}
+                />
+                <button
+                  type="button"
+                  onClick={() => setProjectDropdownOpen(v => !v)}
+                  style={caretBtn}
+                  title="프로젝트 목록 열기"
+                >{projectDropdownOpen ? '▲' : '▼'}</button>
+                {selectedProject && (
+                  <button
+                    type="button"
+                    onClick={() => { setSelectedProject(null); setProjectQuery(''); setProjectDropdownOpen(false) }}
+                    style={caretBtn}
+                    title="선택 해제 (비프로젝트 숙박)"
+                  >✕</button>
+                )}
+              </div>
+              {projectDropdownOpen && (
                 <div style={dropdown}>
-                  {projectMatches.map(p => (
-                    <div key={p.id} style={dropdownItem} onClick={() => { setSelectedProject(p); setProjectQuery(p.name); setProjectDropdownOpen(false) }}>
-                      {p.name}
+                  {projectMatches.length === 0 ? (
+                    <div style={{ ...dropdownItem, color: '#999', cursor: 'default' }}>
+                      이 기간에 해당하는 프로젝트가 없습니다 — 이름이나 공사번호로 검색해 보세요.
                     </div>
-                  ))}
+                  ) : (
+                    projectMatches.map(({ project, inPeriod }) => (
+                      <div
+                        key={project.id}
+                        style={dropdownItem}
+                        onClick={() => {
+                          setSelectedProject({ id: project.id, name: project.name })
+                          setProjectQuery(project.name)
+                          setProjectDropdownOpen(false)
+                        }}
+                      >
+                        <span style={{ color: '#bbb', marginRight: 6 }}>{project.project_number}</span>
+                        <span>{project.name}</span>
+                        {!inPeriod && <span style={{ color: '#c2410c', fontSize: 11, marginLeft: 6 }}>일정 밖</span>}
+                      </div>
+                    ))
+                  )}
                 </div>
               )}
+            </div>
+            <div style={{ fontSize: 11, color: '#999', marginTop: 4 }}>
+              공고일~발표일이 숙박 기간과 겹치는 프로젝트만 기본 표시합니다(기술인 출근부와 같은 기준).
             </div>
           </Field>
 
@@ -233,22 +293,38 @@ export default function LodgingFormModal({
           </Field>
 
           <Field label="숙소">
-            <div style={{ position: 'relative' }}>
-              <input
-                value={hotelQuery}
-                onChange={e => { setHotelQuery(e.target.value); setSelectedHotelId(null); setHotelDropdownOpen(true) }}
-                onFocus={() => setHotelDropdownOpen(true)}
-                placeholder="숙소 이름 (직접 입력 가능)"
-                style={inp}
-              />
-              {hotelDropdownOpen && hotelMatches.length > 0 && (
+            <div ref={hotelBoxRef} style={{ position: 'relative' }}>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input
+                  value={hotelQuery}
+                  onChange={e => { setHotelQuery(e.target.value); setSelectedHotelId(null); setHotelDropdownOpen(true) }}
+                  onFocus={() => setHotelDropdownOpen(true)}
+                  placeholder="목록에서 선택하거나 직접 입력"
+                  style={inp}
+                />
+                <button
+                  type="button"
+                  onClick={() => setHotelDropdownOpen(v => !v)}
+                  style={caretBtn}
+                  title="숙소 목록 열기"
+                >{hotelDropdownOpen ? '▲' : '▼'}</button>
+              </div>
+              {hotelDropdownOpen && (
                 <div style={dropdown}>
-                  {hotelMatches.map(h => (
-                    <div key={h.id} style={dropdownItem} onClick={() => pickHotel(h)}>
-                      <span>{h.name}</span>
-                      <span style={{ color: '#999', fontSize: 11, marginLeft: 8 }}>{formatWon(h.default_price_per_night)}</span>
+                  {hotelMatches.length === 0 ? (
+                    <div style={{ ...dropdownItem, color: '#999', cursor: 'default' }}>
+                      {hotels.length === 0
+                        ? '등록된 숙소가 없습니다 — "숙소 관리"에서 추가하거나 그냥 직접 입력하세요.'
+                        : '일치하는 숙소가 없습니다 — 직접 입력한 이름 그대로 저장됩니다.'}
                     </div>
-                  ))}
+                  ) : (
+                    hotelMatches.map(h => (
+                      <div key={h.id} style={dropdownItem} onClick={() => pickHotel(h)}>
+                        <span>{h.name}</span>
+                        <span style={{ color: '#999', fontSize: 11, marginLeft: 8 }}>{formatWon(h.default_price_per_night)}</span>
+                      </div>
+                    ))
+                  )}
                 </div>
               )}
             </div>
@@ -306,6 +382,23 @@ export default function LodgingFormModal({
   )
 }
 
+/**
+ * 목록을 펼친 상태에서 바깥을 누르면 닫는다. 프로젝트·숙소 드롭다운은 검색어가 없어도 전체 목록을
+ * 펼치므로, 고르지 않고 다른 칸으로 넘어갔을 때 아래 입력칸을 계속 가리지 않게 해야 한다.
+ */
+function useCloseOnOutsideClick(open: boolean, close: () => void) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onPointerDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) close()
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    return () => document.removeEventListener('mousedown', onPointerDown)
+  }, [open, close])
+  return ref
+}
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div style={{ marginBottom: 10 }}>
@@ -318,5 +411,6 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 const inp: React.CSSProperties = { width: '100%', height: 34, padding: '0 10px', border: '1px solid #e8e8e6', borderRadius: 6, fontSize: 13, boxSizing: 'border-box' }
 const dropdown: React.CSSProperties = { position: 'absolute', top: '100%', left: 0, right: 0, background: '#fff', border: '1px solid #e8e8e6', borderRadius: 6, marginTop: 2, maxHeight: 180, overflowY: 'auto', zIndex: 10, boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }
 const dropdownItem: React.CSSProperties = { padding: '6px 10px', fontSize: 12, cursor: 'pointer' }
+const caretBtn: React.CSSProperties = { flexShrink: 0, width: 34, height: 34, border: '1px solid #e8e8e6', background: '#fff', borderRadius: 6, fontSize: 11, cursor: 'pointer', color: '#666' }
 const primaryBtn: React.CSSProperties = { border: 'none', background: '#111', color: '#fff', borderRadius: 6, padding: '8px 16px', fontSize: 12, cursor: 'pointer' }
 const miniBtn: React.CSSProperties = { border: '1px solid #e8e8e6', background: '#fff', borderRadius: 6, padding: '8px 14px', fontSize: 12, cursor: 'pointer' }

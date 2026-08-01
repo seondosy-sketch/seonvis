@@ -29,6 +29,16 @@ export function monthBounds(year: number, month: number): { monthStart: string; 
 }
 
 /**
+ * year/month(1~12 라벨)의 [이 달 1일, 이 달 말일] — 끝을 포함하는 범위가 필요할 때 쓴다.
+ * `monthBounds`의 nextMonthStart는 끝을 포함하지 않아, 그대로 "기간 끝"으로 넘기면 다음 달 1일까지
+ * 범위에 들어간다(프로젝트 일정 겹침 판정 등).
+ */
+export function monthRangeInclusive(year: number, month: number): { start: string; end: string } {
+  const lastDay = new Date(year, month, 0).getDate()
+  return { start: `${year}-${pad2(month)}-01`, end: `${year}-${pad2(month)}-${pad2(lastDay)}` }
+}
+
+/**
  * Supabase 쿼리 조건 — 이 달과 "겹치는" 모든 레코드를 가져온다(걸치는 예약도 포함).
  * 사용: supabase.from('lodging_records').select('*').lt('check_in', nextMonthStart).gt('check_out', monthStart)
  */
