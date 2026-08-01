@@ -40,6 +40,7 @@ export const RESTRICTABLE_MENU_ITEMS: MenuItemConfig[] = [
   { key: 'engineers', label: '기술인 주소록' },
   { key: 'sites', label: '현장 현황' },
   { key: 'attendance', label: '기술인 출근부' },
+  { key: 'lodging', label: '숙박관리' },
   { key: 'trip', label: '출장지원' },
   { key: 'web', label: 'WEB 검색' },
   { key: 'proposal_db', label: '제안서 DB' },
