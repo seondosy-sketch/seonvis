@@ -23,5 +23,8 @@ create index if not exists idx_overtime_employee_tasks_employee
 
 alter table overtime_employee_tasks enable row level security;
 
-create policy "authenticated_full_access" on overtime_employee_tasks
-  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+-- menu_permissions.overtime(none/read/write) — migration_overtime.sql, migration_menu_permission_function.sql 참고.
+create policy "menu_select" on overtime_employee_tasks for select using (private.menu_permission('overtime') <> 'none');
+create policy "menu_insert" on overtime_employee_tasks for insert with check (private.menu_permission('overtime') = 'write');
+create policy "menu_update" on overtime_employee_tasks for update using (private.menu_permission('overtime') = 'write') with check (private.menu_permission('overtime') = 'write');
+create policy "menu_delete" on overtime_employee_tasks for delete using (private.menu_permission('overtime') = 'write');

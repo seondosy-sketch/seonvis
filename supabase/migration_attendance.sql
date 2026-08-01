@@ -235,7 +235,10 @@ create index if not exists idx_attendance_audit_log_actiontype on attendance_aud
 alter table allowed_users
   add column if not exists can_close_attendance boolean not null default false;
 
--- ── RLS: 다른 테이블들과 동일 — 실제 접근 제어는 layout + 항목별 권한(menu_permissions) ──
+-- ── RLS: menu_permissions.attendance(none/read/write)를 DB 단에서 직접 강제한다(lodging
+-- 파일럿과 동일 패턴 — private.menu_permission() 정의는 migration_menu_permission_function.sql
+-- 참고). attendance_replace_director 등 RPC(migration_attendance_director_rpc.sql,
+-- migration_attendance_participant_links_rpc.sql)는 security invoker라 이 정책만으로 함께 보호됨. ──
 alter table project_participants enable row level security;
 alter table attendance_month_closures enable row level security;
 alter table attendance_records enable row level security;
@@ -243,15 +246,32 @@ alter table attendance_closure_snapshot_rows enable row level security;
 alter table project_change_history enable row level security;
 alter table attendance_audit_log enable row level security;
 
-create policy "authenticated_full_access" on project_participants
-  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "authenticated_full_access" on attendance_month_closures
-  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "authenticated_full_access" on attendance_records
-  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "authenticated_full_access" on attendance_closure_snapshot_rows
-  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "authenticated_full_access" on project_change_history
-  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "authenticated_full_access" on attendance_audit_log
-  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "attendance_select" on project_participants for select using (private.menu_permission('attendance') <> 'none');
+create policy "attendance_insert" on project_participants for insert with check (private.menu_permission('attendance') = 'write');
+create policy "attendance_update" on project_participants for update using (private.menu_permission('attendance') = 'write') with check (private.menu_permission('attendance') = 'write');
+create policy "attendance_delete" on project_participants for delete using (private.menu_permission('attendance') = 'write');
+
+create policy "attendance_select" on attendance_month_closures for select using (private.menu_permission('attendance') <> 'none');
+create policy "attendance_insert" on attendance_month_closures for insert with check (private.menu_permission('attendance') = 'write');
+create policy "attendance_update" on attendance_month_closures for update using (private.menu_permission('attendance') = 'write') with check (private.menu_permission('attendance') = 'write');
+create policy "attendance_delete" on attendance_month_closures for delete using (private.menu_permission('attendance') = 'write');
+
+create policy "attendance_select" on attendance_records for select using (private.menu_permission('attendance') <> 'none');
+create policy "attendance_insert" on attendance_records for insert with check (private.menu_permission('attendance') = 'write');
+create policy "attendance_update" on attendance_records for update using (private.menu_permission('attendance') = 'write') with check (private.menu_permission('attendance') = 'write');
+create policy "attendance_delete" on attendance_records for delete using (private.menu_permission('attendance') = 'write');
+
+create policy "attendance_select" on attendance_closure_snapshot_rows for select using (private.menu_permission('attendance') <> 'none');
+create policy "attendance_insert" on attendance_closure_snapshot_rows for insert with check (private.menu_permission('attendance') = 'write');
+create policy "attendance_update" on attendance_closure_snapshot_rows for update using (private.menu_permission('attendance') = 'write') with check (private.menu_permission('attendance') = 'write');
+create policy "attendance_delete" on attendance_closure_snapshot_rows for delete using (private.menu_permission('attendance') = 'write');
+
+create policy "attendance_select" on project_change_history for select using (private.menu_permission('attendance') <> 'none');
+create policy "attendance_insert" on project_change_history for insert with check (private.menu_permission('attendance') = 'write');
+create policy "attendance_update" on project_change_history for update using (private.menu_permission('attendance') = 'write') with check (private.menu_permission('attendance') = 'write');
+create policy "attendance_delete" on project_change_history for delete using (private.menu_permission('attendance') = 'write');
+
+create policy "attendance_select" on attendance_audit_log for select using (private.menu_permission('attendance') <> 'none');
+create policy "attendance_insert" on attendance_audit_log for insert with check (private.menu_permission('attendance') = 'write');
+create policy "attendance_update" on attendance_audit_log for update using (private.menu_permission('attendance') = 'write') with check (private.menu_permission('attendance') = 'write');
+create policy "attendance_delete" on attendance_audit_log for delete using (private.menu_permission('attendance') = 'write');

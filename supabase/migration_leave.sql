@@ -95,7 +95,8 @@ create table if not exists holidays (
   created_at timestamptz default now()
 );
 
--- RLS: 다른 테이블들과 동일 — 실제 접근 제어는 app/(dashboard)/layout.tsx가 담당
+-- RLS: menu_permissions.leave(none/read/write)를 DB 단에서 직접 강제한다(lodging 파일럿과 동일
+-- 패턴 — private.menu_permission() 정의는 migration_menu_permission_function.sql 참고).
 alter table leave_types enable row level security;
 alter table annual_leave_balances enable row level security;
 alter table annual_leave_balance_history enable row level security;
@@ -103,18 +104,35 @@ alter table leave_records enable row level security;
 alter table leave_record_dates enable row level security;
 alter table holidays enable row level security;
 
-create policy "authenticated_full_access" on leave_types
-  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "authenticated_full_access" on annual_leave_balances
-  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "authenticated_full_access" on annual_leave_balance_history
-  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "authenticated_full_access" on leave_records
-  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "authenticated_full_access" on leave_record_dates
-  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "authenticated_full_access" on holidays
-  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "menu_select" on leave_types for select using (private.menu_permission('leave') <> 'none');
+create policy "menu_insert" on leave_types for insert with check (private.menu_permission('leave') = 'write');
+create policy "menu_update" on leave_types for update using (private.menu_permission('leave') = 'write') with check (private.menu_permission('leave') = 'write');
+create policy "menu_delete" on leave_types for delete using (private.menu_permission('leave') = 'write');
+
+create policy "menu_select" on annual_leave_balances for select using (private.menu_permission('leave') <> 'none');
+create policy "menu_insert" on annual_leave_balances for insert with check (private.menu_permission('leave') = 'write');
+create policy "menu_update" on annual_leave_balances for update using (private.menu_permission('leave') = 'write') with check (private.menu_permission('leave') = 'write');
+create policy "menu_delete" on annual_leave_balances for delete using (private.menu_permission('leave') = 'write');
+
+create policy "menu_select" on annual_leave_balance_history for select using (private.menu_permission('leave') <> 'none');
+create policy "menu_insert" on annual_leave_balance_history for insert with check (private.menu_permission('leave') = 'write');
+create policy "menu_update" on annual_leave_balance_history for update using (private.menu_permission('leave') = 'write') with check (private.menu_permission('leave') = 'write');
+create policy "menu_delete" on annual_leave_balance_history for delete using (private.menu_permission('leave') = 'write');
+
+create policy "menu_select" on leave_records for select using (private.menu_permission('leave') <> 'none');
+create policy "menu_insert" on leave_records for insert with check (private.menu_permission('leave') = 'write');
+create policy "menu_update" on leave_records for update using (private.menu_permission('leave') = 'write') with check (private.menu_permission('leave') = 'write');
+create policy "menu_delete" on leave_records for delete using (private.menu_permission('leave') = 'write');
+
+create policy "menu_select" on leave_record_dates for select using (private.menu_permission('leave') <> 'none');
+create policy "menu_insert" on leave_record_dates for insert with check (private.menu_permission('leave') = 'write');
+create policy "menu_update" on leave_record_dates for update using (private.menu_permission('leave') = 'write') with check (private.menu_permission('leave') = 'write');
+create policy "menu_delete" on leave_record_dates for delete using (private.menu_permission('leave') = 'write');
+
+create policy "menu_select" on holidays for select using (private.menu_permission('leave') <> 'none');
+create policy "menu_insert" on holidays for insert with check (private.menu_permission('leave') = 'write');
+create policy "menu_update" on holidays for update using (private.menu_permission('leave') = 'write') with check (private.menu_permission('leave') = 'write');
+create policy "menu_delete" on holidays for delete using (private.menu_permission('leave') = 'write');
 
 -- 시드: 휴가 유형 기본 8종
 insert into leave_types (name, deducts_annual_leave, default_deduction_unit, sort_order)

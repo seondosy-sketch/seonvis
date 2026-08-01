@@ -48,8 +48,11 @@ create unique index if not exists project_participant_links_participant_unique
 create index if not exists idx_project_participant_links_project on project_participant_links (project_id);
 create index if not exists idx_project_participant_links_engineer on project_participant_links (engineer_id);
 
--- RLS: 기존 attendance 테이블들과 동일한 원칙 — 실제 접근 제어는 layout + menu_permissions('attendance').
+-- RLS: menu_permissions.attendance(none/read/write) — migration_attendance.sql,
+-- migration_menu_permission_function.sql 참고.
 alter table project_participant_links enable row level security;
 
-create policy "authenticated_full_access" on project_participant_links
-  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "attendance_select" on project_participant_links for select using (private.menu_permission('attendance') <> 'none');
+create policy "attendance_insert" on project_participant_links for insert with check (private.menu_permission('attendance') = 'write');
+create policy "attendance_update" on project_participant_links for update using (private.menu_permission('attendance') = 'write') with check (private.menu_permission('attendance') = 'write');
+create policy "attendance_delete" on project_participant_links for delete using (private.menu_permission('attendance') = 'write');

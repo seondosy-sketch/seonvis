@@ -1,0 +1,16 @@
+-- trip/web/proposal_db (RESTRICTABLE_MENU_ITEMS의 나머지 3개 키) 조사 결과 — 실행되는 DDL 없음,
+-- 이 파일은 조사 결과만 기록한다.
+--
+-- trip(출장지원, app/(dashboard)/trip/page.tsx): 자체 테이블이 없다. projects/project_tooltips만
+-- 읽고, project_tooltips.interview_location/location만 upsert한다. 이 테이블은 projects(프로젝트
+-- List)도 같이 쓰는 공유 테이블이라, migration_shared_master_data_write_permission.sql에서
+-- project_tooltips의 insert/update를 "projects:write 또는 trip:write" OR 조건으로 고쳤다
+-- (원래 projects:write만 요구하도록 잘못 걸었던 걸 바로잡음 — trip:write만 있고 projects:write가
+-- 없는 사용자가 출장지원 화면에서 저장하지 못하는 회귀가 있었다).
+--
+-- web(WEB 검색, app/(dashboard)/web/page.tsx): Supabase 쿼리가 전혀 없는 순수 정적 외부 링크
+-- 모음(회사/검색엔진/입찰/지도/AI 도구 바로가기). 대응하는 테이블이 없어 적용할 RLS 자체가 없다.
+--
+-- proposal_db(제안서 DB): app/sidebar.tsx에서 href가 'https://proposal-db-mvp.vercel.app/'로,
+-- 이 코드베이스·이 Supabase 프로젝트와 무관한 별도로 배포된 외부 애플리케이션을 새 탭으로 여는
+-- 링크일 뿐이다. 이 프로젝트의 DB 범위 밖이라 적용 대상이 아니다.

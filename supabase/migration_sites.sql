@@ -48,10 +48,17 @@ create table if not exists site_sync_logs (
 alter table sites enable row level security;
 alter table site_sync_logs enable row level security;
 
-create policy "authenticated_full_access" on sites
-  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "authenticated_full_access" on site_sync_logs
-  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+-- RLS: menu_permissions.sites(none/read/write)를 DB 단에서 직접 강제한다(lodging 파일럿과 동일
+-- 패턴 — private.menu_permission() 정의는 migration_menu_permission_function.sql 참고).
+create policy "menu_select" on sites for select using (private.menu_permission('sites') <> 'none');
+create policy "menu_insert" on sites for insert with check (private.menu_permission('sites') = 'write');
+create policy "menu_update" on sites for update using (private.menu_permission('sites') = 'write') with check (private.menu_permission('sites') = 'write');
+create policy "menu_delete" on sites for delete using (private.menu_permission('sites') = 'write');
+
+create policy "menu_select" on site_sync_logs for select using (private.menu_permission('sites') <> 'none');
+create policy "menu_insert" on site_sync_logs for insert with check (private.menu_permission('sites') = 'write');
+create policy "menu_update" on site_sync_logs for update using (private.menu_permission('sites') = 'write') with check (private.menu_permission('sites') = 'write');
+create policy "menu_delete" on site_sync_logs for delete using (private.menu_permission('sites') = 'write');
 
 -- 89건 초기 데이터는 구현 시점 1회성 로컬 스크립트가 Project Portfolio.xlsx를 직접 읽어
 -- Supabase REST로 삽입한다 (개인정보라 SQL로 커밋하지 않음 — docs/site-status/05-import-and-sync.md)

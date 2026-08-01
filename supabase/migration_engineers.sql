@@ -59,20 +59,32 @@ create table if not exists engineer_sync_logs (
   note text not null default ''
 );
 
--- RLS: 다른 테이블들과 동일 — 실제 접근 제어는 layout + 항목별 권한(menu_permissions)
+-- RLS: menu_permissions.engineers(none/read/write)를 DB 단에서 직접 강제한다(lodging 파일럿과
+-- 동일 패턴 — private.menu_permission() 정의는 migration_menu_permission_function.sql 참고).
 alter table engineer_contacts enable row level security;
 alter table engineer_specialties enable row level security;
 alter table engineer_contact_specialties enable row level security;
 alter table engineer_sync_logs enable row level security;
 
-create policy "authenticated_full_access" on engineer_contacts
-  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "authenticated_full_access" on engineer_specialties
-  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "authenticated_full_access" on engineer_contact_specialties
-  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "authenticated_full_access" on engineer_sync_logs
-  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "menu_select" on engineer_contacts for select using (private.menu_permission('engineers') <> 'none');
+create policy "menu_insert" on engineer_contacts for insert with check (private.menu_permission('engineers') = 'write');
+create policy "menu_update" on engineer_contacts for update using (private.menu_permission('engineers') = 'write') with check (private.menu_permission('engineers') = 'write');
+create policy "menu_delete" on engineer_contacts for delete using (private.menu_permission('engineers') = 'write');
+
+create policy "menu_select" on engineer_specialties for select using (private.menu_permission('engineers') <> 'none');
+create policy "menu_insert" on engineer_specialties for insert with check (private.menu_permission('engineers') = 'write');
+create policy "menu_update" on engineer_specialties for update using (private.menu_permission('engineers') = 'write') with check (private.menu_permission('engineers') = 'write');
+create policy "menu_delete" on engineer_specialties for delete using (private.menu_permission('engineers') = 'write');
+
+create policy "menu_select" on engineer_contact_specialties for select using (private.menu_permission('engineers') <> 'none');
+create policy "menu_insert" on engineer_contact_specialties for insert with check (private.menu_permission('engineers') = 'write');
+create policy "menu_update" on engineer_contact_specialties for update using (private.menu_permission('engineers') = 'write') with check (private.menu_permission('engineers') = 'write');
+create policy "menu_delete" on engineer_contact_specialties for delete using (private.menu_permission('engineers') = 'write');
+
+create policy "menu_select" on engineer_sync_logs for select using (private.menu_permission('engineers') <> 'none');
+create policy "menu_insert" on engineer_sync_logs for insert with check (private.menu_permission('engineers') = 'write');
+create policy "menu_update" on engineer_sync_logs for update using (private.menu_permission('engineers') = 'write') with check (private.menu_permission('engineers') = 'write');
+create policy "menu_delete" on engineer_sync_logs for delete using (private.menu_permission('engineers') = 'write');
 
 -- 시드: 전문분야 12종
 insert into engineer_specialties (name, sort_order)

@@ -48,17 +48,23 @@ create index if not exists idx_overtime_work_records_date
 create index if not exists idx_overtime_work_records_project
   on overtime_work_records (project_id);
 
--- RLS: 로그인 여부·허용 사용자 여부는 app/(dashboard)/layout.tsx에서 이미 확인하므로,
--- 테이블 단에서는 다른 테이블들과 동일하게 "인증된 사용자는 전체 접근 가능" 정도만 방어적으로 건다.
+-- RLS: menu_permissions.overtime(none/read/write)를 DB 단에서 직접 강제한다(lodging 파일럿과
+-- 동일 패턴 — private.menu_permission() 정의는 migration_menu_permission_function.sql 참고).
 alter table overtime_employees enable row level security;
 alter table overtime_projects enable row level security;
 alter table overtime_work_records enable row level security;
 
-create policy "authenticated_full_access" on overtime_employees
-  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "menu_select" on overtime_employees for select using (private.menu_permission('overtime') <> 'none');
+create policy "menu_insert" on overtime_employees for insert with check (private.menu_permission('overtime') = 'write');
+create policy "menu_update" on overtime_employees for update using (private.menu_permission('overtime') = 'write') with check (private.menu_permission('overtime') = 'write');
+create policy "menu_delete" on overtime_employees for delete using (private.menu_permission('overtime') = 'write');
 
-create policy "authenticated_full_access" on overtime_projects
-  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "menu_select" on overtime_projects for select using (private.menu_permission('overtime') <> 'none');
+create policy "menu_insert" on overtime_projects for insert with check (private.menu_permission('overtime') = 'write');
+create policy "menu_update" on overtime_projects for update using (private.menu_permission('overtime') = 'write') with check (private.menu_permission('overtime') = 'write');
+create policy "menu_delete" on overtime_projects for delete using (private.menu_permission('overtime') = 'write');
 
-create policy "authenticated_full_access" on overtime_work_records
-  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "menu_select" on overtime_work_records for select using (private.menu_permission('overtime') <> 'none');
+create policy "menu_insert" on overtime_work_records for insert with check (private.menu_permission('overtime') = 'write');
+create policy "menu_update" on overtime_work_records for update using (private.menu_permission('overtime') = 'write') with check (private.menu_permission('overtime') = 'write');
+create policy "menu_delete" on overtime_work_records for delete using (private.menu_permission('overtime') = 'write');
