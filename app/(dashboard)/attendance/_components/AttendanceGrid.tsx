@@ -139,7 +139,11 @@ export default function AttendanceGrid({
                   return (
                     <tr key={participant.id}>
                       {rowIdx === 0 && projectCell(rows.length)}
-                      <td style={infoCell}>{participant.role}{participant.is_director && <span style={directorBadge}>단장</span>}</td>
+                      <td style={infoCell}>
+                        {participant.is_director
+                          ? <>{participant.role}<span style={directorBadge}>단장</span></>
+                          : (specialty?.name ?? participant.role)}
+                      </td>
                       <td style={infoCell}>{specialty?.name ?? ''}</td>
                       <td style={infoCell}>{engineer?.name ?? '(알 수 없음)'}</td>
                       {days.map((d, i) => {
