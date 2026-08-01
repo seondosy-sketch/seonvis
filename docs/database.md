@@ -208,10 +208,23 @@ result_score 또는 evaluation 비어있으면 → "진행중"
 |---|---|---|
 | `id` | uuid PK | |
 | `email` | text UNIQUE | 소문자 이메일 |
-| `name` | text | 이름 |
-| `menu_permissions` | jsonb | 항목별 권한 `{키: 'none'\|'read'\|'write'}`. 키는 `lib/menuConfig.ts`, 없으면 write. none=사이드바 숨김, read=조회만(수정 UI 숨김) — UI 레벨 제어 (`migration_menu_permissions_v2.sql`) |
+| `note` | text default `''` | 관리자가 남기는 식별 메모(소속·직급·용도 등). 마이그레이션 `supabase/migration_allowed_user_note.sql` |
+| `is_admin` | boolean default `false` | |
+| `added_by_email` | text (nullable) | **누가 승인했는지** — 관리자 화면에 "○○님이 승인"으로 표시 |
+| `menu_permissions` | jsonb | 항목별 권한 `{키: 'none'\|'read'\|'write'}`. 키는 `lib/menuConfig.ts`, 없으면 write. none=사이드바 숨김, read=조회만(수정 UI 숨김). RLS도 이 값을 강제한다(`migration_menu_permission_function.sql`) |
+| `can_close_attendance` | boolean default `false` | 기술인 출근부 월 마감/마감취소 전용 권한 |
 | `hidden_menu_items` | text[] | **deprecated** — menu_permissions로 이관됨. 코드에서 더 이상 읽지 않음 |
 | `created_at` | timestamptz | |
+
+> **2026-08-01 실제 DB 확인 결과 정정**: 이 표에 `name` 컬럼이 있다고 적혀 있었으나 **실재하지 않는다**
+> (`information_schema.columns` 직접 조회). 그래서 관리자 화면은 이메일만 보여줄 수 있었고, 시간이
+> 지나면 누구인지 알 수 없었다 — 이 문제 때문에 `note`를 추가했다. 실제로 있는데 빠져 있던
+> `is_admin`/`added_by_email`/`can_close_attendance`도 함께 표에 넣었다.
+
+**사용자 식별 메모(`note`)**: 자유 텍스트다. 이름 하나로 구조화하지 않은 이유는 실제로 필요한 게
+"제안서팀 김OO 대리 — 출근부만 사용" 같은 맥락이기 때문이다. 승인 요청(`access_requests`)을 승인하면
+신청자가 적은 `name`/`reason`이 `"이름 — 사유"` 형태로 초기값이 되고, 이미 메모가 있으면 덮어쓰지
+않는다(`app/api/admin/access-requests/route.ts`).
 
 **주의**: 관리자(`ADMIN_EMAILS`)는 이 테이블에 없어도 접근 가능하며 항상 전체 쓰기 권한.
 

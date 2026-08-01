@@ -10,6 +10,8 @@ interface AllowedUser {
   added_by_email: string | null
   created_at: string
   menu_permissions: Record<string, MenuPermission> | null
+  /** 관리자가 남기는 식별 메모 — 이메일만으로는 누구인지 알 수 없어서 둔 자유 텍스트 */
+  note: string | null
 }
 
 interface AccessRequest {
@@ -31,11 +33,13 @@ export default function AdminUserManager() {
   const [loading, setLoading] = useState(true)
   const [reqLoading, setReqLoading] = useState(true)
   const [newEmail, setNewEmail] = useState('')
+  const [newNote, setNewNote] = useState('')
   const [newIsAdmin, setNewIsAdmin] = useState(false)
   const [adding, setAdding] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [expandedEmail, setExpandedEmail] = useState<string | null>(null)
   const [savingPerms, setSavingPerms] = useState<string | null>(null)
+  const [savingNote, setSavingNote] = useState<string | null>(null)
 
   async function fetchUsers() {
     setLoading(true)
@@ -61,10 +65,11 @@ export default function AdminUserManager() {
     const res = await fetch('/api/admin/users', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: newEmail.trim(), is_admin: newIsAdmin }),
+      body: JSON.stringify({ email: newEmail.trim(), is_admin: newIsAdmin, note: newNote.trim() }),
     })
     if (res.ok) {
       setNewEmail('')
+      setNewNote('')
       setNewIsAdmin(false)
       await fetchUsers()
     } else {
@@ -87,6 +92,19 @@ export default function AdminUserManager() {
     })
     if (res.ok) await fetchUsers()
     setSavingPerms(null)
+  }
+
+  /** 메모 저장 — 입력칸을 벗어날 때 값이 바뀐 경우에만 보낸다(권한 토글과 같은 즉시 저장 방식). */
+  async function saveNote(u: AllowedUser, note: string) {
+    if (note === (u.note ?? '')) return
+    setSavingNote(u.email)
+    const res = await fetch('/api/admin/users', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: u.email, note }),
+    })
+    if (res.ok) await fetchUsers()
+    setSavingNote(null)
   }
 
   async function handleDelete(email: string) {
@@ -170,6 +188,15 @@ export default function AdminUserManager() {
                   style={{ width: '100%', padding: '8px 12px', border: '1px solid #e0e0de', borderRadius: 6, fontSize: 13, outline: 'none', boxSizing: 'border-box' }}
                 />
               </div>
+              <div style={{ flex: 1, minWidth: 220 }}>
+                <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>메모 (선택)</div>
+                <input
+                  value={newNote}
+                  onChange={e => setNewNote(e.target.value)}
+                  placeholder="제안서팀 김OO 대리"
+                  style={{ width: '100%', padding: '8px 12px', border: '1px solid #e0e0de', borderRadius: 6, fontSize: 13, outline: 'none', boxSizing: 'border-box' }}
+                />
+              </div>
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#555', paddingBottom: 2 }}>
                 <input type="checkbox" checked={newIsAdmin} onChange={e => setNewIsAdmin(e.target.checked)} />
                 관리자
@@ -217,9 +244,24 @@ export default function AdminUserManager() {
                             )
                           })()}
                         </div>
-                        <div style={{ fontSize: 11, color: '#bbb', marginTop: 2 }}>
-                          {new Date(u.created_at).toLocaleDateString('ko-KR')} 추가
-                          {u.added_by_email && ` · ${u.added_by_email}`}
+                        {/* 이메일만으로는 누구인지 알 수 없어 메모를 바로 고칠 수 있게 둔다 —
+                            입력칸을 벗어나면 저장된다. */}
+                        <input
+                          key={`${u.id}:${u.note ?? ''}`}
+                          defaultValue={u.note ?? ''}
+                          onBlur={e => saveNote(u, e.target.value.trim())}
+                          disabled={savingNote === u.email}
+                          placeholder="메모 — 소속·직급 등 누구인지 알아볼 수 있게"
+                          style={{
+                            width: '100%', maxWidth: 420, marginTop: 6, padding: '5px 9px',
+                            border: '1px solid #ececea', borderRadius: 5, fontSize: 12, color: '#444',
+                            background: savingNote === u.email ? '#f4f4f2' : '#fff',
+                            outline: 'none', boxSizing: 'border-box',
+                          }}
+                        />
+                        <div style={{ fontSize: 11, color: '#bbb', marginTop: 4 }}>
+                          {new Date(u.created_at).toLocaleDateString('ko-KR')}
+                          {u.added_by_email ? ` · ${u.added_by_email}님이 승인` : ' 추가'}
                         </div>
                       </div>
                       <button
