@@ -6,6 +6,22 @@
 
 ## 2026-07
 
+### 프로젝트 정렬을 공사번호 순으로 통일
+- 기준: **프로젝트 List의 공사번호 오름차순**. 비교 로직은 `lib/projectOrder.ts` 한 곳(`compareProjectNumber` / `byProjectNumber`)
+- 예전에는 화면마다 제각각이었다 — 대부분 공사번호 **내림차순**, 출장지원은 **발표일순**, 숙소 프로젝트 선택은 **용역명순**
+- 적용: 주간/월간보고(화면 + **HWPX 출력물**), 출장지원, 출근부, 연장근무(화면 + 인쇄물 + 프로젝트 관리), 숙소, 메인 달력, 홈 위젯, 미래봇
+- 주간/월간보고는 저장된 행까지 다시 줄 세우고 `sort_order`를 재부여 — 화면·저장·HWPX 순서가 항상 일치. 지난주 복사도 같은 순서로 다시 세운다
+- 연장근무는 `source_project_id`로 공사번호를 찾아 정렬(`lib/overtime/projectOrder.ts`). 입찰 List에 없는 수동 등록 행은 뒤쪽에 모여 기존 `sort_order` 순서를 유지하고, 연계 행의 정렬순서 입력칸은 쓰이지 않으므로 비활성 처리
+- 공사번호는 text라 자릿수·접두어가 섞여도 사람이 기대하는 순서가 나오도록 숫자 인식 비교(`numeric: true`) 사용. 번호 없는 행은 맨 뒤
+
+### 프로젝트 List 서식 정리 + 발표일 "서면평가"
+- 프로젝트 List 표: 수정/삭제 버튼을 맨 왼쪽 → **맨 오른쪽 "관리" 열**로 이동(읽기 권한이면 열 자체를 만들지 않음). 합계 행이 용역명 열 아래에 붙던 열 어긋남도 함께 정정
+- 발표/면접일 입력 폼에 **"날짜 지정 / 서면평가"** 선택 추가. 서면평가를 고르면 날짜는 비워 저장
+- 신규 컬럼 `projects.interview_written`(boolean) — 마이그레이션 `supabase/migration_project_interview_written.sql`. 기존에 `project_tooltips.interview_time`에 "서면평가"로 적어둔 건들을 이 컬럼으로 이관
+- 주간/월간보고: 서면평가 건은 기다릴 발표가 없으므로 **제출일이 지나는 즉시 개찰 항목으로 이동**(`categorizeProject`). 월간 표 발표/면접 열은 "서면평가"로 표기
+- 판정은 `lib/projectStatus.ts`의 `isWrittenEvaluation()` 하나로 통일 — 주간보고 수동 추가 행에 사람이 적어 넣은 "서면"/"서면평가" 텍스트도 같이 인정
+- 영향 파일: `app/(dashboard)/projects/page.tsx`, `app/dashboard.tsx`, `lib/projectStatus.ts`, `lib/hwpx/monthlyFormat.ts`, `app/api/hwpx/route.ts`
+
 ### 발주예상 Project 이월 로직 개선
 - 이전 주 1주만 보던 방식 → DB에서 현재 주 이전 중 가장 최근 주차를 직접 쿼리
 - 중간에 저장 없이 여러 주가 비어 있어도 항상 마지막 저장 데이터를 가져옴

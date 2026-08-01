@@ -1511,6 +1511,8 @@ interface MonthlyProjectInput {
   /** Project List의 ISO 날짜 — 있으면 상단표·달력이 이 값을 우선한다. */
   list_submit_date?: unknown
   list_interview_date?: unknown
+  /** Project List의 서면평가 표시(projects.interview_written) — true면 발표/면접 열이 "서면평가". */
+  list_interview_written?: unknown
   list_bid_date?: unknown
 }
 
@@ -1572,7 +1574,7 @@ function normalizeMonthlyProjects(performing: unknown, baseYear: number): Monthl
       period: formatMonthlyDurationMonths(p.duration_days),
       pages: formatMonthlyPages(p.proposal_p, p.self_intro_p, p.ppt_p),
       submitDate: formatMonthlyDate(submitSource, baseYear),
-      interviewDate: formatMonthlyInterview(interviewSource, p.interview_time, baseYear),
+      interviewDate: formatMonthlyInterview(interviewSource, p.interview_time, baseYear, p.list_interview_written === true),
       resultDate: formatMonthlyBid(bidSource, p.evaluation, baseYear),
       note: formatMonthlyNote({
         scoreDist: p.score_dist, staffArch: p.staff_arch, staffCivil: p.staff_civil,

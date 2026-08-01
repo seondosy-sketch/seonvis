@@ -13,7 +13,10 @@ import {
   parseLocalDate,
   computeProjectStatus,
   categorizeProject,
+  isWrittenEvaluation,
+  WRITTEN_EVALUATION_LABEL,
 } from '@/lib/projectStatus'
+import { byProjectNumber } from '@/lib/projectOrder'
 import { validateWeeklyCapacity, formatCapacityViolations } from '@/lib/hwpx/capacity'
 
 function weekLabel(week: string): string {
@@ -62,6 +65,8 @@ type MonthlyExtra = {
   note: string
   list_submit_date: string | null
   list_interview_date: string | null
+  /** 서면평가 건이면 true — 월간 발표/면접 열이 날짜 대신 "서면평가"를 쓴다 */
+  list_interview_written: boolean
   list_bid_date: string | null
   proposal_p: string; self_intro_p: string; ppt_p: string
   score_dist: string; interview_time: string
@@ -118,13 +123,19 @@ export default function Dashboard() {
   // 월간 HWPX 전용 — Project List(projects + project_tooltips)에서만 오는 값. 용역명으로 맞춘다.
   // 주간 화면 표시에는 쓰지 않는다(주간 동작 불변).
   const [monthlyExtras, setMonthlyExtras] = useState<Record<string, MonthlyExtra>>({})
+  // 용역명 → 공사번호. performing_projects에는 공사번호 열이 없어서 프로젝트 List에서 맞춰 온다
+  // (주간 표·월간 표·HWPX 출력 순서를 전부 공사번호 순으로 세우는 데 쓴다).
+  const [numberByName, setNumberByName] = useState<Map<string, string>>(new Map())
 
   const loadRefs = useCallback(async () => {
     const { data } = await createSupabaseBrowserClient()
       .from('projects')
-      .select('name,director,client,fee,submit_date,interview_date,bid_date,result_score,evaluation,participants,status_override,staff_arch,staff_civil,staff_mech,staff_safety')
-      .order('project_number', { ascending: false })
-    if (data) setProjectRefs(data as ProjectRef[])
+      .select('name,project_number,director,client,fee,submit_date,interview_date,interview_written,bid_date,result_score,evaluation,participants,status_override,staff_arch,staff_civil,staff_mech,staff_safety')
+      .order('project_number', { ascending: true })
+    if (data) {
+      setProjectRefs(data as ProjectRef[])
+      setNumberByName(new Map((data as { name: string; project_number: string }[]).map(r => [r.name, r.project_number])))
+    }
   }, [])
 
   useEffect(() => {
@@ -138,14 +149,17 @@ export default function Dashboard() {
       supabase.from('performing_projects').select('*').eq('week', week).order('sort_order'),
       supabase.from('expected_projects').select('*').eq('week', week).order('sort_order'),
       supabase.from('weekly_meta').select('*').eq('week', week).maybeSingle(),
-      createSupabaseBrowserClient().from('projects').select('name,project_number,director,client,fee,duration_days,note,submit_date,interview_date,bid_date,result_score,evaluation,participants,status_override,staff_arch,staff_civil,staff_mech,staff_safety').order('project_number', { ascending: false }),
+      createSupabaseBrowserClient().from('projects').select('name,project_number,director,client,fee,duration_days,note,submit_date,interview_date,interview_written,bid_date,result_score,evaluation,participants,status_override,staff_arch,staff_civil,staff_mech,staff_safety').order('project_number', { ascending: true }),
       createSupabaseBrowserClient().from('project_notes').select('*'),
     ])
     const allRefs = (refs ?? []) as MonthlyProjectRefRow[]
     setProjectRefs(allRefs as ProjectRef[])
+    const numbers = new Map(allRefs.map(r => [r.name, r.project_number]))
+    setNumberByName(numbers)
 
-    // 월간 표의 쪽수·비고(점수 구성)·서면평가 판정은 project_tooltips에만 있다. 주간에는 쓰지 않아
-    // 별도로 읽고 용역명 기준 맵으로 보관한다.
+    // 월간 표의 쪽수·비고(점수 구성)는 project_tooltips에만 있다. 주간에는 쓰지 않아
+    // 별도로 읽고 용역명 기준 맵으로 보관한다. (서면평가 판정은 예전에 여기 interview_time을
+    // 빌려 썼지만 지금은 projects.interview_written이 정식 출처다.)
     const { data: tips } = await createSupabaseBrowserClient()
       .from('project_tooltips')
       .select('project_number,proposal_p,self_intro_p,ppt_p,score_dist,interview_time')
@@ -163,6 +177,7 @@ export default function Dashboard() {
         note: r.note ?? '',
         list_submit_date: r.submit_date ?? null,
         list_interview_date: r.interview_date ?? null,
+        list_interview_written: isWrittenEvaluation(r),
         list_bid_date: r.bid_date ?? null,
         proposal_p: t?.proposal_p ?? '', self_intro_p: t?.self_intro_p ?? '', ppt_p: t?.ppt_p ?? '',
         score_dist: t?.score_dist ?? '', interview_time: t?.interview_time ?? '',
@@ -197,17 +212,30 @@ export default function Dashboard() {
       r.staff_safety? `-안전 ${r.staff_safety}`: '',
     ].filter(Boolean).join(' ')
 
+    // 서면평가 건은 발표일 칸에 날짜 대신 "서면평가"라고 적는다 — 주간 표·HWPX가 그대로 쓰고,
+    // 이 행이 나중에 수동 행으로 남아도 isWrittenEvaluation이 같은 판정을 내린다.
+    const fmtInterview = (r: ProjectRef) =>
+      isWrittenEvaluation(r) ? WRITTEN_EVALUATION_LABEL : fmtDate(r.interview_date)
+
     const toPerf = (r: ProjectRef, status: '개찰' | '진행중', i: number): PerformingProject => ({
       status, week,
       name: r.name,
       director: r.director ?? '',
       submit_date: fmtDate(r.submit_date),
-      interview_date: fmtDate(r.interview_date),
+      interview_date: fmtInterview(r),
       result_date: fmtDate(r.bid_date),
       fee: r.fee ?? null,
       note: makeNote(r),
       sort_order: i,
     })
+
+    // 프로젝트 List가 정한 공사번호 순으로 줄 세우고 sort_order를 다시 매긴다. 화면 표시,
+    // 저장, HWPX 출력(서버는 받은 배열 순서를 그대로 쓴다)이 전부 이 순서를 따르게 하려면
+    // 한 곳에서 확정해야 한다. 공사번호가 없는 수동 추가 행은 맨 뒤로 밀린다.
+    const orderRows = (rows: PerformingProject[]): PerformingProject[] =>
+      [...rows]
+        .sort(byProjectNumber(r => numbers.get(r.name), r => r.name))
+        .map((r, i) => ({ ...r, sort_order: i }))
 
     if (p && p.length > 0) {
       const refMap = new Map(allRefs.map(r => [r.name, r]))
@@ -223,7 +251,7 @@ export default function Dashboard() {
             status: cat,
             director: ref.director ?? '',
             submit_date: fmtDate(ref.submit_date),
-            interview_date: fmtDate(ref.interview_date),
+            interview_date: fmtInterview(ref),
             result_date: fmtDate(ref.bid_date),
             fee: ref.fee ?? null,
             note: makeNote(ref),
@@ -231,11 +259,10 @@ export default function Dashboard() {
         }
         // 수동 추가 행: performing_projects 날짜로 직접 판단
         const submit    = parseLocalDate(row.submit_date)
-        const ivRaw     = row.interview_date?.trim() ?? ''
-        const interview = parseLocalDate(ivRaw)
+        const interview = parseLocalDate(row.interview_date)
         const bid       = parseLocalDate(row.result_date)
         if (!submit || submit >= weekStart) return [row]
-        if (ivRaw !== '서면' && (!interview || interview >= weekStart)) return [row]
+        if (!isWrittenEvaluation(row) && (!interview || interview >= weekStart)) return [row]
         if (bid && bid < weekStart) return [] // 제외
         return [row]
       })
@@ -249,20 +276,15 @@ export default function Dashboard() {
         if (cat === '제외') continue
         newRows.push(toPerf(r, cat, recategorized.length + newRows.length))
       }
-      setPerforming([...recategorized, ...newRows])
+      setPerforming(orderRows([...recategorized, ...newRows]))
     } else {
       // 저장된 데이터 없으면 프로젝트 List에서 자동 채우기
-      const gaechalRows: PerformingProject[] = []
-      const jinhaengRows: PerformingProject[] = []
+      const autoRows: PerformingProject[] = []
       for (const r of allRefs) {
         const cat = categorizeProject(r, weekStart)
-        if (cat === '개찰') gaechalRows.push(toPerf(r, '개찰', gaechalRows.length))
-        else if (cat === '진행중') jinhaengRows.push(toPerf(r, '진행중', jinhaengRows.length))
+        if (cat !== '제외') autoRows.push(toPerf(r, cat, autoRows.length))
       }
-      gaechalRows.forEach((r, i) => { r.sort_order = i })
-      jinhaengRows.forEach((r, i) => { r.sort_order = gaechalRows.length + i })
-      const autoRows = [...gaechalRows, ...jinhaengRows]
-      setPerforming(autoRows.length > 0 ? autoRows : [
+      setPerforming(autoRows.length > 0 ? orderRows(autoRows) : [
         EMPTY_PERFORMING('개찰', 0, week),
         EMPTY_PERFORMING('진행중', 1, week),
       ])
@@ -310,7 +332,14 @@ export default function Dashboard() {
       supabase.from('expected_projects').select('*').eq('week', prevWeek).order('sort_order'),
     ])
     if (p && p.length > 0) {
-      setPerforming((p as PerformingProject[]).map(({ id, ...r }) => ({ ...r, week })))
+      // 지난주 행도 프로젝트 List 순서(공사번호)로 다시 세운다 — 지난주에 저장된 sort_order를
+      // 그대로 들고 오면 이번 주 표만 순서가 어긋난다.
+      setPerforming(
+        (p as PerformingProject[])
+          .map(({ id, ...r }) => ({ ...r, week }))
+          .sort(byProjectNumber(r => numberByName.get(r.name), r => r.name))
+          .map((r, i) => ({ ...r, sort_order: i }))
+      )
     }
     if (e && e.length > 0) {
       setExpected((e as ExpectedProject[]).map(({ id, ...r }) => ({ ...r, week })))

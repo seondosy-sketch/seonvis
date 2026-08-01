@@ -5,6 +5,8 @@ export interface ProjectRef {
   fee: number | null
   submit_date: string | null
   interview_date: string | null
+  /** 발표(면접) 없이 서면으로만 평가하는 공고. true면 interview_date는 비어 있다. */
+  interview_written?: boolean | null
   bid_date: string | null
   result_score: string
   evaluation: string
@@ -59,6 +61,24 @@ export function computeProjectStatus(p: ProjectRef): string {
   return '탈락'
 }
 
+/** 월간보고 표기와 주간 화면 셀에 함께 쓰는 "서면평가" 문자열. */
+export const WRITTEN_EVALUATION_LABEL = '서면평가'
+
+/**
+ * 발표(면접) 없이 서면으로만 평가하는 건인지.
+ *
+ * 정식 표시는 `projects.interview_written`(boolean)이다. 발표일 칸에 "서면"/"서면평가"라고
+ * 글자로 적어두던 옛 방식도 함께 받아준다 — 주간보고에서 사람이 직접 추가한 행
+ * (`performing_projects.interview_date`, text 컬럼)은 지금도 그렇게 적을 수 있기 때문이다.
+ */
+export function isWrittenEvaluation(
+  r: { interview_written?: boolean | null; interview_date?: string | null }
+): boolean {
+  if (r.interview_written) return true
+  const raw = r.interview_date?.trim() ?? ''
+  return raw === '서면' || raw === WRITTEN_EVALUATION_LABEL
+}
+
 export function categorizeProject(r: ProjectRef, weekStart: Date): '진행중' | '개찰' | '제외' {
   if (computeProjectStatus(r) === '취소') return '제외'
 
@@ -66,10 +86,10 @@ export function categorizeProject(r: ProjectRef, weekStart: Date): '진행중' |
   const submit = parseLocalDate(r.submit_date)
   if (!submit || submit >= weekStart) return '진행중'
 
-  // 2. 발표/면접일: 공란·추후 → 진행중 / 서면 → 개찰로 / 날짜가 이번주 이후 → 진행중
-  const ivRaw = r.interview_date?.trim() ?? ''
-  if (ivRaw !== '서면') {
-    const interview = parseLocalDate(ivRaw)
+  // 2. 발표/면접일: 공란·추후 → 진행중 / 서면평가 → 개찰로 / 날짜가 이번주 이후 → 진행중
+  //    서면평가는 기다릴 발표가 없으므로 제출일만 지나면 곧장 3단계(개찰)로 내려간다.
+  if (!isWrittenEvaluation(r)) {
+    const interview = parseLocalDate(r.interview_date)
     if (!interview || interview >= weekStart) return '진행중'
   }
 

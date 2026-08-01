@@ -59,7 +59,8 @@
 | `duration_days` | text default `''` | 용역 기간 |
 | `announce_date` | text (nullable) | 공고일. **이 컬럼만 아직 text**(YYYY-MM-DD 저장) |
 | `submit_date` | **date** (nullable) | 제출일 |
-| `interview_date` | **date** (nullable) | 발표/면접일 |
+| `interview_date` | **date** (nullable) | 발표/면접일. `interview_written`이 true면 비워 둔다 |
+| `interview_written` | boolean not null default `false` | 발표(면접) 없이 **서면평가**만 하는 공고. 마이그레이션 `supabase/migration_project_interview_written.sql` |
 | `bid_date` | **date** (nullable) | 개찰일 |
 | `status` | text default `'진행중'`, CHECK(`진행중`\|`수주`\|`탈락`\|`취소`) | 실제 저장되는 상태 컬럼(아래 참고) |
 | `result_score` | text default `''` | 결과 점수 |
@@ -90,7 +91,11 @@ result_score 또는 evaluation 비어있으면 → "진행중"
 ```
 `lib/projectStatus.ts`의 `computeProjectStatus`/`categorizeProject`는 이름이 비슷하지만 **다른 용도**(주간보고 `performing_projects` 행 분류)의 별도 함수다 — 아래 참고.
 
-**`interview_date`가 "서면"/"추후" 같은 비날짜 텍스트를 가질 수 있는지(기술인 출근부 검토 중 확인)**: `projects.interview_date`는 이제 실제 `date` 타입이라 그런 텍스트를 저장할 수 없다. 다만 `lib/projectStatus.ts`의 `categorizeProject`가 여전히 `interview_date === '서면'` 분기를 갖고 있는데, 이는 죽은 코드가 아니다 — `app/dashboard.tsx`(주간보고)가 이 함수를 두 경로에 쓴다: (1) `projects`에서 막 읽어온 행(이제 `date`라 "서면" 불가능), (2) **`performing_projects.interview_date`(실제 `text` 타입)를 사용자가 주간보고 화면에서 직접 자유 텍스트로 수정한 "수동 추가 행"**(2)의 경우 "서면"이 실제로 입력될 수 있다. 즉 이 분기는 `projects` 경로에서는 사실상 도달 불가능하지만 `performing_projects` 경로에서는 여전히 유효하다 — 기술인 출근부는 `projects.interview_date`만 참조하므로 영향받지 않는다.
+**서면평가(`interview_written`) 표시** — 판정은 `lib/projectStatus.ts`의 `isWrittenEvaluation()` 하나로 통일한다.
+- `projects.interview_date`는 `date` 타입이라 "서면" 같은 텍스트를 저장할 수 없다. 그래서 서면평가 여부는 별도 boolean 컬럼 `interview_written`이 정식 출처이고, true면 `interview_date`는 비워 저장한다(프로젝트 List 입력 폼의 발표/면접일 칸에서 "날짜 지정 / 서면평가"를 고른다).
+- `isWrittenEvaluation()`은 `interview_written`이 없을 때 발표일 칸의 옛 표기("서면"/"서면평가")도 서면평가로 받아준다. 이 경로가 필요한 이유는 **`performing_projects.interview_date`가 실제 `text` 타입**이고, 주간보고 화면에서 사용자가 직접 추가·수정한 "수동 추가 행"에는 지금도 그런 글자가 들어올 수 있기 때문이다.
+- 월간보고는 예전에 `project_tooltips.interview_time`에 적힌 "서면평가"를 보고 판정했다. 그 폴백은 `formatMonthlyInterview()`에 남겨뒀지만, 정식 경로는 `interview_written`이다(마이그레이션이 기존 데이터를 이 컬럼으로 옮긴다).
+- 기술인 출근부는 `projects.interview_date`만 참조하므로 서면평가 건은 지금까지처럼 "면접일 없음"으로 처리된다 — 별도 영향 없음.
 
 ---
 

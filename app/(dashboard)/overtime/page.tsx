@@ -7,6 +7,7 @@ import { useIsMobile } from '@/lib/useIsMobile'
 import { DailySummary, Employee, EmployeeTask, Project, ProjectMember, WorkRecord } from '@/lib/overtime/types'
 import { currentPayPeriod, payPeriodDays, payPeriodRange, summarizeByEmployeeAndDate, summaryKey } from '@/lib/overtime/summary'
 import { syncBidProjects } from '@/lib/overtime/sync'
+import { loadProjectNumbers, sortOvertimeProjects } from '@/lib/overtime/projectOrder'
 import { useMenuPermission } from '@/app/components/PermissionsProvider'
 import MonthGrid from './_components/MonthGrid'
 import ProjectGrid from './_components/ProjectGrid'
@@ -100,11 +101,13 @@ export default function OvertimePage() {
     await syncBidProjects(supabase, start, end)
     // 종료된 프로젝트도 과거 기록에서 이름을 보여줘야 하므로 status로 거르지 않고 전체를 가져온다.
     // 담당직원 배정(members)은 프로젝트별 그리드의 행 구성에 쓰이므로 함께 불러온다.
-    const [projRes, memRes] = await Promise.all([
+    const [projRes, memRes, numbers] = await Promise.all([
       supabase.from('overtime_projects').select('*').order('sort_order', { ascending: true }),
       supabase.from('overtime_project_members').select('*'),
+      loadProjectNumbers(supabase),
     ])
-    if (projRes.data) setProjects(projRes.data as Project[])
+    // 표시 순서는 프로젝트 List의 공사번호를 따른다(lib/overtime/projectOrder.ts).
+    if (projRes.data) setProjects(sortOvertimeProjects(projRes.data as Project[], numbers))
     if (memRes.data) setMembers(memRes.data as ProjectMember[])
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])

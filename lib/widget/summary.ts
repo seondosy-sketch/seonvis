@@ -304,7 +304,7 @@ async function loadPerformingByWeek(
     admin
       .from('projects')
       .select('name, submit_date, interview_date, bid_date, participants, status_override, evaluation')
-      .order('project_number', { ascending: false }),
+      .order('project_number', { ascending: true }),
   ])
 
   const projectRows = (projs ?? []) as ProjectRow[]

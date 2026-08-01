@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import { Employee, Project, ProjectMember } from '@/lib/overtime/types'
+import { loadProjectNumbers, sortOvertimeProjects } from '@/lib/overtime/projectOrder'
 
 /**
  * 프로젝트 등록/수정/종료 관리. 삭제는 그 프로젝트를 참조하는 overtime_work_records가
@@ -11,8 +12,11 @@ import { Employee, Project, ProjectMember } from '@/lib/overtime/types'
  *
  * 입찰 연계 프로젝트(source_project_id 있음)는 이름·기간(공고일~발표일)·상태가
  * 프로젝트 List에서 자동 동기화되므로(lib/overtime/sync.ts) 여기서 수정/삭제할 수 없다 —
- * 어차피 다음 페이지 로드 때 덮어써진다. 정렬순서와 담당직원 배정만 이 화면에서 관리한다.
+ * 어차피 다음 페이지 로드 때 덮어써진다. 담당직원 배정만 이 화면에서 관리한다.
  * 입찰 List에 없는 프로젝트(내부 업무 등)의 수동 등록은 기존대로 가능하다.
+ *
+ * 목록 순서도 프로젝트 List의 공사번호를 따른다(lib/overtime/projectOrder.ts) — 그래서
+ * 정렬순서 입력칸은 공사번호가 없는 수동 등록 행에서만 쓰인다(연계 행은 비활성).
  *
  * "담당직원" 지정(8단계 완료 후 추가): 행을 펼치면 직원 체크박스 목록이 나오고, 체크/해제가
  * overtime_project_members에 즉시 저장된다. 실제 근무 이력(overtime_work_records)과 별개의
@@ -38,8 +42,13 @@ export default function ProjectManagerModal({
 
   const load = useCallback(async () => {
     setLoading(true)
-    const { data } = await supabase.from('overtime_projects').select('*').order('sort_order', { ascending: true })
-    if (data) setProjects(data as Project[])
+    const [{ data }, numbers] = await Promise.all([
+      supabase.from('overtime_projects').select('*').order('sort_order', { ascending: true }),
+      loadProjectNumbers(supabase),
+    ])
+    // 목록 순서는 연장근무 화면·인쇄물과 같게 — 입찰 연계 행은 공사번호 순, 수동 등록 행은
+    // 그 뒤에서 사용자가 지정한 정렬순서 순 (lib/overtime/projectOrder.ts).
+    if (data) setProjects(sortOvertimeProjects(data as Project[], numbers))
     setLoading(false)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -165,12 +174,15 @@ export default function ProjectManagerModal({
                       style={{ ...inp, width: 128, ...(synced ? inpDisabled : null) }}
                       title={synced ? '발표일 (프로젝트 List 연동, 없으면 계속 표기)' : '종료일'}
                     />
+                    {/* 입찰 연계 행은 공사번호가 순서를 정하므로 이 값이 쓰이지 않는다 —
+                        기대와 다르게 동작하지 않도록 입력 자체를 막고 이유를 알려준다. */}
                     <input
                       type="number"
                       defaultValue={p.sort_order}
+                      disabled={synced}
                       onBlur={e => { const v = parseInt(e.target.value, 10); if (!Number.isNaN(v) && v !== p.sort_order) updateProject(p.id, { sort_order: v }) }}
-                      style={{ ...inp, width: 64 }}
-                      title="정렬순서"
+                      style={{ ...inp, width: 64, ...(synced ? inpDisabled : null) }}
+                      title={synced ? '입찰 연계 프로젝트는 프로젝트 List의 공사번호 순으로 정렬됩니다' : '정렬순서 (공사번호가 있는 연계 프로젝트 뒤에 이 순서대로 놓입니다)'}
                     />
                     <button onClick={() => setExpandedId(expanded ? null : p.id)} style={expanded ? memberBtnActive : memberBtn}>
                       담당직원{memberIds.size > 0 ? ` (${memberIds.size})` : ''} {expanded ? '▲' : '▼'}

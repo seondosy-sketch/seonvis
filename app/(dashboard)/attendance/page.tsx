@@ -78,7 +78,7 @@ export default function AttendancePage() {
     supabase
       .from('projects')
       .select(PROJECT_COLUMNS)
-      .order('project_number', { ascending: false })
+      .order('project_number', { ascending: true })
       .then(({ data, error }) => {
         if (error) {
           setProjectsError('프로젝트 목록을 불러올 수 없습니다.')

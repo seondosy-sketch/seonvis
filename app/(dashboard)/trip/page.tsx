@@ -5,6 +5,7 @@ import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import AddressMapPreview from '@/app/components/AddressMapPreview'
 import { openDirectionsFromOffice } from '@/lib/kakaoMap'
 import { type ProjectRef, getCurrentWeek, getWeekRange, categorizeProject } from '@/lib/projectStatus'
+import { byProjectNumber } from '@/lib/projectOrder'
 import { useMenuPermission } from '@/app/components/PermissionsProvider'
 
 interface Project extends ProjectRef {
@@ -30,7 +31,7 @@ export default function TripSupportPage() {
   const load = useCallback(async () => {
     setLoading(true)
     const [{ data: projects }, { data: tooltips }] = await Promise.all([
-      supabase.from('projects').select('id, project_number, client, name, director, fee, submit_date, interview_date, bid_date, result_score, evaluation, participants, status_override, staff_arch, staff_civil, staff_mech, staff_safety'),
+      supabase.from('projects').select('id, project_number, client, name, director, fee, submit_date, interview_date, interview_written, bid_date, result_score, evaluation, participants, status_override, staff_arch, staff_civil, staff_mech, staff_safety'),
       supabase.from('project_tooltips').select('project_number, location, interview_location'),
     ])
     const tipMap: Record<string, TooltipData> = {}
@@ -42,7 +43,9 @@ export default function TripSupportPage() {
         const tip = tipMap[p.project_number]
         return { project: p, location: tip?.location ?? '', interviewLocation: tip?.interview_location ?? '' }
       })
-      .sort((a, b) => (a.project.interview_date ?? '9999').localeCompare(b.project.interview_date ?? '9999'))
+      // 예전에는 발표일순이었지만, 프로젝트를 늘어놓는 모든 화면을 프로젝트 List와 같은
+      // 공사번호 순으로 통일한다(lib/projectOrder.ts).
+      .sort(byProjectNumber(it => it.project.project_number, it => it.project.name))
     setItems(list)
     setLoading(false)
   }, [])

@@ -7,6 +7,7 @@ import AddressMapPreview from '@/app/components/AddressMapPreview'
 import { openDirectionsFromOffice } from '@/lib/kakaoMap'
 import { useMenuPermission } from '@/app/components/PermissionsProvider'
 import { syncProjectCalendar } from '@/lib/googleCalendar/trigger'
+import { WRITTEN_EVALUATION_LABEL } from '@/lib/projectStatus'
 
 type ProjectStatus = '진행중' | '수주' | '탈락' | '취소'
 type ProjectType = '면접' | 'SOQ' | '종심제' | 'TP' | 'PQ' | '기타' | ''
@@ -23,6 +24,8 @@ interface Project {
   announce_date: string | null
   submit_date: string | null
   interview_date: string | null
+  /** 발표 없이 서면으로만 평가하는 공고 — true면 interview_date는 비어 있다 */
+  interview_written: boolean
   bid_date: string | null
   result_score: string
   status: ProjectStatus
@@ -74,6 +77,7 @@ interface FormData {
   announce_date: string | null
   submit_date: string | null
   interview_date: string | null
+  interview_written: boolean
   bid_date: string | null
   result_score: string
   evaluation: string
@@ -110,7 +114,7 @@ interface FormData {
 const EMPTY_FORM: FormData = {
   project_number: '', type: '면접', client: '', name: '',
   fee: null, tp_score: '', duration_days: '',
-  announce_date: null, submit_date: null, interview_date: null, bid_date: null,
+  announce_date: null, submit_date: null, interview_date: null, interview_written: false, bid_date: null,
   result_score: '', evaluation: '', award_fee: null,
   participants: '', participation_ratio: '',
   director: '', status_override: null,
@@ -140,6 +144,15 @@ const STATUS_STYLE: Record<ProjectStatus, React.CSSProperties> = {
 
 const TYPES: ProjectType[] = ['면접', 'SOQ', '종심제', 'TP', 'PQ', '기타']
 const STATUSES: ProjectStatus[] = ['진행중', '수주', '탈락', '취소']
+
+// 표 본문 열 순서. 수정/삭제 버튼 열(관리)은 canWrite일 때만 이 뒤에 붙는다.
+const COLUMNS = ['번호', '유형', '발주처', '용역명', '용역비(억)', '제안서', '점수', '공고일', '제출일', '발표일', '개찰일', '결과', '낙찰사', '낙찰액', '참여사', '단장', '건축', '토목', '기계', '안전', '상태']
+
+/** 발표일 칸에 보일 값 — 서면평가 건은 날짜 대신 "서면평가"로 적는다. */
+function interviewText(p: { interview_written?: boolean | null; interview_date: string | null }): string {
+  if (p.interview_written) return WRITTEN_EVALUATION_LABEL
+  return p.interview_date ?? '-'
+}
 
 export default function ProjectsPage() {
   const isMobile = useIsMobile()
@@ -234,7 +247,8 @@ export default function ProjectsPage() {
       form: {
         project_number: p.project_number, type: p.type, client: p.client, name: p.name,
         fee: p.fee, tp_score: p.tp_score, duration_days: p.duration_days,
-        announce_date: p.announce_date, submit_date: p.submit_date, interview_date: p.interview_date, bid_date: p.bid_date,
+        announce_date: p.announce_date, submit_date: p.submit_date, interview_date: p.interview_date,
+        interview_written: !!p.interview_written, bid_date: p.bid_date,
         result_score: p.result_score, evaluation: p.evaluation, award_fee: p.award_fee,
         participants: p.participants, participation_ratio: p.participation_ratio,
         director: p.director, status_override: p.status_override,
@@ -273,7 +287,11 @@ export default function ProjectsPage() {
       const projectPayload = {
         project_number: f.project_number, type: f.type, client: f.client, name: f.name,
         fee: f.fee, tp_score: f.tp_score, duration_days: f.duration_days,
-        announce_date: f.announce_date || null, submit_date: f.submit_date || null, interview_date: f.interview_date || null, bid_date: f.bid_date || null,
+        announce_date: f.announce_date || null, submit_date: f.submit_date || null,
+        // 서면평가는 기다릴 발표가 없다 — 날짜와 동시에 성립할 수 없으므로 날짜는 비워 저장한다.
+        interview_date: f.interview_written ? null : (f.interview_date || null),
+        interview_written: f.interview_written,
+        bid_date: f.bid_date || null,
         result_score: f.result_score, evaluation: f.evaluation, award_fee: f.award_fee,
         participants: f.participants, participation_ratio: f.participation_ratio,
         director: f.director, status_override: f.status_override || null,
@@ -348,7 +366,7 @@ export default function ProjectsPage() {
     const rowsData = filtered.map(p => [
       p.project_number, p.type, p.client, p.name,
       p.fee ?? '', p.tp_score, (tooltipAll[p.project_number]?.score_dist ?? '').match(/^[\d.]+/)?.[0] ?? '',
-      p.announce_date ?? '', p.submit_date ?? '', p.interview_date ?? '', p.bid_date ?? '',
+      p.announce_date ?? '', p.submit_date ?? '', interviewText(p), p.bid_date ?? '',
       p.result_score, p.evaluation, p.participants, p.director,
       p.staff_arch, p.staff_civil, p.staff_mech, p.staff_safety,
       computeStatus(p.result_score, p.evaluation, p.participants, p.status_override), p.note,
@@ -362,6 +380,8 @@ export default function ProjectsPage() {
   }
 
   const totalFee = filtered.reduce((s, p) => s + (p.fee ?? 0), 0)
+  // 수정/삭제 버튼은 표 맨 오른쪽 "관리" 열에 모은다. 읽기 권한이면 빈 열이 남지 않게 아예 뺀다.
+  const headers = canWrite ? [...COLUMNS, '관리'] : COLUMNS
 
   return (
     <div style={{ minHeight: '100vh', background: '#f8f8f7' }}>
@@ -405,27 +425,19 @@ export default function ProjectsPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr style={{ background: '#f4f4f2' }}>
-                {['', '번호', '유형', '발주처', '용역명', '용역비(억)', '제안서', '점수', '공고일', '제출일', '발표일', '개찰일', '결과', '낙찰사', '낙찰액', '참여사', '단장', '건축', '토목', '기계', '안전', '상태'].map(h => (
+                {headers.map(h => (
                   <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 500, color: '#555', borderBottom: '1px solid #e8e8e6', whiteSpace: 'nowrap', position: 'sticky', top: 0, background: '#f4f4f2', zIndex: 1 }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 ? (
-                <tr><td colSpan={22} style={{ padding: 40, textAlign: 'center', color: '#bbb' }}>데이터가 없습니다</td></tr>
+                <tr><td colSpan={headers.length} style={{ padding: 40, textAlign: 'center', color: '#bbb' }}>데이터가 없습니다</td></tr>
               ) : filtered.map(p => {
                 const hasTooltip = !!tooltipAll[p.project_number]
                 const scoreDist = tooltipAll[p.project_number]?.score_dist ?? ''
                 return (
                   <tr key={p.id} style={{ borderBottom: '1px solid #f0f0ee' }}>
-                    <td style={td}>
-                      {canWrite && (
-                        <div style={{ display: 'flex', gap: 4 }}>
-                          <button onClick={() => openEdit(p)} style={editBtn}>수정</button>
-                          <button onClick={() => remove(p.id, p.project_number)} disabled={deleting === p.id} style={deleteBtn}>삭제</button>
-                        </div>
-                      )}
-                    </td>
                     <td style={tdnw}><span style={{ color: '#999' }}>{p.project_number}</span></td>
                     <td style={tdnw}><span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 3, background: '#f0f0ee', color: '#555' }}>{p.type}</span></td>
                     <td style={{ ...tdnw, maxWidth: 120 }}><NoteCell value={p.client} note={notes[p.project_number]?.['client']} onNote={e => openNote(e, p.project_number, 'client')} /></td>
@@ -440,7 +452,7 @@ export default function ProjectsPage() {
                     <td style={tdnw}>{scoreDist.match(/^[\d.]+/)?.[0] ?? ''}</td>
                     <td style={tdnw}>{p.announce_date ?? '-'}</td>
                     <td style={tdnw}><NoteCell value={p.submit_date ?? '-'} note={notes[p.project_number]?.['submit_date']} onNote={e => openNote(e, p.project_number, 'submit_date')} /></td>
-                    <td style={tdnw}><NoteCell value={p.interview_date ?? '-'} note={notes[p.project_number]?.['interview_date']} onNote={e => openNote(e, p.project_number, 'interview_date')} /></td>
+                    <td style={tdnw}><NoteCell value={interviewText(p)} note={notes[p.project_number]?.['interview_date']} onNote={e => openNote(e, p.project_number, 'interview_date')} /></td>
                     <td style={tdnw}><NoteCell value={p.bid_date ?? '-'} note={notes[p.project_number]?.['bid_date']} onNote={e => openNote(e, p.project_number, 'bid_date')} /></td>
                     <td style={tdnw}><span style={{ fontWeight: 600, color: p.result_score ? '#111' : '#ccc' }}>{p.result_score || '-'}</span></td>
                     <td style={{ ...tdnw, maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.evaluation}</td>
@@ -452,15 +464,24 @@ export default function ProjectsPage() {
                     <td style={tdnw}>{p.staff_mech}</td>
                     <td style={tdnw}>{p.staff_safety}</td>
                     <td style={tdnw}><span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 4, ...STATUS_STYLE[computeStatus(p.result_score, p.evaluation, p.participants, p.status_override)] }}>{computeStatus(p.result_score, p.evaluation, p.participants, p.status_override)}</span></td>
+                    {canWrite && (
+                      <td style={td}>
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          <button onClick={() => openEdit(p)} style={editBtn}>수정</button>
+                          <button onClick={() => remove(p.id, p.project_number)} disabled={deleting === p.id} style={deleteBtn}>삭제</button>
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 )
               })}
             </tbody>
             <tfoot>
               <tr style={{ background: '#f9f9f8', borderTop: '2px solid #e8e8e6' }}>
+                {/* 번호~용역명 4칸을 합쳐 라벨, 5번째 칸이 용역비(억) — 합계가 그 열 아래에 오게 맞춘다 */}
                 <td colSpan={4} style={{ padding: '8px 12px', fontSize: 12, color: '#555', fontWeight: 500 }}>합계 {filtered.length}건</td>
-                <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600, color: '#111' }}>{filtered.reduce((s, p) => s + (p.fee ?? 0), 0).toFixed(1)}</td>
-                <td colSpan={12} />
+                <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600, color: '#111' }}>{totalFee.toFixed(1)}</td>
+                <td colSpan={headers.length - 5} />
               </tr>
             </tfoot>
           </table>
@@ -540,14 +561,14 @@ export default function ProjectsPage() {
                   </div>
                 </div>
               )}
-              {(tooltipView.data.pq_date || tooltipView.data.soq_date || tooltipView.project.interview_date || tooltipView.project.bid_date) && (
+              {(tooltipView.data.pq_date || tooltipView.data.soq_date || tooltipView.project.interview_date || tooltipView.project.interview_written || tooltipView.project.bid_date) && (
                 <div style={{ marginTop: 10 }}>
                   <div style={{ fontSize: 11, fontWeight: 600, color: '#555', padding: '6px 10px', background: '#f8f8f7', borderRadius: 6, marginBottom: 4 }}>입찰 일정</div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', borderBottom: '1px solid #f5f5f3' }}>
                     {[
                       { label: 'PQ 제출일', value: tooltipView.data.pq_date || '' },
                       { label: 'SOQ 제출일', value: tooltipView.data.soq_date || '' },
-                      { label: '발표/면접일', value: tooltipView.project.interview_date || '' },
+                      { label: '발표/면접일', value: tooltipView.project.interview_written ? WRITTEN_EVALUATION_LABEL : (tooltipView.project.interview_date || '') },
                       { label: '면접시간', value: tooltipView.data.interview_time || '' },
                       { label: '개찰일', value: tooltipView.project.bid_date || '' },
                       { label: '평가통보일', value: tooltipView.data.notify_date || '' },
@@ -707,12 +728,36 @@ export default function ProjectsPage() {
                   <Field label="제출일"><input style={inp} type="date" value={modal.form.submit_date ?? ''} onChange={e => set('submit_date', e.target.value || null)} /></Field>
                   <Field label="PQ 제출일"><input style={inp} value={modal.form.pq_date} onChange={e => set('pq_date', e.target.value)} placeholder="2026-07-01" /></Field>
                 </Row3>
-                <Row3>
-                  <Field label="발표/면접일"><input style={inp} type="date" value={modal.form.interview_date ?? ''} onChange={e => set('interview_date', e.target.value || null)} /></Field>
+                <Row2>
+                  {/* 발표(면접) 없이 서면으로만 평가하는 공고가 있어 날짜/서면평가를 골라 입력한다.
+                      서면평가를 고르면 날짜는 비워 저장하고, 주간/월간보고는 제출일이 지나는 즉시
+                      이 건을 개찰로 내린다(lib/projectStatus.ts의 categorizeProject). */}
+                  <Field label="발표/면접일">
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <select
+                        style={{ ...inp, width: 104, flexShrink: 0 }}
+                        value={modal.form.interview_written ? 'written' : 'date'}
+                        onChange={e => {
+                          const written = e.target.value === 'written'
+                          setModal(m => ({ ...m, form: { ...m.form, interview_written: written, interview_date: written ? null : m.form.interview_date } }))
+                        }}
+                      >
+                        <option value="date">날짜 지정</option>
+                        <option value="written">{WRITTEN_EVALUATION_LABEL}</option>
+                      </select>
+                      {modal.form.interview_written ? (
+                        <div style={{ ...inp, display: 'flex', alignItems: 'center', color: '#888', background: '#f8f8f7' }}>발표 없이 서면으로 평가</div>
+                      ) : (
+                        <input style={inp} type="date" value={modal.form.interview_date ?? ''} onChange={e => set('interview_date', e.target.value || null)} />
+                      )}
+                    </div>
+                  </Field>
                   <Field label="면접시간"><input style={inp} value={modal.form.interview_time} onChange={e => set('interview_time', e.target.value)} placeholder="5분/4분" /></Field>
+                </Row2>
+                <Row2>
                   <Field label="평가통보일"><input style={inp} value={modal.form.notify_date} onChange={e => set('notify_date', e.target.value)} placeholder="2026-07-10" /></Field>
-                </Row3>
-                <Field label="개찰일"><input style={inp} type="date" value={modal.form.bid_date ?? ''} onChange={e => set('bid_date', e.target.value || null)} /></Field>
+                  <Field label="개찰일"><input style={inp} type="date" value={modal.form.bid_date ?? ''} onChange={e => set('bid_date', e.target.value || null)} /></Field>
+                </Row2>
               </div>
 
               {/* 섹션 6: 결과 */}

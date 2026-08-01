@@ -83,9 +83,12 @@ dashboard.tsx mount (week 변경 시)
         ])
     → performing 분류: categorizeProject() 3단계 규칙 적용
         1. 제출일 < weekStart → 2단계
-        2. 발표/면접일 (서면=개찰, 공란=진행중, 날짜<weekStart) → 3단계
+        2. 발표/면접일 (서면평가=개찰, 공란=진행중, 날짜<weekStart) → 3단계
         3. 개찰일 < weekStart → 제외 / 나머지 → 개찰
     → 저장된 행 재분류 + 새 행 병합
+    → 공사번호 오름차순 정렬 + sort_order 재부여 (lib/projectOrder.ts)
+        · 화면 표시 / DB 저장 / HWPX 출력이 모두 이 배열 순서를 그대로 쓴다
+        · /api/hwpx는 받은 배열을 재정렬하지 않는다 — 주간은 status로 나눠 쓰고, 월간은 통짜로 쓴다
 ```
 
 ## 컴포넌트 의존 관계

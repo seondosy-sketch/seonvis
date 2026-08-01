@@ -147,6 +147,10 @@ describe('formatMonthlyInterview — 발표/면접 열', () => {
   it('날짜가 있으면 interview_time보다 날짜가 우선한다', () => {
     expect(formatMonthlyInterview('2026-08-25', '서면평가', 2026)).toBe('8/25')
   })
+  it('written 플래그(projects.interview_written)면 날짜·interview_time보다 우선한다', () => {
+    expect(formatMonthlyInterview(null, '', 2026, true)).toBe('서면평가')
+    expect(formatMonthlyInterview('2026-08-25', '10분/10분', 2026, true)).toBe('서면평가')
+  })
 })
 
 describe('formatMonthlyBid — 개찰일(낙찰자)', () => {

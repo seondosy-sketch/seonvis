@@ -41,7 +41,7 @@ export default function DashboardPage() {
     const { data: projs } = await supabase
       .from('projects')
       .select('name, submit_date, interview_date, bid_date, participants, status_override, evaluation, result_score')
-      .order('project_number', { ascending: false })
+      .order('project_number', { ascending: true })
     const projByName: Record<string, any> = {}
     if (projs) for (const p of projs) projByName[p.name] = p
 

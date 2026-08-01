@@ -137,14 +137,18 @@ export function formatMonthlyDate(value: unknown, baseYear: number): string {
 // ── 발표/면접 ────────────────────────────────────────────────────────────────
 //
 // projects.interview_date는 date 하나뿐이고 발표와 면접을 구분하지 않는다(확정사항).
+// 서면평가 여부는 projects.interview_written(boolean)이 정식 출처이며, 그 값이 없는 옛 요청은
 // 날짜가 없을 때만 project_tooltips.interview_time의 "서면평가"/"추후"를 대신 쓴다.
 
 export const WRITTEN_EVALUATION = '서면평가'
 export const UNDECIDED = '추후'
 
 export function formatMonthlyInterview(
-  interviewDate: unknown, interviewTime: unknown, baseYear: number
+  interviewDate: unknown, interviewTime: unknown, baseYear: number, written = false
 ): string {
+  // 서면평가는 애초에 발표일이 없는 건이라 날짜보다 먼저 판정한다.
+  if (written) return WRITTEN_EVALUATION
+
   const d = parseIsoDate(interviewDate)
   if (d) return formatMonthlyDate(interviewDate, baseYear)
 

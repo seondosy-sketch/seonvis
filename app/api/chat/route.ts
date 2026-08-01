@@ -149,7 +149,7 @@ export async function POST(request: Request) {
   const { data: projects } = await supabase
     .from('projects')
     .select('project_number,type,client,name,fee,director,evaluation,result_score,participants,status,submit_date,interview_date,bid_date')
-    .order('project_number', { ascending: false })
+    .order('project_number', { ascending: true })
 
   const today = new Date().toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\. /g, '-').replace('.', '')
   const systemPrompt = buildSystemPrompt((projects ?? []) as Record<string, unknown>[], today)

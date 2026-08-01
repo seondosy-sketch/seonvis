@@ -6,6 +6,7 @@ import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import { useIsMobile } from '@/lib/useIsMobile'
 import { Employee, Project, WorkRecord } from '@/lib/overtime/types'
 import { currentPayPeriod, formatHours, payPeriodDays, payPeriodRange, sumHoursByDate, sumHoursByEmployee, sumHoursByProject, summarizeByEmployeeAndDate, summaryKey } from '@/lib/overtime/summary'
+import { loadProjectNumbers, sortOvertimeProjects } from '@/lib/overtime/projectOrder'
 
 const MONTH_NAMES = ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월']
 
@@ -32,10 +33,11 @@ export default function OvertimePrintPage() {
   const load = useCallback(async (year: number, month: number) => {
     setLoading(true)
     const { start, end } = payPeriodRange(year, month)
-    const [empRes, projRes, recRes] = await Promise.all([
+    const [empRes, projRes, recRes, numbers] = await Promise.all([
       supabase.from('overtime_employees').select('*').order('sort_order', { ascending: true }),
       supabase.from('overtime_projects').select('*').order('sort_order', { ascending: true }),
       supabase.from('overtime_work_records').select('*').gte('work_date', start).lte('work_date', end),
+      loadProjectNumbers(supabase),
     ])
 
     if (empRes.error || projRes.error || recRes.error) {
@@ -43,7 +45,8 @@ export default function OvertimePrintPage() {
     } else {
       setError(null)
       setEmployees((empRes.data ?? []) as Employee[])
-      setProjects((projRes.data ?? []) as Project[])
+      // 인쇄물의 프로젝트별 표도 화면과 같은 공사번호 순으로 나온다.
+      setProjects(sortOvertimeProjects((projRes.data ?? []) as Project[], numbers))
       setRecords((recRes.data ?? []) as WorkRecord[])
     }
     setLoading(false)
