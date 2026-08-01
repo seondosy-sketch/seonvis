@@ -35,6 +35,8 @@
 | `project_change_history` | 기술인 출근부 — 프로젝트 변경이력(재공고/변경공고/취소 등의 공식 원본) |
 | `attendance_audit_log` | 기술인 출근부 — 마감취소·과거기록수정 등 감사이력 |
 | `project_participant_links` | 기술인 출근부 — Project List 슬롯(director/staff_*) ↔ engineer_contacts 확정 연결(Phase 3) |
+| `lodging_hotels` | 숙박관리 — 숙소 마스터(자주 쓰는 호텔의 이름/기본단가/주소/연락처) |
+| `lodging_records` | 숙박관리 — 숙박 예약 및 정산 핵심 테이블 (대표 이용자 1명당 1행) |
 | `widget_tokens` | 홈화면 위젯 — 사용자별 위젯 이미지 접근 토큰 |
 | `google_calendar_connection` | Google Calendar 연동 — 연결 정보(대상 캘린더·색상 매핑·상태) |
 | `project_calendar_events` | Google Calendar 연동 — Hub 일정 ↔ Google 이벤트 연결 |
@@ -392,6 +394,31 @@ result_score 또는 evaluation 비어있으면 → "진행중"
 - 백그라운드 자동 동기화(`lib/attendance/autoSync.ts`, 2026-07-22 추가): 후보 1명인 슬롯은 사용자가 동기화 버튼을 누르기 전에 페이지 로드 시점에 자동 반영. 개찰일(`projects.bid_date`, 기존 컬럼 재사용)이 지난 프로젝트, 상태가 '취소'인 프로젝트는 대상 제외.
 - 그리드 표시 필터(`lib/attendance/gridFilters.ts`)도 확장 — 면접일이 비어 있어도 개찰일이 조회 기간 시작보다 이전이면 더 이상 "겹침"으로 보지 않고, 상태가 '취소'인 프로젝트는 상태 필터에서 명시적으로 '취소'를 선택하지 않는 한 활성 참여자·기록 유무와 무관하게 기본적으로 숨긴다.
 - 마이그레이션: `supabase/migration_attendance_participant_links.sql`, `supabase/migration_attendance_participant_links_rpc.sql` — `BEGIN...ROLLBACK` 검증 후 **2026-07-22 실사용 DB(seonvis)에 적용 완료**(사용자 승인). 적용 후 신규 함수 3개 모두 `search_path`를 명시적으로 고정하는 후속 마이그레이션도 함께 적용해 Supabase 보안 어드바이저의 `function_search_path_mutable` 경고를 해소했다.
+
+---
+
+## 숙박관리 테이블 (lodging_hotels, lodging_records)
+
+상세 설계는 [docs/lodging/](./lodging/) 참고. 실제 운영은 "한 객실 = 대표 이용자 1명 등록, 동반자는 보조
+기록"이므로 `lodging_bookings`/`lodging_guests` 다대다로 쪼개지 않고 **`lodging_records` 단일 테이블**을
+쓴다. 각 행 = "대표 이용자가 지정된 객실 예약 및 정산 1건". 향후 실제 투숙자 전원의 개별 이력 관리가
+필요해지면 그때 `lodging_guests` 자식 테이블을 추가한다 — v1에서는 선제적으로 다대다 구조를 만들지 않았다.
+
+- `lodging_hotels(id, name UNIQUE, default_price_per_night, address, phone, memo, is_active, created_at, updated_at)` — 자주 쓰는 호텔 마스터. `lodging_records.hotel_id`가 이 테이블을 참조(ON DELETE SET NULL)하지만, 숙소명은 항상 `hotel_name_snapshot`으로 별도 보존한다.
+- `lodging_records(id, guest_source('engineer_contact'|'overtime_employee'), engineer_contact_id FK→engineer_contacts RESTRICT nullable, overtime_employee_id FK→overtime_employees RESTRICT nullable, guest_name_snapshot, actual_guest_count, companion_names, project_id FK→projects SET NULL nullable, project_name_snapshot, purpose, work_date nullable, work_date_type('interview'|'proposal_submission'|'other') nullable, hotel_id FK→lodging_hotels SET NULL nullable, hotel_name_snapshot, room_type, check_in, check_out, room_count, price_per_night, total_price, memo, created_by, updated_by, created_at, updated_at)`.
+  - **대표 이용자 연결**: 화면은 `engineer_contacts` + `overtime_employees` 통합 검색(기술인/직원 구분 입력란 없음)이지만, DB는 폴리모픽 uuid 대신 두 개의 nullable FK + CHECK로 원본 테이블을 명시 식별한다 — `(guest_source='engineer_contact' AND engineer_contact_id IS NOT NULL AND overtime_employee_id IS NULL) OR (guest_source='overtime_employee' AND overtime_employee_id IS NOT NULL AND engineer_contact_id IS NULL)`. 동일 이름을 자동 병합하지 않는다.
+  - **동반자**: `actual_guest_count`(기본 1, CHECK > 0) + `companion_names`(자유 텍스트) — 인력 테이블과 연결하지 않는 보조 기록.
+  - **`work_date`/`work_date_type`**: 원본 `accommodation.xlsx` 상세카드의 면접일시/제안서작성일 등을 위한 선택 필드. CHECK로 둘 다 NULL이거나 둘 다 NOT NULL이어야 한다.
+  - **`total_price`는 Postgres generated column**(`price_per_night * (check_out - check_in) * room_count`) — 클라이언트가 보낸 값을 신뢰하지 않고 항상 DB가 확정한다. INSERT/UPDATE 페이로드에 이 컬럼을 지정하면 Postgres 에러가 난다. v1은 이 단순 계산식으로 충분하며, 향후 할인/추가요금 등 정산 규칙이 늘어나면 일반 컬럼 + 트리거(또는 애플리케이션 계산)로 전환 가능하도록 설계를 열어둔다.
+  - **숙박기간("2박3일")은 컬럼으로 저장하지 않는다** — 항상 `check_in`/`check_out`에서 파생 계산(`lib/lodging/period.ts`).
+  - **월 경계 처리**: 걸치는 숙박(예: 1/31 체크인~2/2 체크아웃)은 캘린더/리스트/현재투숙/중복검사/정산/출력 전부에서 동일한 겹침 기준(`check_in <= date < check_out`)을 쓴다(`lib/lodging/monthRange.ts`). **숙박현황(occupancy)과 비용정산(financial)은 집계 기준이 다르다** — 현황은 그 달과 겹치는 모든 레코드 기준, 비용(총금액)은 `check_in`이 그 달에 속하는 레코드만 대상으로 체크인월에 전액 귀속한다(`lib/lodging/summary.ts`의 `buildOccupancySummary`/`buildFinancialSummary`).
+  - **중복 숙박 경고**: 동일 대표 이용자 + 기간 겹침(`existing.check_in < new.check_out AND existing.check_out > new.check_in`)이면 저장 전 경고하되 차단하지 않는다(`lib/lodging/duplicateCheck.ts`).
+  - `updated_at`은 DB 트리거 없이 화면 코드가 매 update() 호출 시 명시적으로 세팅한다(`projects`/`trip` 페이지와 동일 관례).
+
+**마이그레이션**: `supabase/migration_lodging.sql`. 순수 계산 로직은 `lib/lodging/*.ts` + `lib/lodging/*.test.ts`(Vitest) — 이 코드베이스 관례상 쿼리 레이어를 두지 않으므로 실제 Supabase 호출은 화면 컴포넌트/API 라우트에 직접 작성한다.
+
+**출력(Export)**: `record-list`/`monthly-summary`는 `lib/export/*`(재사용 가능한 저수준 워크북/PDF 프리미티브)와 `lib/lodging/export/*`(숙박관리 전용 레이아웃)로 구현. `monthly-ledger`(원본 `accommodation.xlsx` 재현 — 좌측 월간달력+우측 상세카드+합계)는 원본 파일을 저장소에서 분석하기 전까지 보류 — 계획 문서 참고.
+
 ---
 
 ## 홈화면 위젯 테이블 (widget_tokens)
@@ -411,6 +438,7 @@ result_score 또는 evaluation 비어있으면 → "진행중"
 `BEGIN...ROLLBACK` 검증 후 **2026-07-30 실사용 DB(seonvis)에 적용 완료**(사용자 승인). 적용 후 Supabase 보안
 어드바이저에 `rls_enabled_no_policy`(INFO, `public.widget_tokens`)가 뜨는데 이는 **의도된 상태**다 — 정책 없이
 RLS만 켜서 클라이언트 접근을 전면 차단하고 service role로만 다루는 설계이기 때문이다.
+
 ---
 
 ## Google Calendar 연동 테이블 (google_calendar_connection, project_calendar_events)
