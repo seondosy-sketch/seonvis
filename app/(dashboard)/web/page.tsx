@@ -6,6 +6,7 @@ const GROUPS = [
     sites: [
       { name: 'SEON',    url: 'https://seon.co.kr/',                                           logo: '/ci/1. Seon.png' },
       { name: '비즈메카', url: 'https://gwp.ktbizoffice.com/EKPHome/Login?compid=seoneng',      logo: '/ci/2. bizmeka.png' },
+      { name: '구글 캘린더', url: 'https://calendar.google.com/calendar/',                      logo: '/ci/21. google calendar.svg' },
     ],
   },
   {
