@@ -67,6 +67,7 @@ export default function AttendancePage() {
   const [engineerSearch, setEngineerSearch] = useState('')
 
   const [managingProject, setManagingProject] = useState<AttendanceProjectRow | null>(null)
+  const [exporting, setExporting] = useState(false)
 
   // 입력자/수정자는 클라이언트 입력값이 아니라 현재 로그인 세션에서만 가져온다(서비스 키 사용 안 함)
   useEffect(() => {
@@ -275,6 +276,46 @@ export default function AttendancePage() {
     })
   }
 
+  /**
+   * 월별 출근명부 xlsx 내려받기. 화면에 걸린 필터를 그대로 넘기면 서버가 같은 필터를 다시 적용해
+   * 조립한다(app/api/attendance/export/route.ts) — 보이는 그대로가 파일로 나온다.
+   */
+  async function downloadMonthlyWorkbook() {
+    if (exporting) return
+    setExporting(true)
+    try {
+      const res = await fetch('/api/attendance/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          year: viewYear,
+          periodMonth: viewPeriodMonth,
+          filters: {
+            projectSearch, statusFilter, specialtyFilter, engineerSearch,
+          },
+        }),
+      })
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}))
+        throw new Error(detail.error ?? '출력 생성에 실패했습니다.')
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      // 파일명은 서버가 헤더로 알려준 값을 그대로 쓴다(HWPX 다운로드와 같은 방식).
+      const disposition = res.headers.get('content-disposition') ?? ''
+      const match = /filename\*=UTF-8''([^;]+)/.exec(disposition)
+      a.download = match ? decodeURIComponent(match[1]) : `기술인출근명부_${viewYear}${String(viewPeriodMonth).padStart(2, '0')}.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e: unknown) {
+      showToast(e instanceof Error ? e.message : '출력 생성에 실패했습니다.')
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const periodLabel = `${days[0].month + 1}/${days[0].day} ~ ${days[days.length - 1].month + 1}/${days[days.length - 1].day}`
   // recordsLoading도 이 게이트에 포함시켜, 월을 바꾼 직후 이전 달의 records가 새 달의 날짜 열과
   // 함께 잠깐이라도 보이는 일이 없게 한다(표를 아예 숨기고 로딩 표시로 대체).
@@ -285,6 +326,10 @@ export default function AttendancePage() {
       <header style={{ background: '#fff', borderBottom: '1px solid #e8e8e6' }}>
         <div style={{ maxWidth: 1400, margin: '0 auto', padding: isMobile ? '0 12px' : '0 24px', height: 56, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span style={{ fontSize: 14, color: '#555' }}>기술인 출근부</span>
+          {/* 출력은 데이터를 바꾸지 않으므로 읽기 권한에도 열어둔다(서버도 같은 기준으로 검증). */}
+          <button onClick={downloadMonthlyWorkbook} disabled={exporting || loading} style={{ ...outlineBtn, opacity: exporting || loading ? 0.6 : 1 }}>
+            {exporting ? '생성 중...' : 'Excel 출력'}
+          </button>
         </div>
       </header>
 
@@ -371,3 +416,4 @@ export default function AttendancePage() {
 const navBtn: React.CSSProperties = { border: 'none', background: 'none', cursor: 'pointer', color: '#888', fontSize: 16, padding: '2px 8px', borderRadius: 4 }
 const inp: React.CSSProperties = { height: 34, padding: '0 10px', border: '1px solid #e8e8e6', borderRadius: 6, fontSize: 13, background: '#fff', boxSizing: 'border-box' }
 const sel: React.CSSProperties = { height: 34, padding: '0 10px', border: '1px solid #e8e8e6', borderRadius: 6, fontSize: 12, background: '#fff', color: '#555' }
+const outlineBtn: React.CSSProperties = { border: '1px solid #e8e8e6', background: '#fff', borderRadius: 6, padding: '8px 14px', fontSize: 12, cursor: 'pointer', color: '#333' }
