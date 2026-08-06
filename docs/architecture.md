@@ -47,13 +47,19 @@ lib/
 브라우저 접속
     ↓
 app/(dashboard)/layout.tsx  [Server Component]
-    → createSupabaseServerClient()로 세션 확인
+    → lib/access.ts getSessionEmail()으로 세션 확인
     → 없으면 /login 리다이렉트
-    → 있으면 ADMIN_EMAILS 확인
-    → 일반 사용자: allowed_users 테이블 조회 (admin client로 RLS 우회)
-    → 없으면 /unauthorized
+    → 있으면 lib/access.ts resolveAccessByEmail()
+        · 관리자 = ADMIN_EMAILS(env) 또는 allowed_users.is_admin → 전 메뉴 write
+        · 그 외: allowed_users 조회 (admin client로 RLS 우회) → menu_permissions
+    → 미승인(관리자도 아니고 행도 없음)이면 /unauthorized
     → 있으면 SidebarContainer 렌더 → children
 ```
+
+**관리자·메뉴 권한 판정은 `lib/access.ts` 한 곳에서만 한다.** 화면(layout, /admin 페이지),
+API(admin/*, widget/token, attendance·lodging export), 캘린더 guard, 위젯 토큰이 모두 같은 함수를
+쓴다 — 예전에는 같은 판정이 8군데 복사돼 있었고 이메일 정규화·관리자 정의가 서로 달랐다.
+서버가 아닌 클라이언트 컴포넌트는 `PermissionsProvider` + `lib/menuConfig.ts`를 쓴다.
 
 ## 데이터 흐름 (메인 대시보드)
 
