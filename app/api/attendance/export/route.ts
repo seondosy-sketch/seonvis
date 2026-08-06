@@ -2,8 +2,8 @@
  * 기술인 출근부 — 월별 출근명부 xlsx 출력 API (Phase 5, docs/attendance/06-implementation-plan.md).
  *
  * UI 권한만 믿지 않고 서버에서 세션과 menu_permissions.attendance를 다시 확인한다
- * (app/api/lodging/export/route.ts와 같은 패턴). 출력은 데이터를 바꾸지 않으므로 read도 허용하고
- * none만 막는다.
+ * (판정은 lib/access.ts 한 곳 — app/api/lodging/export/route.ts도 같은 함수를 쓴다).
+ * 출력은 데이터를 바꾸지 않으므로 read도 허용하고 none만 막는다.
  *
  * "보이는 대로 출력"이 성립하도록 화면이 쓰는 필터 함수(lib/attendance/gridFilters.ts)를 서버에서
  * 그대로 다시 적용한다 — 화면이 계산한 결과를 클라이언트가 통째로 올려보내는 방식은 쓰지 않는다.
@@ -11,8 +11,7 @@
  */
 import { NextResponse } from 'next/server'
 import { createSupabaseAdminClient } from '@/lib/supabase-admin'
-import { createSupabaseServerClient } from '@/lib/supabase-server'
-import { permissionFor } from '@/lib/menuConfig'
+import { canReadMenu, resolveSessionAccess } from '@/lib/access'
 import { buildDownloadResponse } from '@/lib/export/response'
 import { getPayPeriodForLabel, getPayPeriodRangeForLabel, todayKST } from '@/lib/attendance/period'
 import { filterParticipantRows, filterVisibleProjects } from '@/lib/attendance/gridFilters'
@@ -47,20 +46,7 @@ interface ProjectRow {
 }
 
 async function assertAttendanceExportAccess(): Promise<boolean> {
-  const supabase = await createSupabaseServerClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user?.email) return false
-
-  const admin = createSupabaseAdminClient()
-  const { data: row } = await admin
-    .from('allowed_users')
-    .select('is_admin, menu_permissions')
-    .eq('email', user.email)
-    .single()
-  if (!row) return false
-  if (row.is_admin) return true
-
-  return permissionFor(row.menu_permissions, 'attendance') !== 'none'
+  return canReadMenu(await resolveSessionAccess(), 'attendance')
 }
 
 /** 마감 상태 문구 — 마감 이력이 없으면 "미마감"이라고 그대로 적는다(빈칸으로 두지 않는다). */
