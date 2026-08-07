@@ -28,9 +28,7 @@ const GROUPS = [
     color: '#eab308',
     items: [
       { id: 6, label: '출장지원',          key: 'trip', href: '/trip' },
-      { id: 7, label: '공고/개찰',         href: null },
       { id: 8, label: 'WEB 검색',           key: 'web', href: '/web' },
-      { id: 9, label: '환경영향평가',       href: null },
     ],
   },
   {
