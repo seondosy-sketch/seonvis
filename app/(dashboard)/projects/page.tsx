@@ -146,7 +146,53 @@ const TYPES: ProjectType[] = ['면접', 'SOQ', '종심제', 'TP', 'PQ', '기타'
 const STATUSES: ProjectStatus[] = ['진행중', '수주', '탈락', '취소']
 
 // 표 본문 열 순서. 수정/삭제 버튼 열(관리)은 canWrite일 때만 이 뒤에 붙는다.
-const COLUMNS = ['번호', '유형', '발주처', '용역명', '용역비(억)', '제안서', '점수', '공고일', '제출일', '발표일', '개찰일', '결과', '낙찰사', '낙찰액', '참여사', '단장', '건축', '토목', '기계', '안전', '상태']
+//
+// 번호·용역명이 맨 앞에 붙어 있는 건 이 둘을 가로 스크롤에서 고정하기 때문이다(아래 STICKY_*).
+// 열이 21개라 오른쪽 일정·인력 칸을 보려면 반드시 가로로 스크롤해야 하는데, 예전 순서
+// (번호·유형·발주처·용역명)에서는 용역명이 화면 밖으로 밀려나 "이 날짜가 어느 프로젝트 것인지"를
+// 알 수 없었다. sticky는 인접한 앞쪽 열에만 걸 수 있어 용역명을 번호 옆으로 옮겼다.
+const COLUMNS = ['번호', '용역명', '유형', '발주처', '용역비(억)', '제안서', '점수', '공고일', '제출일', '발표일', '개찰일', '결과', '낙찰사', '낙찰액', '참여사', '단장', '건축', '토목', '기계', '안전', '상태']
+
+// 고정 열 너비 — boxSizing: border-box와 함께 써서 padding까지 포함한 실제 렌더 폭이 이 값이 되게
+// 한다. 용역명의 left 오프셋이 번호 열 폭과 정확히 같아야 경계에 빈틈이 생기지 않는다.
+const STICKY_NUM_WIDTH = 72
+const STICKY_NAME_WIDTH = 220
+
+/**
+ * 가로 스크롤 시 왼쪽에 고정되는 칸의 공통 스타일.
+ * borderCollapse: 'collapse' 표에서는 sticky 셀의 오른쪽 테두리가 스크롤 중 사라지므로,
+ * 경계선은 border 대신 boxShadow로 그린다(그림자를 함께 줘서 접힌 면이 보이게).
+ *
+ * 겹침 순서(z-index)를 값으로 못 박아 둔 이유: 같은 z-index면 DOM에서 나중에 나온 쪽이 위로
+ * 올라오는데, tbody가 thead보다 뒤에 있어 본문 고정 칸이 머리글을 가려버린다. 아래 세 단계를
+ * 반드시 지켜야 세로·가로 고정이 동시에 성립한다.
+ *   1 = 본문·합계의 고정 칸 (가로 스크롤되는 일반 칸 위)
+ *   2 = 머리글의 일반 칸      (본문 고정 칸 위)
+ *   3 = 머리글의 고정 칸      (세로·가로 양쪽 고정이라 가장 위)
+ */
+const STICKY_Z_BODY = 1
+const STICKY_Z_HEADER = 2
+const STICKY_Z_HEADER_FROZEN = 3
+
+function stickyCol(
+  offset: number,
+  width: number,
+  background: string,
+  isLast = false,
+  zIndex: number = STICKY_Z_BODY,
+): React.CSSProperties {
+  return {
+    position: 'sticky',
+    left: offset,
+    zIndex,
+    width,
+    minWidth: width,
+    maxWidth: width,
+    boxSizing: 'border-box',
+    background,
+    boxShadow: isLast ? '1px 0 0 #e8e8e6, 3px 0 6px rgba(0,0,0,0.05)' : undefined,
+  }
+}
 
 /** 발표일 칸에 보일 값 — 서면평가 건은 날짜 대신 "서면평가"로 적는다. */
 function interviewText(p: { interview_written?: boolean | null; interview_date: string | null }): string {
@@ -425,9 +471,26 @@ export default function ProjectsPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr style={{ background: '#f4f4f2' }}>
-                {headers.map(h => (
-                  <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 500, color: '#555', borderBottom: '1px solid #e8e8e6', whiteSpace: 'nowrap', position: 'sticky', top: 0, background: '#f4f4f2', zIndex: 1 }}>{h}</th>
-                ))}
+                {headers.map((h, i) => {
+                  // 앞 두 열(번호·용역명)은 세로(top)와 가로(left) 양쪽으로 고정되므로, 나머지
+                  // 머리글보다 위에 떠 있어야 스크롤된 셀에 가려지지 않는다.
+                  const frozen = i === 0
+                    ? stickyCol(0, STICKY_NUM_WIDTH, '#f4f4f2', false, STICKY_Z_HEADER_FROZEN)
+                    : i === 1
+                      ? stickyCol(STICKY_NUM_WIDTH, STICKY_NAME_WIDTH, '#f4f4f2', true, STICKY_Z_HEADER_FROZEN)
+                      : null
+                  return (
+                    <th
+                      key={h}
+                      style={{
+                        padding: '8px 12px', textAlign: 'left', fontWeight: 500, color: '#555',
+                        borderBottom: '1px solid #e8e8e6', whiteSpace: 'nowrap',
+                        position: 'sticky', top: 0, background: '#f4f4f2', zIndex: STICKY_Z_HEADER,
+                        ...frozen,
+                      }}
+                    >{h}</th>
+                  )
+                })}
               </tr>
             </thead>
             <tbody>
@@ -438,15 +501,17 @@ export default function ProjectsPage() {
                 const scoreDist = tooltipAll[p.project_number]?.score_dist ?? ''
                 return (
                   <tr key={p.id} style={{ borderBottom: '1px solid #f0f0ee' }}>
-                    <td style={tdnw}><span style={{ color: '#999' }}>{p.project_number}</span></td>
-                    <td style={tdnw}><span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 3, background: '#f0f0ee', color: '#555' }}>{p.type}</span></td>
-                    <td style={{ ...tdnw, maxWidth: 120 }}><NoteCell value={p.client} note={notes[p.project_number]?.['client']} onNote={e => openNote(e, p.project_number, 'client')} /></td>
-                    <td style={{ ...tdnw, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    <td style={{ ...tdnw, ...stickyCol(0, STICKY_NUM_WIDTH, '#fff') }}>
+                      <span style={{ color: '#999' }}>{p.project_number}</span>
+                    </td>
+                    <td style={{ ...tdnw, ...stickyCol(STICKY_NUM_WIDTH, STICKY_NAME_WIDTH, '#fff', true), overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       <span
                         style={{ fontWeight: 500, color: hasTooltip ? '#1d4ed8' : '#111', cursor: hasTooltip ? 'pointer' : 'default', textDecoration: hasTooltip ? 'underline dotted' : 'none' }}
                         onClick={() => { const d = tooltipAll[p.project_number]; if (d) setTooltipView({ project: p, data: d }) }}
                       >{p.name}</span>
                     </td>
+                    <td style={tdnw}><span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 3, background: '#f0f0ee', color: '#555' }}>{p.type}</span></td>
+                    <td style={{ ...tdnw, maxWidth: 120 }}><NoteCell value={p.client} note={notes[p.project_number]?.['client']} onNote={e => openNote(e, p.project_number, 'client')} /></td>
                     <td style={{ ...tdnw, textAlign: 'right' }}>{p.fee != null ? p.fee : '-'}</td>
                     <td style={tdnw}>{p.tp_score}</td>
                     <td style={tdnw}>{scoreDist.match(/^[\d.]+/)?.[0] ?? ''}</td>
@@ -478,8 +543,17 @@ export default function ProjectsPage() {
             </tbody>
             <tfoot>
               <tr style={{ background: '#f9f9f8', borderTop: '2px solid #e8e8e6' }}>
-                {/* 번호~용역명 4칸을 합쳐 라벨, 5번째 칸이 용역비(억) — 합계가 그 열 아래에 오게 맞춘다 */}
-                <td colSpan={4} style={{ padding: '8px 12px', fontSize: 12, color: '#555', fontWeight: 500 }}>합계 {filtered.length}건</td>
+                {/* 라벨은 고정 영역(번호+용역명) 안에서만 병합한다 — 그보다 넓게 잡으면 가로로
+                    스크롤했을 때 고정 경계 바깥의 셀까지 덮어버린다. 유형·발주처는 빈 칸으로 두고
+                    5번째 칸이 용역비(억)라 합계가 그 열 아래에 온다. */}
+                <td
+                  colSpan={2}
+                  style={{
+                    padding: '8px 12px', fontSize: 12, color: '#555', fontWeight: 500,
+                    ...stickyCol(0, STICKY_NUM_WIDTH + STICKY_NAME_WIDTH, '#f9f9f8', true),
+                  }}
+                >합계 {filtered.length}건</td>
+                <td colSpan={2} />
                 <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600, color: '#111' }}>{totalFee.toFixed(1)}</td>
                 <td colSpan={headers.length - 5} />
               </tr>
