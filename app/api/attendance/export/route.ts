@@ -27,11 +27,12 @@ import type {
 } from '@/lib/attendance/types'
 
 const PROJECT_COLUMNS =
-  'id,project_number,name,announce_date,interview_date,bid_date,status,director,staff_arch,staff_civil,staff_mech,staff_safety'
+  'id,project_number,name,client,announce_date,interview_date,bid_date,status,director,staff_arch,staff_civil,staff_mech,staff_safety'
 
 interface ExportFilters {
   projectSearch?: string
   statusFilter?: string
+  clientFilter?: string
   specialtyFilter?: string
   engineerSearch?: string
 }
@@ -40,6 +41,7 @@ interface ProjectRow {
   id: string
   project_number: string
   name: string
+  client: string
   announce_date: string | null
   interview_date: string | null
   bid_date: string | null
@@ -144,6 +146,7 @@ export async function POST(request: Request) {
       periodStart,
       periodEnd,
       statusFilter: filters.statusFilter ?? '전체',
+      clientFilter: filters.clientFilter ?? '전체',
       search: filters.projectSearch ?? '',
       projectIdsWithActiveParticipants: new Set(
         participants.filter(p => p.status === '진행중').map(p => p.project_id),

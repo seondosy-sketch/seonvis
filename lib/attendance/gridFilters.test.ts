@@ -148,6 +148,27 @@ describe('filterVisibleProjects — 프로젝트 필터', () => {
     expect(filterVisibleProjects({ ...baseInput, search: '없는프로젝트' })).toHaveLength(0)
   })
 
+  it('발주처 필터는 정확히 일치하는 것만 남긴다', () => {
+    const projects = [
+      makeProject({ id: 'a', client: '금산군' }),
+      makeProject({ id: 'b', client: '양구군' }),
+    ]
+    expect(filterVisibleProjects({ ...baseInput, projects, clientFilter: '금산군' }).map(p => p.id)).toEqual(['a'])
+    // 부분일치로 넓히지 않는다 — 목록에서 고른 값이라 정확히 같아야 한다
+    expect(filterVisibleProjects({ ...baseInput, projects, clientFilter: '금산' })).toHaveLength(0)
+  })
+
+  it('발주처 필터가 전체이거나 없으면 거르지 않는다', () => {
+    const projects = [makeProject({ id: 'a', client: '금산군' }), makeProject({ id: 'b', client: '양구군' })]
+    expect(filterVisibleProjects({ ...baseInput, projects, clientFilter: '전체' })).toHaveLength(2)
+    expect(filterVisibleProjects({ ...baseInput, projects })).toHaveLength(2)
+  })
+
+  it('발주처가 비어 있는 프로젝트는 특정 발주처를 고르면 빠진다', () => {
+    const projects = [makeProject({ id: 'a', client: '' }), makeProject({ id: 'b', client: '금산군' })]
+    expect(filterVisibleProjects({ ...baseInput, projects, clientFilter: '금산군' }).map(p => p.id)).toEqual(['b'])
+  })
+
   it('기간과 안 겹쳐도 활성 참여자나 이 기간 기록이 있으면 보여준다', () => {
     const outOfPeriod = makeProject({ announce_date: '2026-01-01', interview_date: '2026-02-01' })
     expect(filterVisibleProjects({ ...baseInput, projects: [outOfPeriod] })).toHaveLength(0)

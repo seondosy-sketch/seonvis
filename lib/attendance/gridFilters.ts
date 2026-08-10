@@ -12,6 +12,11 @@ export interface ProjectForGridFilter {
   interview_date: string | null
   bid_date: string | null // 개찰일 — 지난 회계기간에 대해서는 더 이상 "겹침"으로 보지 않는다(사용자 지시)
   status: string
+  /**
+   * 발주처 — 출근부의 발주처 필터에서만 쓴다. 이 타입을 함께 쓰는 숙박관리
+   * (lib/lodging/projectOptions.ts)는 발주처를 읽지 않으므로 optional로 둔다.
+   */
+  client?: string | null
 }
 
 /**
@@ -61,6 +66,8 @@ export interface FilterVisibleProjectsInput<P extends ProjectForGridFilter> {
   periodEnd: string
   statusFilter: string
   search: string
+  /** 발주처 이름. '전체'이거나 생략하면 거르지 않는다. */
+  clientFilter?: string
   projectIdsWithActiveParticipants: Set<string>
   projectIdsWithRecords: Set<string>
   rowParticipantCount: (projectId: string) => number
@@ -68,7 +75,7 @@ export interface FilterVisibleProjectsInput<P extends ProjectForGridFilter> {
 }
 
 /**
- * 표시할 프로젝트 = (기간과 겹침 OR 활성 참여자 있음 OR 이 기간 출근기록 있음) AND 상태/검색 필터 통과.
+ * 표시할 프로젝트 = (기간과 겹침 OR 활성 참여자 있음 OR 이 기간 출근기록 있음) AND 상태/발주처/검색 필터 통과.
  * 분야·기술인 검색이 걸려 있으면(hasParticipantFilter) 참여자 행이 0건인 프로젝트는 숨긴다.
  */
 export function filterVisibleProjects<P extends ProjectForGridFilter>(
@@ -85,6 +92,8 @@ export function filterVisibleProjects<P extends ProjectForGridFilter>(
       input.projectIdsWithRecords.has(p.id)
     if (!relevant) return false
     if (input.statusFilter !== '전체' && p.status !== input.statusFilter) return false
+    // 발주처는 정확히 일치할 때만 남긴다 — 목록에서 고른 값이라 부분일치로 넓힐 이유가 없다.
+    if (input.clientFilter && input.clientFilter !== '전체' && (p.client ?? '') !== input.clientFilter) return false
     if (q && !p.name.toLowerCase().includes(q) && !p.project_number.toLowerCase().includes(q)) return false
     if (input.hasParticipantFilter && input.rowParticipantCount(p.id) === 0) return false
     return true

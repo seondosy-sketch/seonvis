@@ -151,7 +151,52 @@ const STATUSES: ProjectStatus[] = ['진행중', '수주', '탈락', '취소']
 // 열이 21개라 오른쪽 일정·인력 칸을 보려면 반드시 가로로 스크롤해야 하는데, 예전 순서
 // (번호·유형·발주처·용역명)에서는 용역명이 화면 밖으로 밀려나 "이 날짜가 어느 프로젝트 것인지"를
 // 알 수 없었다. sticky는 인접한 앞쪽 열에만 걸 수 있어 용역명을 번호 옆으로 옮겼다.
-const COLUMNS = ['번호', '용역명', '유형', '발주처', '용역비(억)', '제안서', '점수', '공고일', '제출일', '발표일', '개찰일', '결과', '낙찰사', '낙찰액', '참여사', '단장', '건축', '토목', '기계', '안전', '상태']
+// 열은 키로 다룬다 — 보기 모드가 일부만 보여주므로 머리글과 본문 칸이 같은 키를 보고 켜지고
+// 꺼져야 한다(둘을 따로 나열하면 순서가 어긋나도 알아채기 어렵다).
+const COLUMNS = [
+  { key: 'number', label: '번호' },
+  { key: 'name', label: '용역명' },
+  { key: 'type', label: '유형' },
+  { key: 'client', label: '발주처' },
+  { key: 'fee', label: '용역비(억)' },
+  { key: 'tp_score', label: '제안서' },
+  { key: 'score', label: '점수' },
+  { key: 'announce', label: '공고일' },
+  { key: 'submit', label: '제출일' },
+  { key: 'interview', label: '발표일' },
+  { key: 'bid', label: '개찰일' },
+  { key: 'result', label: '결과' },
+  { key: 'evaluation', label: '낙찰사' },
+  { key: 'award', label: '낙찰액' },
+  { key: 'participants', label: '참여사' },
+  { key: 'director', label: '단장' },
+  { key: 'arch', label: '건축' },
+  { key: 'civil', label: '토목' },
+  { key: 'mech', label: '기계' },
+  { key: 'safety', label: '안전' },
+  { key: 'status', label: '상태' },
+] as const
+
+/**
+ * 보기 모드 — 21개 열을 한 번에 다 보려니 가로 스크롤이 길어져서, 목적별로 필요한 열만 남긴다.
+ * 번호·용역명은 왼쪽 고정 열이라 어느 모드에서나 항상 보이고, 상태는 어느 모드에서든 판단에
+ * 필요해 공통으로 넣는다. '전체'는 지금까지와 똑같이 전부 보여준다.
+ */
+const VIEW_MODES = ['일정', '결과', '인력', '전체'] as const
+type ViewMode = (typeof VIEW_MODES)[number]
+
+const ALWAYS_VISIBLE = ['number', 'name'] as const
+
+const VIEW_MODE_COLUMNS: Record<Exclude<ViewMode, '전체'>, readonly string[]> = {
+  일정: ['type', 'client', 'announce', 'submit', 'interview', 'bid', 'status'],
+  결과: ['client', 'fee', 'result', 'evaluation', 'award', 'participants', 'status'],
+  인력: ['client', 'director', 'arch', 'civil', 'mech', 'safety', 'status'],
+}
+
+function visibleColumnKeys(mode: ViewMode): Set<string> {
+  if (mode === '전체') return new Set(COLUMNS.map(c => c.key))
+  return new Set([...ALWAYS_VISIBLE, ...VIEW_MODE_COLUMNS[mode]])
+}
 
 // 고정 열 너비 — boxSizing: border-box와 함께 써서 padding까지 포함한 실제 렌더 폭이 이 값이 되게
 // 한다. 용역명의 left 오프셋이 번호 열 폭과 정확히 같아야 경계에 빈틈이 생기지 않는다.
@@ -209,6 +254,8 @@ export default function ProjectsPage() {
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState<ProjectStatus | '전체'>('전체')
   const [filterType, setFilterType] = useState<ProjectType | '전체'>('전체')
+  // 보기 모드는 필터가 아니라 "어떤 열을 볼지"만 정한다 — 행 집합과 합계는 영향받지 않는다.
+  const [viewMode, setViewMode] = useState<ViewMode>('일정')
   const [tooltipAll, setTooltipAll] = useState<Record<string, TooltipData>>({})
   const [tooltipView, setTooltipView] = useState<{ project: Project; data: TooltipData } | null>(null)
   const [dirMsg, setDirMsg] = useState<string | null>(null)
@@ -426,8 +473,13 @@ export default function ProjectsPage() {
   }
 
   const totalFee = filtered.reduce((s, p) => s + (p.fee ?? 0), 0)
-  // 수정/삭제 버튼은 표 맨 오른쪽 "관리" 열에 모은다. 읽기 권한이면 빈 열이 남지 않게 아예 뺀다.
-  const headers = canWrite ? [...COLUMNS, '관리'] : COLUMNS
+  // 보기 모드가 고른 열만 남긴다. 수정/삭제 버튼은 표 맨 오른쪽 "관리" 열에 모으고, 읽기 권한이면
+  // 빈 열이 남지 않게 아예 뺀다.
+  const visibleKeys = visibleColumnKeys(viewMode)
+  const shownColumns = COLUMNS.filter(c => visibleKeys.has(c.key))
+  const headers = canWrite ? [...shownColumns, { key: 'manage', label: '관리' }] : shownColumns
+  /** 본문 칸을 그릴지 — 머리글과 같은 키를 본다. */
+  const show = (key: string) => visibleKeys.has(key)
 
   return (
     <div style={{ minHeight: '100vh', background: '#f8f8f7' }}>
@@ -466,6 +518,29 @@ export default function ProjectsPage() {
           </div>
         </div>
 
+        {/* 보기 모드 — 행을 거르는 위 필터들과 하는 일이 달라(열만 고른다) 줄을 나누고 라벨을 붙인다 */}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12, color: '#999' }}>보기</span>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {VIEW_MODES.map(m => (
+              <button
+                key={m}
+                onClick={() => setViewMode(m)}
+                title={m === '전체' ? '모든 열 보기' : `용역명과 ${m} 관련 열만 보기`}
+                style={{
+                  height: 30, padding: '0 12px', borderRadius: 6, fontSize: 12, cursor: 'pointer',
+                  border: viewMode === m ? 'none' : '1px solid #e8e8e6',
+                  background: viewMode === m ? '#0f766e' : '#fff',
+                  color: viewMode === m ? '#fff' : '#555',
+                }}
+              >{m}</button>
+            ))}
+          </div>
+          <span style={{ fontSize: 11, color: '#bbb' }}>
+            {headers.length}개 열 표시 중 · 번호·용역명은 항상 왼쪽에 고정
+          </span>
+        </div>
+
         <div style={{ background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8, overflow: 'hidden' }}>
           <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 280px)' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
@@ -481,14 +556,14 @@ export default function ProjectsPage() {
                       : null
                   return (
                     <th
-                      key={h}
+                      key={h.key}
                       style={{
                         padding: '8px 12px', textAlign: 'left', fontWeight: 500, color: '#555',
                         borderBottom: '1px solid #e8e8e6', whiteSpace: 'nowrap',
                         position: 'sticky', top: 0, background: '#f4f4f2', zIndex: STICKY_Z_HEADER,
                         ...frozen,
                       }}
-                    >{h}</th>
+                    >{h.label}</th>
                   )
                 })}
               </tr>
@@ -510,25 +585,25 @@ export default function ProjectsPage() {
                         onClick={() => { const d = tooltipAll[p.project_number]; if (d) setTooltipView({ project: p, data: d }) }}
                       >{p.name}</span>
                     </td>
-                    <td style={tdnw}><span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 3, background: '#f0f0ee', color: '#555' }}>{p.type}</span></td>
-                    <td style={{ ...tdnw, maxWidth: 120 }}><NoteCell value={p.client} note={notes[p.project_number]?.['client']} onNote={e => openNote(e, p.project_number, 'client')} /></td>
-                    <td style={{ ...tdnw, textAlign: 'right' }}>{p.fee != null ? p.fee : '-'}</td>
-                    <td style={tdnw}>{p.tp_score}</td>
-                    <td style={tdnw}>{scoreDist.match(/^[\d.]+/)?.[0] ?? ''}</td>
-                    <td style={tdnw}>{p.announce_date ?? '-'}</td>
-                    <td style={tdnw}><NoteCell value={p.submit_date ?? '-'} note={notes[p.project_number]?.['submit_date']} onNote={e => openNote(e, p.project_number, 'submit_date')} /></td>
-                    <td style={tdnw}><NoteCell value={interviewText(p)} note={notes[p.project_number]?.['interview_date']} onNote={e => openNote(e, p.project_number, 'interview_date')} /></td>
-                    <td style={tdnw}><NoteCell value={p.bid_date ?? '-'} note={notes[p.project_number]?.['bid_date']} onNote={e => openNote(e, p.project_number, 'bid_date')} /></td>
-                    <td style={tdnw}><span style={{ fontWeight: 600, color: p.result_score ? '#111' : '#ccc' }}>{p.result_score || '-'}</span></td>
-                    <td style={{ ...tdnw, maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.evaluation}</td>
-                    <td style={{ ...tdnw, textAlign: 'right' }}>{p.award_fee != null ? p.award_fee : '-'}</td>
-                    <td style={tdnw}><NoteCell value={(p.participants.match(/\d+개사/) ?? [''])[0] || p.participants} note={notes[p.project_number]?.['competitors']} onNote={e => openNote(e, p.project_number, 'competitors')} /></td>
-                    <td style={tdnw}>{p.director}</td>
-                    <td style={tdnw}>{p.staff_arch}</td>
-                    <td style={tdnw}>{p.staff_civil}</td>
-                    <td style={tdnw}>{p.staff_mech}</td>
-                    <td style={tdnw}>{p.staff_safety}</td>
-                    <td style={tdnw}><span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 4, ...STATUS_STYLE[computeStatus(p.result_score, p.evaluation, p.participants, p.status_override)] }}>{computeStatus(p.result_score, p.evaluation, p.participants, p.status_override)}</span></td>
+                    {show('type') && <td style={tdnw}><span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 3, background: '#f0f0ee', color: '#555' }}>{p.type}</span></td>}
+                    {show('client') && <td style={{ ...tdnw, maxWidth: 120 }}><NoteCell value={p.client} note={notes[p.project_number]?.['client']} onNote={e => openNote(e, p.project_number, 'client')} /></td>}
+                    {show('fee') && <td style={{ ...tdnw, textAlign: 'right' }}>{p.fee != null ? p.fee : '-'}</td>}
+                    {show('tp_score') && <td style={tdnw}>{p.tp_score}</td>}
+                    {show('score') && <td style={tdnw}>{scoreDist.match(/^[\d.]+/)?.[0] ?? ''}</td>}
+                    {show('announce') && <td style={tdnw}>{p.announce_date ?? '-'}</td>}
+                    {show('submit') && <td style={tdnw}><NoteCell value={p.submit_date ?? '-'} note={notes[p.project_number]?.['submit_date']} onNote={e => openNote(e, p.project_number, 'submit_date')} /></td>}
+                    {show('interview') && <td style={tdnw}><NoteCell value={interviewText(p)} note={notes[p.project_number]?.['interview_date']} onNote={e => openNote(e, p.project_number, 'interview_date')} /></td>}
+                    {show('bid') && <td style={tdnw}><NoteCell value={p.bid_date ?? '-'} note={notes[p.project_number]?.['bid_date']} onNote={e => openNote(e, p.project_number, 'bid_date')} /></td>}
+                    {show('result') && <td style={tdnw}><span style={{ fontWeight: 600, color: p.result_score ? '#111' : '#ccc' }}>{p.result_score || '-'}</span></td>}
+                    {show('evaluation') && <td style={{ ...tdnw, maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.evaluation}</td>}
+                    {show('award') && <td style={{ ...tdnw, textAlign: 'right' }}>{p.award_fee != null ? p.award_fee : '-'}</td>}
+                    {show('participants') && <td style={tdnw}><NoteCell value={(p.participants.match(/\d+개사/) ?? [''])[0] || p.participants} note={notes[p.project_number]?.['competitors']} onNote={e => openNote(e, p.project_number, 'competitors')} /></td>}
+                    {show('director') && <td style={tdnw}>{p.director}</td>}
+                    {show('arch') && <td style={tdnw}>{p.staff_arch}</td>}
+                    {show('civil') && <td style={tdnw}>{p.staff_civil}</td>}
+                    {show('mech') && <td style={tdnw}>{p.staff_mech}</td>}
+                    {show('safety') && <td style={tdnw}>{p.staff_safety}</td>}
+                    {show('status') && <td style={tdnw}><span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 4, ...STATUS_STYLE[computeStatus(p.result_score, p.evaluation, p.participants, p.status_override)] }}>{computeStatus(p.result_score, p.evaluation, p.participants, p.status_override)}</span></td>}
                     {canWrite && (
                       <td style={td}>
                         <div style={{ display: 'flex', gap: 4 }}>
@@ -544,8 +619,9 @@ export default function ProjectsPage() {
             <tfoot>
               <tr style={{ background: '#f9f9f8', borderTop: '2px solid #e8e8e6' }}>
                 {/* 라벨은 고정 영역(번호+용역명) 안에서만 병합한다 — 그보다 넓게 잡으면 가로로
-                    스크롤했을 때 고정 경계 바깥의 셀까지 덮어버린다. 유형·발주처는 빈 칸으로 두고
-                    5번째 칸이 용역비(억)라 합계가 그 열 아래에 온다. */}
+                    스크롤했을 때 고정 경계 바깥의 셀까지 덮어버린다. 나머지는 보이는 열을 그대로
+                    따라가며 빈 칸을 만들고 용역비 자리에만 합계를 넣는다 — 보기 모드에 따라 열이
+                    빠져도 합계가 엉뚱한 열 아래로 밀리지 않게. */}
                 <td
                   colSpan={2}
                   style={{
@@ -553,9 +629,11 @@ export default function ProjectsPage() {
                     ...stickyCol(0, STICKY_NUM_WIDTH + STICKY_NAME_WIDTH, '#f9f9f8', true),
                   }}
                 >합계 {filtered.length}건</td>
-                <td colSpan={2} />
-                <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600, color: '#111' }}>{totalFee.toFixed(1)}</td>
-                <td colSpan={headers.length - 5} />
+                {headers.slice(2).map(c => (
+                  c.key === 'fee'
+                    ? <td key={c.key} style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600, color: '#111' }}>{totalFee.toFixed(1)}</td>
+                    : <td key={c.key} />
+                ))}
               </tr>
             </tfoot>
           </table>
@@ -800,7 +878,7 @@ export default function ProjectsPage() {
                 <Row3>
                   <Field label="공고일"><input style={inp} type="date" value={modal.form.announce_date ?? ''} onChange={e => set('announce_date', e.target.value || null)} /></Field>
                   <Field label="제출일"><input style={inp} type="date" value={modal.form.submit_date ?? ''} onChange={e => set('submit_date', e.target.value || null)} /></Field>
-                  <Field label="PQ 제출일"><input style={inp} value={modal.form.pq_date} onChange={e => set('pq_date', e.target.value)} placeholder="2026-07-01" /></Field>
+                  <Field label="PQ 제출일"><TextDateInput value={modal.form.pq_date} onChange={v => set('pq_date', v)} /></Field>
                 </Row3>
                 <Row2>
                   {/* 발표(면접) 없이 서면으로만 평가하는 공고가 있어 날짜/서면평가를 골라 입력한다.
@@ -829,7 +907,7 @@ export default function ProjectsPage() {
                   <Field label="면접시간"><input style={inp} value={modal.form.interview_time} onChange={e => set('interview_time', e.target.value)} placeholder="5분/4분" /></Field>
                 </Row2>
                 <Row2>
-                  <Field label="평가통보일"><input style={inp} value={modal.form.notify_date} onChange={e => set('notify_date', e.target.value)} placeholder="2026-07-10" /></Field>
+                  <Field label="평가통보일"><TextDateInput value={modal.form.notify_date} onChange={v => set('notify_date', v)} /></Field>
                   <Field label="개찰일"><input style={inp} type="date" value={modal.form.bid_date ?? ''} onChange={e => set('bid_date', e.target.value || null)} /></Field>
                 </Row2>
               </div>
@@ -899,6 +977,36 @@ function Row2({ children }: { children: React.ReactNode }) {
 }
 function Row3({ children }: { children: React.ReactNode }) {
   return <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>{children}</div>
+}
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * PQ 제출일·평가통보일처럼 **text 컬럼**(project_tooltips)에 들어가는 날짜 입력.
+ *
+ * 공고일·제출일·개찰일은 projects의 date 컬럼이라 곧장 <input type="date">를 쓰지만, 이 두 칸은
+ * 예전부터 자유 텍스트라 "3/6"(연도 없는 M/D)이나 "추후" 같은 값이 실제로 저장돼 있다. 그대로
+ * type="date"로 바꾸면 그런 프로젝트를 열었을 때 칸이 비어 보이고, 저장하는 순간 값이 지워진다.
+ *
+ * 그래서 값이 날짜(YYYY-MM-DD)이거나 비어 있으면 달력을, 옛 표기가 남아 있으면 그 값을 그대로
+ * 보여주고 "달력으로" 버튼을 눌러 사용자가 직접 비웠을 때만 달력으로 바꾼다 — 자동으로 해석해
+ * 연도를 지어내지 않는다(M/D는 어느 해인지 알 수 없다).
+ */
+function TextDateInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  if (value && !ISO_DATE.test(value)) {
+    return (
+      <div style={{ display: 'flex', gap: 6 }}>
+        <input readOnly value={value} style={{ ...inp, background: '#f8f8f7', color: '#666' }} title="예전에 자유 텍스트로 적어둔 값입니다" />
+        <button
+          type="button"
+          onClick={() => onChange('')}
+          title="이 값을 지우고 달력에서 날짜를 고릅니다"
+          style={{ flexShrink: 0, height: 34, padding: '0 10px', border: '1px solid #e8e8e6', background: '#fff', borderRadius: 6, fontSize: 11, cursor: 'pointer', color: '#555', whiteSpace: 'nowrap' }}
+        >달력으로</button>
+      </div>
+    )
+  }
+  return <input style={inp} type="date" value={value} onChange={e => onChange(e.target.value)} />
 }
 
 function NoteCell({ value, note, onNote }: { value: string; note?: string; onNote: (e: React.MouseEvent) => void }) {

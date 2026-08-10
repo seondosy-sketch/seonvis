@@ -7,6 +7,7 @@ export interface AttendanceProjectRow {
   id: string
   project_number: string
   name: string
+  client: string
   announce_date: string | null
   interview_date: string | null
   bid_date: string | null

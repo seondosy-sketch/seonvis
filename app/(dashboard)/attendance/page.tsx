@@ -23,7 +23,7 @@ const MONTH_NAMES = ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8�
 const STATUS_OPTIONS = ['전체', '진행중', '수주', '탈락', '취소']
 
 const PROJECT_COLUMNS =
-  'id,project_number,name,announce_date,interview_date,bid_date,status,director,staff_arch,staff_civil,staff_mech,staff_safety'
+  'id,project_number,name,client,announce_date,interview_date,bid_date,status,director,staff_arch,staff_civil,staff_mech,staff_safety'
 
 export default function AttendancePage() {
   const isMobile = useIsMobile()
@@ -63,6 +63,7 @@ export default function AttendancePage() {
 
   const [projectSearch, setProjectSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('전체')
+  const [clientFilter, setClientFilter] = useState('전체')
   const [specialtyFilter, setSpecialtyFilter] = useState('전체')
   const [engineerSearch, setEngineerSearch] = useState('')
 
@@ -222,18 +223,26 @@ export default function AttendancePage() {
     })
   }
 
+  // 발주처 선택지는 불러온 프로젝트에서 그때그때 뽑는다 — 별도 마스터 테이블이 없고, 목록에
+  // 없는 발주처를 고를 일도 없다. 가나다순으로 세워 찾기 쉽게 한다.
+  const clientOptions = useMemo(() => {
+    const names = projects.map(p => (p.client ?? '').trim()).filter(Boolean)
+    return [...new Set(names)].sort((a, b) => a.localeCompare(b, 'ko'))
+  }, [projects])
+
   const visibleProjects = useMemo(() => filterVisibleProjects({
     projects,
     periodStart,
     periodEnd,
     statusFilter,
+    clientFilter,
     search: projectSearch,
     projectIdsWithActiveParticipants,
     projectIdsWithRecords,
     rowParticipantCount: projectId => rowParticipants(projectId).length,
     hasParticipantFilter,
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [projects, participants, records, projectSearch, statusFilter, specialtyFilter, engineerSearch, periodStart, periodEnd])
+  }), [projects, participants, records, projectSearch, statusFilter, clientFilter, specialtyFilter, engineerSearch, periodStart, periodEnd])
 
   async function toggleCell(participant: ProjectParticipant, project: AttendanceProjectRow, dateStr: string) {
     if (!canWrite) return
@@ -291,7 +300,7 @@ export default function AttendancePage() {
           year: viewYear,
           periodMonth: viewPeriodMonth,
           filters: {
-            projectSearch, statusFilter, specialtyFilter, engineerSearch,
+            projectSearch, statusFilter, clientFilter, specialtyFilter, engineerSearch,
           },
         }),
       })
@@ -352,6 +361,10 @@ export default function AttendancePage() {
           />
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={sel}>
             {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <select value={clientFilter} onChange={e => setClientFilter(e.target.value)} style={{ ...sel, maxWidth: 180 }}>
+            <option value="전체">발주처 전체</option>
+            {clientOptions.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
           <select value={specialtyFilter} onChange={e => setSpecialtyFilter(e.target.value)} style={sel}>
             <option value="전체">분야 전체</option>
