@@ -405,6 +405,11 @@ export default function ProjectsPage() {
       const hasTooltipData = Object.entries(tooltipPayload)
         .filter(([k]) => k !== 'project_number')
         .some(([, v]) => v && String(v).trim() !== '')
+      // 이미 상세정보 행이 있으면 전부 비워도 반드시 써야 한다 — 값이 하나만 남은 상태에서 그걸
+      // 지우면 payload가 전부 비어 hasTooltipData가 false가 되고, 예전에는 그대로 저장을 건너뛰어
+      // DB에 옛 값이 남았다(지운 게 반영되지 않음). PQ 제출일/평가통보일의 "달력으로" 버튼이
+      // 값을 비우는 동작이라 이 경로를 실제로 밟게 된다.
+      const hasExistingTooltip = !!tooltipAll[f.project_number]
 
       // 캘린더 동기화에 넘길 프로젝트 id — 신규 등록이면 방금 만들어진 행의 id를 받아온다.
       let savedProjectId: string | null = null
@@ -413,7 +418,7 @@ export default function ProjectsPage() {
         const { error: projErr } = await supabase.from('projects').update({ ...projectPayload, updated_at: new Date().toISOString() }).eq('id', modal.editId)
         if (projErr) { setSaveError(`저장 실패: ${projErr.message}`); return }
         savedProjectId = modal.editId
-        if (hasTooltipData) {
+        if (hasTooltipData || hasExistingTooltip) {
           const { error: tipErr } = await supabase.from('project_tooltips').upsert({ ...tooltipPayload, updated_at: new Date().toISOString() }, { onConflict: 'project_number' })
           if (tipErr) { setSaveError(`상세정보 저장 실패: ${tipErr.message}`); return }
         }
@@ -875,10 +880,12 @@ export default function ProjectsPage() {
               {/* 섹션 5: 일정 */}
               <SectionTitle>일정</SectionTitle>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
+                {/* projects의 date 컬럼 3형제 — 그냥 달력만 있으면 된다. PQ 제출일·평가통보일은
+                    "추후" 선택이 붙어 폭이 더 필요하므로 아래 2열 줄에 따로 놓는다. */}
                 <Row3>
                   <Field label="공고일"><input style={inp} type="date" value={modal.form.announce_date ?? ''} onChange={e => set('announce_date', e.target.value || null)} /></Field>
                   <Field label="제출일"><input style={inp} type="date" value={modal.form.submit_date ?? ''} onChange={e => set('submit_date', e.target.value || null)} /></Field>
-                  <Field label="PQ 제출일"><TextDateInput value={modal.form.pq_date} onChange={v => set('pq_date', v)} /></Field>
+                  <Field label="개찰일"><input style={inp} type="date" value={modal.form.bid_date ?? ''} onChange={e => set('bid_date', e.target.value || null)} /></Field>
                 </Row3>
                 <Row2>
                   {/* 발표(면접) 없이 서면으로만 평가하는 공고가 있어 날짜/서면평가를 골라 입력한다.
@@ -907,8 +914,8 @@ export default function ProjectsPage() {
                   <Field label="면접시간"><input style={inp} value={modal.form.interview_time} onChange={e => set('interview_time', e.target.value)} placeholder="5분/4분" /></Field>
                 </Row2>
                 <Row2>
+                  <Field label="PQ 제출일"><TextDateInput value={modal.form.pq_date} onChange={v => set('pq_date', v)} /></Field>
                   <Field label="평가통보일"><TextDateInput value={modal.form.notify_date} onChange={v => set('notify_date', v)} /></Field>
-                  <Field label="개찰일"><input style={inp} type="date" value={modal.form.bid_date ?? ''} onChange={e => set('bid_date', e.target.value || null)} /></Field>
                 </Row2>
               </div>
 
@@ -980,6 +987,8 @@ function Row3({ children }: { children: React.ReactNode }) {
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
+/** 날짜가 아직 안 잡힌 일정. 월간보고가 이 글자를 그대로 읽는다(lib/hwpx/monthlyFormat.ts). */
+const UNDECIDED = '추후'
 
 /**
  * PQ 제출일·평가통보일처럼 **text 컬럼**(project_tooltips)에 들어가는 날짜 입력.
@@ -988,12 +997,17 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
  * 예전부터 자유 텍스트라 "3/6"(연도 없는 M/D)이나 "추후" 같은 값이 실제로 저장돼 있다. 그대로
  * type="date"로 바꾸면 그런 프로젝트를 열었을 때 칸이 비어 보이고, 저장하는 순간 값이 지워진다.
  *
- * 그래서 값이 날짜(YYYY-MM-DD)이거나 비어 있으면 달력을, 옛 표기가 남아 있으면 그 값을 그대로
- * 보여주고 "달력으로" 버튼을 눌러 사용자가 직접 비웠을 때만 달력으로 바꾼다 — 자동으로 해석해
- * 연도를 지어내지 않는다(M/D는 어느 해인지 알 수 없다).
+ * 그래서 세 갈래로 나눈다.
+ *   · 비었거나 날짜(YYYY-MM-DD)  → 달력
+ *   · "추후"                     → 날짜가 아직 안 잡힌 상태. 달력만 두면 이 값을 새로 넣을 방법이
+ *                                  없어져 월간보고 표기가 막히므로 선택지로 남긴다.
+ *   · 그 밖의 옛 표기("3/6" 등)  → 값을 그대로 보여주고, "달력으로"를 눌러 사용자가 직접 비웠을
+ *                                  때만 달력으로 바꾼다. M/D는 어느 해인지 알 수 없어 연도를
+ *                                  지어내지 않는다.
  */
 function TextDateInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  if (value && !ISO_DATE.test(value)) {
+  const isLegacyText = !!value && value !== UNDECIDED && !ISO_DATE.test(value)
+  if (isLegacyText) {
     return (
       <div style={{ display: 'flex', gap: 6 }}>
         <input readOnly value={value} style={{ ...inp, background: '#f8f8f7', color: '#666' }} title="예전에 자유 텍스트로 적어둔 값입니다" />
@@ -1006,7 +1020,25 @@ function TextDateInput({ value, onChange }: { value: string; onChange: (v: strin
       </div>
     )
   }
-  return <input style={inp} type="date" value={value} onChange={e => onChange(e.target.value)} />
+
+  const undecided = value === UNDECIDED
+  return (
+    <div style={{ display: 'flex', gap: 6 }}>
+      <select
+        style={{ ...inp, width: 88, flexShrink: 0 }}
+        value={undecided ? 'undecided' : 'date'}
+        onChange={e => onChange(e.target.value === 'undecided' ? UNDECIDED : '')}
+      >
+        <option value="date">날짜</option>
+        <option value="undecided">{UNDECIDED}</option>
+      </select>
+      {undecided ? (
+        <div style={{ ...inp, display: 'flex', alignItems: 'center', color: '#888', background: '#f8f8f7' }}>날짜 미정</div>
+      ) : (
+        <input style={inp} type="date" value={value} onChange={e => onChange(e.target.value)} />
+      )}
+    </div>
+  )
 }
 
 function NoteCell({ value, note, onNote }: { value: string; note?: string; onNote: (e: React.MouseEvent) => void }) {
