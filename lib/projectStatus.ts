@@ -53,7 +53,13 @@ function isEmpty(v: string | null | undefined) {
   return !v || v.trim() === '' || v.trim().toLowerCase() === 'nan'
 }
 
-export function computeProjectStatus(p: ProjectRef): string {
+/**
+ * 상태 판정에 실제로 쓰이는 네 칸만 받는다 — ProjectRef 전체를 요구하면 대장 출력처럼 일정 칸을
+ * 안 읽는 호출부가 쓰지도 않는 필드를 채워야 한다(lib/projects/export/ledgerRows.ts).
+ */
+export type ProjectStatusInput = Pick<ProjectRef, 'result_score' | 'evaluation' | 'participants' | 'status_override'>
+
+export function computeProjectStatus(p: ProjectStatusInput): string {
   if (p.status_override) return p.status_override
   if (p.participants?.includes('드랍') || p.participants?.includes('드롭')) return '취소'
   if (p.evaluation === '선') return '수주'

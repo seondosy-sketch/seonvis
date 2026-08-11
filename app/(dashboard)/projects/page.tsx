@@ -263,6 +263,8 @@ export default function ProjectsPage() {
   const [notes, setNotes] = useState<Record<string, Record<string, string>>>({})
   const [notePopup, setNotePopup] = useState<{ projectNumber: string; field: string; draft: string; rect: DOMRect } | null>(null)
   const [noteSaving, setNoteSaving] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState<string | null>(null)
 
   // 통합 편집 모달
   const [modal, setModal] = useState<{ open: boolean; form: FormData; editId: string | null }>({
@@ -459,22 +461,40 @@ export default function ProjectsPage() {
     setDeleting(null)
   }
 
-  const exportCsv = () => {
-    const headers = ['번호', '유형', '발주처', '용역명', '용역비(억)', '제안서', '점수', '공고일', '제출일', '발표일', '개찰일', '결과', '낙찰사', '참여사', '단장', '건축', '토목', '기계', '안전', '상태', '비고']
-    const rowsData = filtered.map(p => [
-      p.project_number, p.type, p.client, p.name,
-      p.fee ?? '', p.tp_score, (tooltipAll[p.project_number]?.score_dist ?? '').match(/^[\d.]+/)?.[0] ?? '',
-      p.announce_date ?? '', p.submit_date ?? '', interviewText(p), p.bid_date ?? '',
-      p.result_score, p.evaluation, p.participants, p.director,
-      p.staff_arch, p.staff_civil, p.staff_mech, p.staff_safety,
-      computeStatus(p.result_score, p.evaluation, p.participants, p.status_override), p.note,
-    ])
-    const csv = [headers, ...rowsData].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
-    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url; a.download = `프로젝트List_${new Date().toISOString().slice(0, 10)}.csv`
-    a.click(); URL.revokeObjectURL(url)
+  /**
+   * 기존 관리대장 서식(2시트: 프로젝트 대장 + 참여기술자 집계) 그대로 xlsx를 받는다.
+   * 시트 조립은 서버가 DB를 다시 읽어서 한다(app/api/projects/export/route.ts) — 화면이 만든 행을
+   * 올려보내지 않고, 화면과 같은 검색·상태·유형 필터만 넘겨 "보이는 그대로"를 맞춘다.
+   */
+  const exportExcel = async () => {
+    if (exporting) return
+    setExporting(true)
+    setExportError(null)
+    try {
+      const res = await fetch('/api/projects/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filters: { search, status: filterStatus, type: filterType } }),
+      })
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}))
+        throw new Error(detail.error ?? '출력 생성에 실패했습니다.')
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      // 파일명은 서버가 헤더로 알려준 값을 그대로 쓴다(출근명부 다운로드와 같은 방식).
+      const disposition = res.headers.get('content-disposition') ?? ''
+      const match = /filename\*=UTF-8''([^;]+)/.exec(disposition)
+      a.download = match ? decodeURIComponent(match[1]) : '참여프로젝트 관리.xlsx'
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e: unknown) {
+      setExportError(e instanceof Error ? e.message : '출력 생성에 실패했습니다.')
+    } finally {
+      setExporting(false)
+    }
   }
 
   const totalFee = filtered.reduce((s, p) => s + (p.fee ?? 0), 0)
@@ -492,13 +512,20 @@ export default function ProjectsPage() {
         <div style={{ maxWidth: 1400, margin: '0 auto', padding: isMobile ? '0 12px' : '0 24px', height: 56, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span style={{ fontSize: 14, color: '#555' }}>프로젝트 List</span>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={exportCsv} style={outlineBtn}>CSV 내보내기</button>
+            <button onClick={exportExcel} disabled={exporting} style={{ ...outlineBtn, opacity: exporting ? 0.6 : 1 }}>
+              {exporting ? '만드는 중...' : '엑셀 내보내기'}
+            </button>
             {canWrite && <button onClick={openAdd} style={primaryBtn}>+ 추가</button>}
           </div>
         </div>
       </header>
 
       <div style={{ maxWidth: 1400, margin: '0 auto', padding: isMobile ? '12px 12px 60px' : '20px 24px 60px' }}>
+        {exportError && (
+          <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 6, background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', fontSize: 12 }}>
+            {exportError}
+          </div>
+        )}
         <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(3, 1fr)', gap: 10, marginBottom: 16 }}>
           {([['전체', projects], ['진행중', projects.filter(p => computeStatus(p.result_score, p.evaluation, p.participants, p.status_override) === '진행중')], ['수주', projects.filter(p => computeStatus(p.result_score, p.evaluation, p.participants, p.status_override) === '수주')]] as [string, Project[]][]).map(([label, list]) => (
             <div key={label} style={{ background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8, padding: '12px 16px' }}>
