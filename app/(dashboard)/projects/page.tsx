@@ -142,6 +142,16 @@ const STATUS_STYLE: Record<ProjectStatus, React.CSSProperties> = {
   취소:   { background: '#f4f4f2', color: '#888',    border: '1px solid #ddd' },
 }
 
+/**
+ * 행 전체 음영 — xlsx 출력(lib/projects/export/projectLedgerWorkbook.ts)에서 수주는 노랑,
+ * 취소(드랍)는 회색으로 칠하는 것과 같은 규칙. 다만 엑셀 원본 값(FFFF00·808080)을 화면에
+ * 그대로 쓰면 글자가 묻히므로 같은 색 계열의 옅은 톤으로 낮춰 잡았다.
+ */
+const ROW_FILL: Partial<Record<ProjectStatus, string>> = {
+  수주: '#fff8c4',
+  취소: '#dedede',
+}
+
 const TYPES: ProjectType[] = ['면접', 'SOQ', '종심제', 'TP', 'PQ', '기타']
 const STATUSES: ProjectStatus[] = ['진행중', '수주', '탈락', '취소']
 
@@ -606,12 +616,15 @@ export default function ProjectsPage() {
               ) : filtered.map(p => {
                 const hasTooltip = !!tooltipAll[p.project_number]
                 const scoreDist = tooltipAll[p.project_number]?.score_dist ?? ''
+                const status = computeStatus(p.result_score, p.evaluation, p.participants, p.status_override)
+                // 고정 열은 가로 스크롤 시 뒤 칸을 가려야 하므로 배경이 투명하면 안 된다 — 행 음영을 그대로 넘긴다.
+                const rowBg = ROW_FILL[status] ?? '#fff'
                 return (
-                  <tr key={p.id} style={{ borderBottom: '1px solid #f0f0ee' }}>
-                    <td style={{ ...tdnw, ...stickyCol(0, STICKY_NUM_WIDTH, '#fff') }}>
+                  <tr key={p.id} style={{ borderBottom: '1px solid #f0f0ee', background: rowBg }}>
+                    <td style={{ ...tdnw, ...stickyCol(0, STICKY_NUM_WIDTH, rowBg) }}>
                       <span style={{ color: '#999' }}>{p.project_number}</span>
                     </td>
-                    <td style={{ ...tdnw, ...stickyCol(STICKY_NUM_WIDTH, STICKY_NAME_WIDTH, '#fff', true), overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    <td style={{ ...tdnw, ...stickyCol(STICKY_NUM_WIDTH, STICKY_NAME_WIDTH, rowBg, true), overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       <span
                         style={{ fontWeight: 500, color: hasTooltip ? '#1d4ed8' : '#111', cursor: hasTooltip ? 'pointer' : 'default', textDecoration: hasTooltip ? 'underline dotted' : 'none' }}
                         onClick={() => { const d = tooltipAll[p.project_number]; if (d) setTooltipView({ project: p, data: d }) }}
@@ -635,7 +648,7 @@ export default function ProjectsPage() {
                     {show('civil') && <td style={tdnw}>{p.staff_civil}</td>}
                     {show('mech') && <td style={tdnw}>{p.staff_mech}</td>}
                     {show('safety') && <td style={tdnw}>{p.staff_safety}</td>}
-                    {show('status') && <td style={tdnw}><span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 4, ...STATUS_STYLE[computeStatus(p.result_score, p.evaluation, p.participants, p.status_override)] }}>{computeStatus(p.result_score, p.evaluation, p.participants, p.status_override)}</span></td>}
+                    {show('status') && <td style={tdnw}><span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 4, ...STATUS_STYLE[status] }}>{status}</span></td>}
                     {canWrite && (
                       <td style={td}>
                         <div style={{ display: 'flex', gap: 4 }}>
