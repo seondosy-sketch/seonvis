@@ -516,6 +516,34 @@ export default function ProjectsPage() {
   /** 본문 칸을 그릴지 — 머리글과 같은 키를 본다. */
   const show = (key: string) => visibleKeys.has(key)
 
+  /**
+   * 모바일 카드에 넣을 항목 — 표의 본문 칸과 같은 값을, 같은 열 키로 고른다.
+   * 번호·용역명·유형·상태는 카드 머리에 따로 그리므로 여기서 빠진다.
+   */
+  const mobileFields = (p: Project, scoreDist: string) => {
+    const note = (field: string) => notes[p.project_number]?.[field]
+    const fields: { key: string; label: string; node: React.ReactNode }[] = [
+      { key: 'client', label: '발주처', node: <NoteCell value={p.client} note={note('client')} onNote={e => openNote(e, p.project_number, 'client')} /> },
+      { key: 'fee', label: '용역비(억)', node: p.fee != null ? p.fee : '-' },
+      { key: 'tp_score', label: '제안서', node: p.tp_score || '-' },
+      { key: 'score', label: '점수', node: scoreDist.match(/^[\d.]+/)?.[0] ?? '-' },
+      { key: 'announce', label: '공고일', node: p.announce_date ?? '-' },
+      { key: 'submit', label: '제출일', node: <NoteCell value={p.submit_date ?? '-'} note={note('submit_date')} onNote={e => openNote(e, p.project_number, 'submit_date')} /> },
+      { key: 'interview', label: '발표일', node: <NoteCell value={interviewText(p)} note={note('interview_date')} onNote={e => openNote(e, p.project_number, 'interview_date')} /> },
+      { key: 'bid', label: '개찰일', node: <NoteCell value={p.bid_date ?? '-'} note={note('bid_date')} onNote={e => openNote(e, p.project_number, 'bid_date')} /> },
+      { key: 'result', label: '결과', node: p.result_score || '-' },
+      { key: 'evaluation', label: '낙찰사', node: p.evaluation || '-' },
+      { key: 'award', label: '낙찰액', node: p.award_fee != null ? p.award_fee : '-' },
+      { key: 'participants', label: '참여사', node: <NoteCell value={(p.participants.match(/\d+개사/) ?? [''])[0] || p.participants} note={note('competitors')} onNote={e => openNote(e, p.project_number, 'competitors')} /> },
+      { key: 'director', label: '단장', node: p.director || '-' },
+      { key: 'arch', label: '건축', node: p.staff_arch || '-' },
+      { key: 'civil', label: '토목', node: p.staff_civil || '-' },
+      { key: 'mech', label: '기계', node: p.staff_mech || '-' },
+      { key: 'safety', label: '안전', node: p.staff_safety || '-' },
+    ]
+    return fields.filter(f => show(f.key))
+  }
+
   return (
     <div style={{ minHeight: '100vh', background: '#f8f8f7' }}>
       <header style={{ background: '#fff', borderBottom: '1px solid #e8e8e6' }}>
@@ -579,10 +607,64 @@ export default function ProjectsPage() {
             ))}
           </div>
           <span style={{ fontSize: 11, color: '#bbb' }}>
-            {headers.length}개 열 표시 중 · 번호·용역명은 항상 왼쪽에 고정
+            {isMobile ? '카드에 표시할 항목을 고릅니다' : `${headers.length}개 열 표시 중 · 번호·용역명은 항상 왼쪽에 고정`}
           </span>
         </div>
 
+        {isMobile ? (
+          /* 모바일 — 21열 표를 폰 화면에 넣으면 고정 열(번호+용역명)만으로 폭을 거의 다 써서
+             나머지 칸을 볼 자리가 남지 않는다. 같은 데이터를 카드로 세로로 쌓고, 보기 모드가
+             고른 항목만 카드 안에 넣는다(표와 같은 열 키를 본다). */
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {filtered.length === 0 ? (
+              <div style={{ padding: 40, textAlign: 'center', color: '#bbb', fontSize: 13, background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8 }}>데이터가 없습니다</div>
+            ) : filtered.map(p => {
+              const hasTooltip = !!tooltipAll[p.project_number]
+              const scoreDist = tooltipAll[p.project_number]?.score_dist ?? ''
+              const status = computeStatus(p.result_score, p.evaluation, p.participants, p.status_override)
+              const fields = mobileFields(p, scoreDist)
+              return (
+                <div key={p.id} style={{ background: ROW_FILL[status] ?? '#fff', border: '1px solid #e8e8e6', borderRadius: 10, padding: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                      <span style={{ fontSize: 11, color: '#999' }}>{p.project_number}</span>
+                      <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 3, background: 'rgba(0,0,0,0.06)', color: '#555' }}>{p.type}</span>
+                    </div>
+                    <span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 4, flexShrink: 0, ...STATUS_STYLE[status] }}>{status}</span>
+                  </div>
+                  <div
+                    onClick={() => { const d = tooltipAll[p.project_number]; if (d) setTooltipView({ project: p, data: d }) }}
+                    style={{
+                      fontSize: 14, fontWeight: 600, lineHeight: 1.4, marginBottom: fields.length ? 10 : 0,
+                      color: hasTooltip ? '#1d4ed8' : '#111',
+                      textDecoration: hasTooltip ? 'underline dotted' : 'none',
+                    }}
+                  >{p.name}</div>
+                  {fields.length > 0 && (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '8px 10px', fontSize: 13, color: '#333' }}>
+                      {fields.map(f => (
+                        <div key={f.key} style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: 11, color: '#999', marginBottom: 2 }}>{f.label}</div>
+                          <div style={{ minWidth: 0, overflow: 'hidden' }}>{f.node}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {canWrite && (
+                    <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+                      <button onClick={() => openEdit(p)} style={{ ...editBtn, height: 30, flex: 1 }}>수정</button>
+                      <button onClick={() => remove(p.id, p.project_number)} disabled={deleting === p.id} style={{ ...deleteBtn, height: 30, flex: 1 }}>삭제</button>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', background: '#f9f9f8', border: '1px solid #e8e8e6', borderRadius: 8, fontSize: 12, color: '#555' }}>
+              <span>합계 {filtered.length}건</span>
+              <span style={{ fontWeight: 600, color: '#111' }}>{totalFee.toFixed(1)}억</span>
+            </div>
+          </div>
+        ) : (
         <div style={{ background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8, overflow: 'hidden' }}>
           <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 280px)' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
@@ -684,6 +766,7 @@ export default function ProjectsPage() {
           </table>
           </div>
         </div>
+        )}
       </div>
 
       {/* 툴팁 보기 모달 */}
