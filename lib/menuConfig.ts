@@ -44,4 +44,5 @@ export const RESTRICTABLE_MENU_ITEMS: MenuItemConfig[] = [
   { key: 'trip', label: '출장지원' },
   { key: 'web', label: 'WEB 검색' },
   { key: 'proposal_db', label: '제안서 DB' },
+  { key: 'interview_db', label: '면접 DB' },
 ]
