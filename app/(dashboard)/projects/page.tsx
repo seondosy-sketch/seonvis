@@ -283,6 +283,7 @@ export default function ProjectsPage() {
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   const loadNotes = useCallback(async () => {
     const { data } = await supabase.from('project_notes').select('*')
@@ -458,17 +459,36 @@ export default function ProjectsPage() {
     } finally { setSaving(false) }
   }
 
+  /**
+   * 프로젝트 삭제 — 출근부 계열 테이블(project_participants, attendance_records 등)이
+   * project_id를 `on delete restrict`로 참조하므로, 출근부에 올라간 프로젝트는 DB가 삭제를
+   * 거부한다(23503). supabase-js는 그때 예외를 던지지 않고 error만 돌려주기 때문에 확인하지
+   * 않으면 화면에는 "버튼을 눌렀는데 아무 일도 없는" 것으로 보인다 — 그래서 error와 실제
+   * 삭제된 행 수(RLS로 조용히 막히는 경우)를 모두 확인해서 사유를 화면에 띄운다.
+   * 상세정보(project_tooltips)는 프로젝트 삭제가 성공한 뒤에만 지운다 — 같이 요청하면
+   * 삭제가 거부됐는데 상세정보만 사라진다.
+   */
   const remove = async (id: string, projectNumber: string) => {
     if (!confirm('삭제하시겠습니까?')) return
+    setDeleteError(null)
     setDeleting(id)
-    await Promise.all([
-      supabase.from('projects').delete().eq('id', id),
-      supabase.from('project_tooltips').delete().eq('project_number', projectNumber),
-    ])
-    // 프로젝트가 사라졌으므로 연결된 캘린더 일정도 지워야 한다 — 서버가 고아 행을 보고 삭제한다.
-    syncProjectCalendar(id)
-    await load()
-    setDeleting(null)
+    try {
+      const { data: deleted, error } = await supabase.from('projects').delete().eq('id', id).select('id')
+      if (error) {
+        setDeleteError(error.code === '23503'
+          ? '기술인 출근부에 등록된 프로젝트라 삭제할 수 없습니다. 출근부에서 이 프로젝트의 참여기술인·출근 기록을 먼저 정리한 뒤 다시 시도하세요.'
+          : `삭제 실패: ${error.message}`)
+        return
+      }
+      if (!deleted?.length) {
+        setDeleteError('삭제 권한이 없어 처리되지 않았습니다. 관리자에게 문의하세요.')
+        return
+      }
+      await supabase.from('project_tooltips').delete().eq('project_number', projectNumber)
+      // 프로젝트가 사라졌으므로 연결된 캘린더 일정도 지워야 한다 — 서버가 고아 행을 보고 삭제한다.
+      syncProjectCalendar(id)
+      await load()
+    } finally { setDeleting(null) }
   }
 
   /**
@@ -562,6 +582,11 @@ export default function ProjectsPage() {
         {exportError && (
           <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 6, background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', fontSize: 12 }}>
             {exportError}
+          </div>
+        )}
+        {deleteError && (
+          <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 6, background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', fontSize: 12 }}>
+            {deleteError}
           </div>
         )}
         <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(3, 1fr)', gap: 10, marginBottom: 16 }}>
