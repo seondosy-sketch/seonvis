@@ -1,9 +1,14 @@
 /**
  * 평가 DB — 질의 탭 검색/필터 순수 로직.
  *
- * 질의 화면은 별도의 질문 복제본을 보지 않는다. evaluation_questions를 review와 조인해서 읽고
- * (QuestionWithReview), 그 결과를 이 파일의 함수들로 거른다. 즉 후기 화면에 입력한 질문이 곧
- * 이 화면의 데이터다.
+ * 질의 화면은 별도의 질문 복제본을 보지 않는다. evaluation_questions를 review와 조인해서 읽는다
+ * (QuestionWithReview). 즉 후기 화면에 입력한 질문이 곧 이 화면의 데이터다.
+ *
+ * ⚠ 조회 경로가 아니다 — 실제 질의 탭은 필터·정렬·페이지네이션을 DB에서 처리한다
+ * (lib/evaluations/questionQuery.ts + evaluation_question_search view). 전체를 브라우저로 받아
+ * 여기서 거르면 PostgREST의 1,000행 응답 상한에 걸려 그 뒤 질문이 검색되지 않기 때문이다.
+ * 이 파일은 **검색 의미의 기준(oracle)** 으로 남긴다: 같은 데이터에 같은 필터를 적용했을 때
+ * 서버측 조회 결과와 이 순수 함수의 결과가 일치해야 한다(검증에 실제로 사용한다).
  *
  * 발주처·시설용도를 "부분일치"로 거르는 이유:
  *   실제 값이 "한국전력공사 경인건설본부 경기건설지사"처럼 계층이 한 문자열에 들어 있고
@@ -23,7 +28,7 @@ export const ALL = '전체'
 export const UNSET = '미지정'
 
 export interface QuestionFilterState {
-  /** 전체검색 — 질문 본문 + 용역명 + 발주처를 함께 훑는다. */
+  /** 전체검색 — 질문 본문 + 용역명 + 발주처 + 시설용도를 함께 훑는다. */
   search: string
   /** 평가유형(evaluation_types.id) 또는 '전체' / '미지정'. */
   evaluationTypeId: string | typeof ALL | typeof UNSET
@@ -85,7 +90,8 @@ export function matchesQuestionFilter(q: QuestionWithReview, f: QuestionFilterSt
     const hit =
       includesFold(q.question_text, search) ||
       includesFold(q.review.project_name_snapshot, search) ||
-      includesFold(q.review.client_snapshot, search)
+      includesFold(q.review.client_snapshot, search) ||
+      includesFold(q.review.facility_type, search)
     if (!hit) return false
   }
 

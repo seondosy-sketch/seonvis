@@ -1,5 +1,6 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
+import { TEST_AUTH_PATHS, isTestAuthAvailable } from '@/lib/testAuth'
 
 export async function proxy(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request })
@@ -35,7 +36,13 @@ export async function proxy(request: NextRequest) {
   // 회사 데이터가 아닌 오픈폰트(Noto Sans KR, OFL — 자유 재배포 허용)라 공개해도 무해하다.
   const isPublicWidgetImage = pathname === '/api/widget/summary' || pathname.startsWith('/fonts/')
 
-  if (!user && !isPublicWidgetImage && pathname !== '/login' && pathname !== '/unauthorized' && pathname !== '/request-access' && !pathname.startsWith('/auth') && !pathname.startsWith('/api/access-requests')) {
+  // 개발환경 전용 Test Auth 경로(lib/testAuth.ts). 세션을 만들러 가는 경로이므로 로그인
+  // 리다이렉트에서 빼야 한다. 예외는 test auth가 실제로 켜진 환경에서만 열린다 — production에서는
+  // isTestAuthAvailable가 false라 이 경로도 평소처럼 /login으로 보내지고, 라우트 자체도 404다.
+  const isTestAuthPath = isTestAuthAvailable(process.env)
+    && (TEST_AUTH_PATHS as readonly string[]).includes(pathname)
+
+  if (!user && !isPublicWidgetImage && !isTestAuthPath && pathname !== '/login' && pathname !== '/unauthorized' && pathname !== '/request-access' && !pathname.startsWith('/auth') && !pathname.startsWith('/api/access-requests')) {
     return NextResponse.redirect(new URL('/login', request.url))
   }
 
