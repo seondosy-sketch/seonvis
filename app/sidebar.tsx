@@ -37,7 +37,7 @@ const GROUPS = [
     color: '#0ea5e9',
     items: [
       { id: 11, label: '제안서 DB',        key: 'proposal_db', href: 'https://proposal-db-mvp.vercel.app/' },
-      { id: 16, label: '면접 DB',          href: null },
+      { id: 16, label: '면접 DB',          key: 'interview_db', href: '/interviews' },
       { id: 10, label: '기술인 경력 DB',   href: null },
     ],
   },
