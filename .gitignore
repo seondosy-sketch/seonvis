@@ -60,3 +60,10 @@ next-env.d.ts
 # 버리는 일회성 파일이라 계속 쌓이고, 바이너리라 diff도 안 보인다. 템플릿 원본(lib/templates)과
 # 서식 계약 테스트가 저장소 쪽 기준이므로 여기 결과물은 커밋하지 않는다.
 /manual-review/
+
+# UI 자동검증(Playwright) — 세션/실행 산출물은 커밋하지 않는다.
+# .playwright/.auth/user.json 에는 실제 로그인 쿠키가 담긴다 (docs/testing/test-auth.md).
+/.playwright/
+/test-results/
+/playwright-report/
+/blob-report/

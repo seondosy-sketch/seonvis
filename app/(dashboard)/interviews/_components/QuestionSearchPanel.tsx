@@ -5,11 +5,11 @@ import {
   ALL,
   EMPTY_FILTER,
   UNSET,
-  buildFilterOptions,
-  filterQuestions,
   hasActiveFilter,
+  type QuestionFilterOptions,
   type QuestionFilterState,
 } from '@/lib/evaluations/questionFilters'
+import { totalPages } from '@/lib/evaluations/questionQuery'
 import { questionTagLabel } from '@/lib/evaluations/questionGroups'
 import type {
   EvaluationQuestionCategory,
@@ -25,9 +25,25 @@ import type {
  * 검색축 7개(복수 동시): 전체검색 · 평가유형 · 질의그룹 · 질의분류 · 발주처 · 시설용도 · 연도.
  * 전문분야 필터는 두지 않는다 — 질의그룹이 분야 의미를 이미 담고 있어서 뜻이 겹치는 필터를
  * 사용자에게 두 개 보여주지 않는다(전문분야는 legacy 전용 컬럼으로만 남는다).
+ *
+ * 이 컴포넌트는 걸러진 결과를 **받아서 그리기만** 한다. 필터·정렬·페이지네이션은 DB가 처리한다
+ * (lib/evaluations/questionQuery.ts). 예전처럼 질문 전체를 받아 여기서 거르면 PostgREST의
+ * 1,000행 응답 상한 때문에 그 뒤 질문이 검색되지 않는다.
  */
 interface QuestionSearchPanelProps {
+  /** 현재 페이지에 보여줄 질문(이미 필터·정렬된 상태). */
   questions: QuestionWithReview[]
+  /** 필터를 적용한 총 결과 수 — DB의 exact count. */
+  total: number
+  /** 필터 없는 전체 질문 수 — "등록된 질문이 없습니다"와 "조건에 맞는 질문이 없습니다"를 가른다. */
+  totalAll: number
+  page: number
+  pageSize: number
+  onPageChange: (page: number) => void
+  loading: boolean
+  error: string | null
+  /** 발주처·시설용도·연도 후보 — 전체 데이터 기준(현재 페이지에 종속되지 않는다). */
+  options: QuestionFilterOptions
   evaluationTypes: EvaluationType[]
   roles: EvaluationRole[]
   categories: EvaluationQuestionCategory[]
@@ -39,14 +55,16 @@ interface QuestionSearchPanelProps {
 }
 
 export default function QuestionSearchPanel({
-  questions, evaluationTypes, roles, categories, filter, onFilterChange, isMobile, onOpenReview,
+  questions, total, totalAll, page, pageSize, onPageChange, loading, error, options,
+  evaluationTypes, roles, categories, filter, onFilterChange, isMobile, onOpenReview,
 }: QuestionSearchPanelProps) {
-  const options = useMemo(() => buildFilterOptions(questions), [questions])
-  const results = useMemo(() => filterQuestions(questions, filter), [questions, filter])
-
   const typeNameById = useMemo(() => new Map(evaluationTypes.map(t => [t.id, t.name])), [evaluationTypes])
   const roleNameById = useMemo(() => new Map(roles.map(r => [r.id, r.name])), [roles])
   const categoryNameById = useMemo(() => new Map(categories.map(c => [c.id, c.name])), [categories])
+
+  const pageCount = totalPages(total, pageSize)
+  const firstIndex = total === 0 ? 0 : (page - 1) * pageSize + 1
+  const lastIndex = Math.min(page * pageSize, total)
 
   function set<K extends keyof QuestionFilterState>(key: K, value: QuestionFilterState[K]) {
     onFilterChange({ ...filter, [key]: value })
@@ -62,7 +80,7 @@ export default function QuestionSearchPanel({
               style={inp}
               value={filter.search}
               onChange={e => set('search', e.target.value)}
-              placeholder="질문 내용 · 용역명 · 발주처"
+              placeholder="질문 내용 · 용역명 · 발주처 · 시설용도"
             />
           </div>
 
@@ -139,10 +157,13 @@ export default function QuestionSearchPanel({
           </div>
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, gap: 8 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, gap: 8, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 11, color: '#888' }}>
-            질문 {results.length.toLocaleString()}건
-            {results.length !== questions.length && ` / 전체 ${questions.length.toLocaleString()}건`}
+            {/* 건수는 현재 페이지가 아니라 DB가 센 전체 결과 수다. */}
+            검색결과 {total.toLocaleString()}건
+            {total > 0 && ` (${firstIndex.toLocaleString()}~${lastIndex.toLocaleString()} 표시)`}
+            {total !== totalAll && ` / 전체 ${totalAll.toLocaleString()}건`}
+            {loading && ' · 조회 중...'}
           </span>
           {hasActiveFilter(filter) && (
             <button onClick={() => onFilterChange(EMPTY_FILTER)} style={miniBtn}>필터 초기화</button>
@@ -150,15 +171,19 @@ export default function QuestionSearchPanel({
         </div>
       </div>
 
-      {results.length === 0 ? (
+      {error && <div style={errorBox}>{error}</div>}
+
+      {questions.length === 0 ? (
         <div style={{ padding: 40, textAlign: 'center', color: '#bbb', fontSize: 13 }}>
-          {questions.length === 0
-            ? '등록된 질문이 없습니다. 면접후기에 실제 질문을 입력하면 여기에서 검색됩니다.'
-            : '조건에 맞는 질문이 없습니다.'}
+          {loading
+            ? '불러오는 중...'
+            : totalAll === 0
+              ? '등록된 질문이 없습니다. 면접후기에 실제 질문을 입력하면 여기에서 검색됩니다.'
+              : '조건에 맞는 질문이 없습니다.'}
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {results.map(q => (
+          {questions.map(q => (
             <div
               key={q.id}
               onClick={() => onOpenReview(q.review_id, q.id)}
@@ -189,6 +214,29 @@ export default function QuestionSearchPanel({
           ))}
         </div>
       )}
+
+      {/* 페이지 이동 — 결과가 한 페이지에 다 들어가면 굳이 보여주지 않는다. */}
+      {pageCount > 1 && (
+        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 10, marginTop: 14 }}>
+          <button
+            style={page <= 1 ? pageBtnDisabled : pageBtn}
+            disabled={page <= 1 || loading}
+            onClick={() => onPageChange(page - 1)}
+          >
+            이전
+          </button>
+          <span style={{ fontSize: 12, color: '#555' }}>
+            {page.toLocaleString()} / {pageCount.toLocaleString()}
+          </span>
+          <button
+            style={page >= pageCount ? pageBtnDisabled : pageBtn}
+            disabled={page >= pageCount || loading}
+            onClick={() => onPageChange(page + 1)}
+          >
+            다음
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -203,3 +251,6 @@ const miniBtn: React.CSSProperties = { border: '1px solid #e8e8e6', background: 
 const resultCard: React.CSSProperties = { background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8, padding: '11px 13px', cursor: 'pointer' }
 const groupTag: React.CSSProperties = { color: '#0369a1', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 3, padding: '1px 5px', fontWeight: 600 }
 const typeTag: React.CSSProperties = { color: '#7c3aed', background: '#f5f3ff', border: '1px solid #ddd6fe', borderRadius: 3, padding: '1px 5px', fontWeight: 600 }
+const pageBtn: React.CSSProperties = { border: '1px solid #e8e8e6', background: '#fff', borderRadius: 6, padding: '6px 14px', fontSize: 12, cursor: 'pointer', color: '#333' }
+const pageBtnDisabled: React.CSSProperties = { ...pageBtn, color: '#ccc', cursor: 'default' }
+const errorBox: React.CSSProperties = { marginBottom: 12, padding: '8px 12px', borderRadius: 6, background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', fontSize: 12 }

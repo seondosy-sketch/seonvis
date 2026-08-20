@@ -16,6 +16,15 @@ import {
   type ParticipantRow,
 } from '@/lib/evaluations/attendees'
 import {
+  applyProjectSelection,
+  canReloadFromProject,
+  initialOwnership,
+  markEdited,
+  preservedNotice,
+  reloadFromProject,
+  type AutofillOwnership,
+} from '@/lib/evaluations/projectAutofill'
+import {
   countValidQuestions,
   groupLabel,
   groupOptionsForSelect,
@@ -77,6 +86,17 @@ export default function ReviewFormModal({
   const [companies, setCompanies] = useState(review?.participant_companies ?? '')
   const [method, setMethod] = useState(review?.evaluation_method ?? '')
   const [notes, setNotes] = useState(review?.special_notes ?? '')
+
+  /**
+   * 발주처·평가일의 소유자(자동입력 vs 사용자 입력). 프로젝트를 바꿀 때 무엇을 갈아끼우고 무엇을
+   * 보존할지 이 값으로 결정한다 — 규칙은 lib/evaluations/projectAutofill.ts에 있다.
+   */
+  const [autofill, setAutofill] = useState<AutofillOwnership>(() => initialOwnership({
+    client: review?.client_snapshot ?? '',
+    evaluationDate: review?.evaluation_date ?? '',
+  }))
+  /** 프로젝트를 바꿀 때 사용자 값을 유지했음을 한 번 알려주는 문구. */
+  const [autofillNotice, setAutofillNotice] = useState<string | null>(null)
 
   // ── 참석 기술인 (Project List 참여기술인 연동) ───────────────────────────────
   const [rows, setRows] = useState<ParticipantRow[]>([])
@@ -185,24 +205,65 @@ export default function ReviewFormModal({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId])
 
+  /** 지금 연결된 프로젝트 — "다시 불러오기"의 원본값이다. */
+  const selectedProject = useMemo(
+    () => projects.find(p => p.id === projectId) ?? null,
+    [projects, projectId],
+  )
+
   /**
-   * 프로젝트를 고르면 Project List에 실제로 있는 값만 채운다 — 발주처(client), 용역명(name),
-   * 평가일(interview_date). 시설용도는 projects에 대응 컬럼이 없어서 사용자가 직접 입력한다.
-   * 이미 입력해 둔 값은 덮어쓰지 않는다(수정 중 실수로 지워지지 않도록).
+   * 프로젝트를 고르면 Project List에 실제로 있는 값을 채운다 — 용역명(name), 발주처(client),
+   * 평가일(interview_date). 시설용도는 projects에 대응 컬럼이 없어 사용자가 직접 입력한다.
+   *
+   * 용역명은 항상 새 프로젝트명으로 바꾸고, 발주처·평가일은 자동입력으로 채워진 값일 때만
+   * 갈아끼운다(사용자가 직접 고친 값은 보존). 규칙은 lib/evaluations/projectAutofill.ts 참고.
+   * 참여기술인은 projectId가 바뀌면 위 effect가 새 프로젝트 기준으로 다시 읽는다.
    */
   function selectProject(p: InterviewProjectRef) {
+    const result = applyProjectSelection(
+      { projectName, client, evaluationDate },
+      autofill,
+      p,
+    )
     setProjectId(p.id)
     setProjectQuery(p.name)
-    setProjectName(p.name)
-    setClient(prev => prev.trim() || p.client)
-    if (p.interview_date) setEvaluationDate(prev => prev || p.interview_date!)
+    setProjectName(result.values.projectName)
+    setClient(result.values.client)
+    setEvaluationDate(result.values.evaluationDate)
+    setAutofill(result.ownership)
+    setAutofillNotice(preservedNotice(result.preserved))
     setProjectDropdownOpen(false)
+  }
+
+  /** 사용자가 직접 고친 발주처·평가일을 프로젝트 원본값으로 되돌린다. */
+  function reloadProjectInfo() {
+    if (!selectedProject) return
+    const result = reloadFromProject(selectedProject)
+    setProjectName(result.values.projectName)
+    setProjectQuery(result.values.projectName)
+    setClient(result.values.client)
+    setEvaluationDate(result.values.evaluationDate)
+    setAutofill(result.ownership)
+    setAutofillNotice(null)
+  }
+
+  function updateClient(value: string) {
+    setClient(value)
+    setAutofill(prev => markEdited(prev, 'client', value))
+    setAutofillNotice(null)
+  }
+
+  function updateEvaluationDate(value: string) {
+    setEvaluationDate(value)
+    setAutofill(prev => markEdited(prev, 'evaluationDate', value))
+    setAutofillNotice(null)
   }
 
   function clearProject() {
     setProjectId(null)
     setProjectQuery('')
     setProjectDropdownOpen(false)
+    setAutofillNotice(null)
   }
 
   function toggleRow(engineerId: string) {
@@ -369,8 +430,21 @@ export default function ReviewFormModal({
             </div>
             <div style={hint}>
               프로젝트를 고르면 발주처·용역명·평가일과 <strong>참여기술인 목록</strong>을 Project List에서 가져옵니다.
-              한 프로젝트에 SOQ·TP·면접 등 후기를 여러 건 등록할 수 있습니다.
+              프로젝트를 바꾸면 자동으로 채워진 값은 새 프로젝트 값으로 바뀌고, 직접 고친 발주처·평가일은
+              그대로 유지됩니다. 한 프로젝트에 SOQ·TP·면접 등 후기를 여러 건 등록할 수 있습니다.
             </div>
+            {/* 직접 고친 값이 프로젝트 원본과 다를 때만 되돌릴 수단을 준다. */}
+            {canReloadFromProject({ client, evaluationDate }, autofill, selectedProject) && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
+                <button onClick={reloadProjectInfo} style={miniBtn}>프로젝트 정보 다시 불러오기</button>
+                <span style={{ fontSize: 11, color: '#888' }}>발주처·평가일을 프로젝트 값으로 되돌립니다.</span>
+              </div>
+            )}
+            {autofillNotice && (
+              <div style={{ fontSize: 11, color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 4, padding: '5px 8px', marginTop: 4 }}>
+                {autofillNotice}
+              </div>
+            )}
           </Field>
 
           <Row>
@@ -400,7 +474,7 @@ export default function ReviewFormModal({
           </Row>
 
           <Field label="발주처">
-            <input style={inp} value={client} onChange={e => setClient(e.target.value)} placeholder="한국전력공사 경인건설본부 경기건설지사" />
+            <input style={inp} value={client} onChange={e => updateClient(e.target.value)} placeholder="한국전력공사 경인건설본부 경기건설지사" />
           </Field>
 
           <Field label="용역명">
@@ -409,7 +483,7 @@ export default function ReviewFormModal({
 
           <Row>
             <Field label="평가일">
-              <input style={inp} type="date" value={evaluationDate} onChange={e => setEvaluationDate(e.target.value)} />
+              <input style={inp} type="date" value={evaluationDate} onChange={e => updateEvaluationDate(e.target.value)} />
             </Field>
             <Field label="시간">
               <input style={inp} value={evaluationTime} onChange={e => setEvaluationTime(e.target.value)} placeholder="13:30~" />

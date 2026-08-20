@@ -1,11 +1,26 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import { useIsMobile } from '@/lib/useIsMobile'
 import { useMenuPermission } from '@/app/components/PermissionsProvider'
 import { evaluationReviewErrorMessage } from '@/lib/evaluations/errors'
-import { EMPTY_FILTER, type QuestionFilterState } from '@/lib/evaluations/questionFilters'
+import {
+  EMPTY_FILTER,
+  type QuestionFilterOptions,
+  type QuestionFilterState,
+} from '@/lib/evaluations/questionFilters'
+import {
+  QUESTION_FACETS_VIEW,
+  QUESTION_PAGE_SIZE,
+  QUESTION_SEARCH_VIEW,
+  buildFilterOptionsFromFacets,
+  buildQuestionQueryPlan,
+  clampPage,
+  toQuestionWithReview,
+  type QuestionFacetRow,
+  type QuestionSearchRow,
+} from '@/lib/evaluations/questionQuery'
 import { searchReviews, sortReviewsByDateDesc } from '@/lib/evaluations/reviewFormat'
 import type {
   EvaluationAttendee,
@@ -35,6 +50,8 @@ import QuestionSearchPanel from './_components/QuestionSearchPanel'
  * 후기 상세(Drawer)가 열린다.
  */
 const MIGRATION_HINT = 'supabase/migration_evaluation_db.sql이 적용되었는지 확인하세요.'
+const QUESTION_VIEW_HINT = 'supabase/migration_evaluation_question_search.sql이 적용되었는지 확인하세요.'
+const EMPTY_QUESTION_OPTIONS: QuestionFilterOptions = { clients: [], facilities: [], years: [] }
 
 export default function InterviewsPage() {
   const isMobile = useIsMobile()
@@ -46,7 +63,6 @@ export default function InterviewsPage() {
   const [tab, setTab] = useState<'reviews' | 'questions'>('reviews')
 
   const [reviews, setReviews] = useState<ReviewListItem[]>([])
-  const [questions, setQuestions] = useState<QuestionWithReview[]>([])
   const [evaluationTypes, setEvaluationTypes] = useState<EvaluationType[]>([])
   const [roles, setRoles] = useState<EvaluationRole[]>([])
   const [categories, setCategories] = useState<EvaluationQuestionCategory[]>([])
@@ -59,7 +75,27 @@ export default function InterviewsPage() {
   const [currentUserEmail, setCurrentUserEmail] = useState('')
 
   const [reviewSearch, setReviewSearch] = useState('')
+
+  // ── 질의 탭 상태 ────────────────────────────────────────────────────────────
+  // questionFilter는 사용자가 지금 입력칸에 넣은 값(즉시 반영), appliedQuestionFilter는 실제로 DB에
+  // 보낸 조건이다. 검색어는 타이핑 중이라 300ms 뒤에 적용하므로 둘을 나눠 둔다.
   const [questionFilter, setQuestionFilter] = useState<QuestionFilterState>(EMPTY_FILTER)
+  const [appliedQuestionFilter, setAppliedQuestionFilter] = useState<QuestionFilterState>(EMPTY_FILTER)
+  const [questionPage, setQuestionPage] = useState(1)
+  /** 현재 페이지 질문만 담는다 — 전체를 담지 않는다(PostgREST 1,000행 상한 문제의 원인이었다). */
+  const [questionRows, setQuestionRows] = useState<QuestionWithReview[]>([])
+  /** 필터를 적용한 총 결과 수 — DB가 센 값(exact count). */
+  const [questionTotal, setQuestionTotal] = useState(0)
+  /** 필터 없는 전체 질문 수 — 빈 화면 문구를 가르는 데 쓴다. */
+  const [questionTotalAll, setQuestionTotalAll] = useState(0)
+  // 첫 조회가 끝나기 전에는 "등록된 질문이 없습니다"가 아니라 "불러오는 중"이 보여야 한다.
+  const [questionsLoading, setQuestionsLoading] = useState(true)
+  const [questionError, setQuestionError] = useState<string | null>(null)
+  const [questionOptions, setQuestionOptions] = useState<QuestionFilterOptions>(EMPTY_QUESTION_OPTIONS)
+  /** 저장/삭제 후 현재 페이지를 다시 읽게 하는 방아쇠(오래된 closure를 붙잡지 않기 위해 카운터로 둔다). */
+  const [questionReloadKey, setQuestionReloadKey] = useState(0)
+  /** 질의 조회 요청 번호 — 늦게 도착한 이전 응답이 최신 결과를 덮어쓰지 않게 막는다. */
+  const questionRequestRef = useRef(0)
 
   const [formTarget, setFormTarget] = useState<{ review: ReviewDetail | null } | null>(null)
   const [detail, setDetail] = useState<{ review: ReviewDetail; highlightQuestionId: string | null } | null>(null)
@@ -104,20 +140,73 @@ export default function InterviewsPage() {
   }, [])
 
   /**
-   * 질의 탭 데이터 — 질문 행에 후기의 조회용 필드를 조인해서 읽는다. 평가유형/발주처/시설용도/
-   * 평가일을 질문에 복제 저장하지 않기 때문에 여기서 조인이 필요하다(그게 정상 경로다).
+   * 질의 탭 — 조건에 맞는 질문 중 **현재 페이지 것만** 읽는다.
+   *
+   * 예전에는 질문 전체를 받아 브라우저에서 걸렀는데, PostgREST가 요청 limit과 무관하게 한 응답에
+   * 최대 1,000행만 주기 때문에 그 뒤 질문은 검색조차 되지 않았다. 그래서 필터·정렬·건수·페이지를
+   * 전부 DB로 내렸다. 조회 대상은 evaluation_question_search view다(질문 + 기록 조인, RLS 유지).
+   * 건수는 Prefer: count=exact로 DB가 세므로 페이지 크기와 무관하게 정확하다.
    */
-  const loadQuestions = useCallback(async (): Promise<void> => {
-    const { data, error } = await supabase
-      .from('evaluation_questions')
-      .select('*, review:evaluation_reviews!inner(id, evaluation_type_id, client_snapshot, project_name_snapshot, facility_type, evaluation_date, evaluation_year_effective)')
-      .limit(5000)
+  const loadQuestionPage = useCallback(async (f: QuestionFilterState, page: number): Promise<void> => {
+    // 조건을 빠르게 바꾸면 조회가 겹친다. 응답이 도착한 순서는 보낸 순서와 다를 수 있어, 늦게 온
+    // 이전 조회 결과가 최신 결과를 덮어쓸 수 있다(페이지를 넘긴 직후 필터를 걸면 재현된다).
+    // 그래서 요청마다 번호를 매기고, 돌아왔을 때 최신 요청이 아니면 결과를 버린다.
+    const requestId = questionRequestRef.current + 1
+    questionRequestRef.current = requestId
+    const isStale = () => questionRequestRef.current !== requestId
 
+    const plan = buildQuestionQueryPlan(f, page, QUESTION_PAGE_SIZE)
+
+    let query = supabase.from(QUESTION_SEARCH_VIEW).select('*', { count: 'exact' })
+    if (plan.or) query = query.or(plan.or)
+    for (const filter of plan.filters) {
+      switch (filter.op) {
+        case 'eq': query = query.eq(filter.column, filter.value); break
+        case 'isNull': query = query.is(filter.column, null); break
+        case 'ilike': query = query.ilike(filter.column, filter.pattern); break
+        case 'gte': query = query.gte(filter.column, filter.value); break
+        case 'lte': query = query.lte(filter.column, filter.value); break
+      }
+    }
+    // 정렬이 완전해야(마지막 키가 유일값 id) 페이지를 넘길 때 행이 빠지거나 겹치지 않는다.
+    for (const key of plan.order) {
+      query = query.order(key.column, { ascending: key.ascending, nullsFirst: key.nullsFirst })
+    }
+
+    const { data, error, count } = await query.range(plan.from, plan.to)
+    if (isStale()) return
     if (error) {
-      setQuestions([])
+      setQuestionRows([])
+      setQuestionTotal(0)
+      setQuestionError(`질문을 불러올 수 없습니다. ${QUESTION_VIEW_HINT}`)
       return
     }
-    setQuestions((data ?? []) as unknown as QuestionWithReview[])
+    const total = count ?? 0
+    setQuestionError(null)
+    setQuestionTotal(total)
+    setQuestionRows(((data ?? []) as unknown as QuestionSearchRow[]).map(toQuestionWithReview))
+
+    // 후기를 지워 결과가 줄면 보고 있던 페이지가 범위를 벗어날 수 있다. 그때는 마지막 페이지로
+    // 당긴다(페이지가 바뀌면 조회 effect가 다시 돌아 실제 행을 채운다).
+    const valid = clampPage(page, total, QUESTION_PAGE_SIZE)
+    if (valid !== page) setQuestionPage(valid)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  /**
+   * 필터 후보(발주처·시설용도·연도)와 전체 질문 수.
+   * 후보는 현재 페이지가 아니라 전체 데이터 기준이어야 한다 — 페이지마다 후보가 달라지면 필터를
+   * 쓸 수 없다. 발주처/시설용도는 마스터가 없는 자유 입력이라 실제 값에서 뽑는다(집계 view).
+   */
+  const loadQuestionFacets = useCallback(async (): Promise<void> => {
+    const [facetRes, totalRes] = await Promise.all([
+      supabase.from(QUESTION_FACETS_VIEW).select('facet, value, question_count').order('question_count', { ascending: false }),
+      supabase.from(QUESTION_SEARCH_VIEW).select('id', { count: 'exact', head: true }),
+    ])
+    if (!facetRes.error) {
+      setQuestionOptions(buildFilterOptionsFromFacets((facetRes.data ?? []) as unknown as QuestionFacetRow[]))
+    }
+    if (!totalRes.error) setQuestionTotalAll(totalRes.count ?? 0)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -159,7 +248,7 @@ export default function InterviewsPage() {
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      const [, , missingMasters] = await Promise.all([loadReviews(), loadQuestions(), loadMasters()])
+      const [, missingMasters] = await Promise.all([loadReviews(), loadMasters()])
       if (cancelled) return
       if (missingMasters.length > 0) {
         setLoadError(
@@ -169,7 +258,42 @@ export default function InterviewsPage() {
       setLoading(false)
     })()
     return () => { cancelled = true }
-  }, [loadReviews, loadQuestions, loadMasters])
+  }, [loadReviews, loadMasters])
+
+  /**
+   * 검색어·발주처·시설용도는 타이핑 중이므로 300ms 뒤에 적용하고, select 필터는 곧바로 적용한다.
+   * 조건이 바뀌면 페이지를 1로 되돌린다(3페이지를 보던 중 조건을 좁히면 빈 페이지가 되기 때문).
+   */
+  useEffect(() => {
+    if (questionFilter === appliedQuestionFilter) return
+    const typing =
+      questionFilter.search !== appliedQuestionFilter.search ||
+      questionFilter.clientQuery !== appliedQuestionFilter.clientQuery ||
+      questionFilter.facilityQuery !== appliedQuestionFilter.facilityQuery
+    const timer = setTimeout(() => {
+      setAppliedQuestionFilter(questionFilter)
+      setQuestionPage(1)
+    }, typing ? 300 : 0)
+    return () => clearTimeout(timer)
+  }, [questionFilter, appliedQuestionFilter])
+
+  /** 질의 탭을 열었을 때(그리고 저장/삭제 후) 필터 후보와 전체 건수를 읽는다. */
+  useEffect(() => {
+    if (tab !== 'questions') return
+    void (async () => { await loadQuestionFacets() })()
+  }, [tab, questionReloadKey, loadQuestionFacets])
+
+  /** 조건·페이지가 바뀔 때마다 그 페이지만 조회한다. */
+  useEffect(() => {
+    if (tab !== 'questions') return
+    let cancelled = false
+    void (async () => {
+      setQuestionsLoading(true)
+      await loadQuestionPage(appliedQuestionFilter, questionPage)
+      if (!cancelled) setQuestionsLoading(false)
+    })()
+    return () => { cancelled = true }
+  }, [tab, appliedQuestionFilter, questionPage, questionReloadKey, loadQuestionPage])
 
   /** 상세/수정에 필요한 후기 1건 전체(참석자 + 질문)를 읽는다. */
   const fetchDetail = useCallback(async (reviewId: string): Promise<ReviewDetail | null> => {
@@ -231,12 +355,14 @@ export default function InterviewsPage() {
     }
 
     setDetail(null)
-    await Promise.all([loadReviews(), loadQuestions()])
+    await loadReviews()
+    setQuestionReloadKey(k => k + 1)
     showToast('삭제했습니다.')
   }
 
   async function handleSaved(reviewId: string) {
-    await Promise.all([loadReviews(), loadQuestions()])
+    await loadReviews()
+    setQuestionReloadKey(k => k + 1)
     showToast('저장했습니다.')
     // 저장 직후 방금 쓴 후기를 바로 확인할 수 있게 상세를 열어준다.
     await openDetail(reviewId)
@@ -268,7 +394,15 @@ export default function InterviewsPage() {
         <div style={{ maxWidth: 1400, margin: '0 auto', padding: isMobile ? '0 12px' : '0 24px', height: 56, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span style={{ fontSize: 14, color: '#555' }}>면접 DB</span>
           {canWrite && (
-            <button onClick={() => setFormTarget({ review: null })} style={outlineBtn}>면접후기 등록</button>
+            // 마스터(평가유형·질의그룹·질의분류)를 읽기 전에 열면 select가 빈 상태로 뜨고, 첫 질의그룹이
+            // 선택되지 않은 채 시작된다. 로딩 중에는 열지 못하게 막는다.
+            <button
+              onClick={() => setFormTarget({ review: null })}
+              disabled={loading}
+              style={loading ? { ...outlineBtn, color: '#bbb', cursor: 'default' } : outlineBtn}
+            >
+              면접후기 등록
+            </button>
           )}
         </div>
       </header>
@@ -313,7 +447,15 @@ export default function InterviewsPage() {
           </>
         ) : (
           <QuestionSearchPanel
-            questions={questions}
+            questions={questionRows}
+            total={questionTotal}
+            totalAll={questionTotalAll}
+            page={questionPage}
+            pageSize={QUESTION_PAGE_SIZE}
+            onPageChange={setQuestionPage}
+            loading={questionsLoading}
+            error={questionError}
+            options={questionOptions}
             evaluationTypes={evaluationTypes}
             roles={roles}
             categories={categories}
