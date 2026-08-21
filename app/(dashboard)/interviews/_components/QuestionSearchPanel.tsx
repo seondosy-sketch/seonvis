@@ -6,6 +6,7 @@ import {
   EMPTY_FILTER,
   UNSET,
   hasActiveFilter,
+  splitUnspecifiedOption,
   type QuestionFilterOptions,
   type QuestionFilterState,
 } from '@/lib/evaluations/questionFilters'
@@ -62,6 +63,13 @@ export default function QuestionSearchPanel({
   const roleNameById = useMemo(() => new Map(roles.map(r => [r.id, r.name])), [roles])
   const categoryNameById = useMemo(() => new Map(categories.map(c => [c.id, c.name])), [categories])
 
+  // 마스터에도 `미지정` 행이 있어서, 그대로 그리면 아래 "미지정"(값이 비어 있음) 칸과 겹쳐
+  // 사용자에게 같은 이름이 두 번 보였다. 마스터의 `미지정`은 목록에서 빼고, 하나로 합친
+  // `미지정` 칸이 마스터 미지정 + NULL을 함께 찾는다(questionFilters.ts UNSPECIFIED_NAME).
+  const typeOptions = useMemo(() => splitUnspecifiedOption(evaluationTypes).options, [evaluationTypes])
+  const roleOptions = useMemo(() => splitUnspecifiedOption(roles).options, [roles])
+  const categoryOptions = useMemo(() => splitUnspecifiedOption(categories).options, [categories])
+
   const pageCount = totalPages(total, pageSize)
   const firstIndex = total === 0 ? 0 : (page - 1) * pageSize + 1
   const lastIndex = Math.min(page * pageSize, total)
@@ -88,7 +96,7 @@ export default function QuestionSearchPanel({
             <FilterLabel>평가유형</FilterLabel>
             <select style={inp} value={filter.evaluationTypeId} onChange={e => set('evaluationTypeId', e.target.value as QuestionFilterState['evaluationTypeId'])}>
               <option value={ALL}>전체</option>
-              {evaluationTypes.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+              {typeOptions.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
               <option value={UNSET}>미지정</option>
             </select>
           </div>
@@ -97,7 +105,7 @@ export default function QuestionSearchPanel({
             <FilterLabel>질의그룹</FilterLabel>
             <select style={inp} value={filter.groupId} onChange={e => set('groupId', e.target.value as QuestionFilterState['groupId'])}>
               <option value={ALL}>전체</option>
-              {roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+              {roleOptions.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
               <option value={UNSET}>미지정</option>
             </select>
           </div>
@@ -106,7 +114,7 @@ export default function QuestionSearchPanel({
             <FilterLabel>질의분류</FilterLabel>
             <select style={inp} value={filter.categoryId} onChange={e => set('categoryId', e.target.value as QuestionFilterState['categoryId'])}>
               <option value={ALL}>전체</option>
-              {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              {categoryOptions.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               <option value={UNSET}>미지정</option>
             </select>
           </div>

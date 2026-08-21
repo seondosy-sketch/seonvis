@@ -7,6 +7,7 @@ import { useMenuPermission } from '@/app/components/PermissionsProvider'
 import { evaluationReviewErrorMessage } from '@/lib/evaluations/errors'
 import {
   EMPTY_FILTER,
+  resolveUnspecifiedIds,
   type QuestionFilterOptions,
   type QuestionFilterState,
 } from '@/lib/evaluations/questionFilters'
@@ -147,6 +148,15 @@ export default function InterviewsPage() {
    * 전부 DB로 내렸다. 조회 대상은 evaluation_question_search view다(질문 + 기록 조인, RLS 유지).
    * 건수는 Prefer: count=exact로 DB가 세므로 페이지 크기와 무관하게 정확하다.
    */
+  /**
+   * 사용자에게 보이는 `미지정` 한 칸이 함께 찾아야 하는 마스터 id.
+   * 마스터에도 `미지정` 행이 있고 컬럼은 nullable이라, 두 상태를 한 선택지로 합쳐 조회한다
+   * (lib/evaluations/questionFilters.ts UNSPECIFIED_NAME).
+   */
+  const unspecifiedIds = useMemo(
+    () => resolveUnspecifiedIds(evaluationTypes, roles, categories),
+    [evaluationTypes, roles, categories],
+  )
   const loadQuestionPage = useCallback(async (f: QuestionFilterState, page: number): Promise<void> => {
     // 조건을 빠르게 바꾸면 조회가 겹친다. 응답이 도착한 순서는 보낸 순서와 다를 수 있어, 늦게 온
     // 이전 조회 결과가 최신 결과를 덮어쓸 수 있다(페이지를 넘긴 직후 필터를 걸면 재현된다).
@@ -155,7 +165,7 @@ export default function InterviewsPage() {
     questionRequestRef.current = requestId
     const isStale = () => questionRequestRef.current !== requestId
 
-    const plan = buildQuestionQueryPlan(f, page, QUESTION_PAGE_SIZE)
+    const plan = buildQuestionQueryPlan(f, page, QUESTION_PAGE_SIZE, unspecifiedIds)
 
     let query = supabase.from(QUESTION_SEARCH_VIEW).select('*', { count: 'exact' })
     if (plan.or) query = query.or(plan.or)
@@ -163,6 +173,8 @@ export default function InterviewsPage() {
       switch (filter.op) {
         case 'eq': query = query.eq(filter.column, filter.value); break
         case 'isNull': query = query.is(filter.column, null); break
+        // `미지정` — 마스터의 미지정 행과 NULL을 함께. or= 가 여러 개면 PostgREST가 AND로 묶는다.
+        case 'eqOrNull': query = query.or(`${filter.column}.eq.${filter.value},${filter.column}.is.null`); break
         case 'ilike': query = query.ilike(filter.column, filter.pattern); break
         case 'gte': query = query.gte(filter.column, filter.value); break
         case 'lte': query = query.lte(filter.column, filter.value); break
@@ -190,8 +202,9 @@ export default function InterviewsPage() {
     // 당긴다(페이지가 바뀌면 조회 effect가 다시 돌아 실제 행을 채운다).
     const valid = clampPage(page, total, QUESTION_PAGE_SIZE)
     if (valid !== page) setQuestionPage(valid)
+  // 마스터가 늦게 도착하면 `미지정`의 뜻이 달라지므로(NULL만 → 마스터 미지정 + NULL) 다시 만든다.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [unspecifiedIds])
 
   /**
    * 필터 후보(발주처·시설용도·연도)와 전체 질문 수.
@@ -293,7 +306,7 @@ export default function InterviewsPage() {
       if (!cancelled) setQuestionsLoading(false)
     })()
     return () => { cancelled = true }
-  }, [tab, appliedQuestionFilter, questionPage, questionReloadKey, loadQuestionPage])
+  }, [tab, appliedQuestionFilter, questionPage, questionReloadKey, unspecifiedIds, loadQuestionPage])
 
   /** 상세/수정에 필요한 후기 1건 전체(참석자 + 질문)를 읽는다. */
   const fetchDetail = useCallback(async (reviewId: string): Promise<ReviewDetail | null> => {

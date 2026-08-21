@@ -206,10 +206,15 @@ test.describe('질의 탭 — 필터', () => {
     await openQuestionTab(page)
     await pollTotal(page).toBeGreaterThan(1000)
 
-    // 평가유형·질의그룹·질의분류는 마스터에서 온다(전체/미지정 항목이 붙는다).
-    await expect(filterSelect(page, 0).locator('option')).toHaveCount(10) // 전체 + 8 + 미지정
-    await expect(filterSelect(page, 1).locator('option')).toHaveCount(12) // 전체 + 10 + 미지정
-    await expect(filterSelect(page, 2).locator('option')).toHaveCount(16) // 전체 + 14 + 미지정
+    // 평가유형·질의그룹·질의분류는 마스터에서 온다. 마스터에도 `미지정` 행이 있어서 그대로 그리면
+    // 사용자에게 `미지정`이 두 번 보였다 — 마스터의 `미지정`은 목록에서 빼고, 합친 `미지정` 한 칸이
+    // 마스터 미지정 + NULL 을 함께 찾는다(lib/evaluations/questionFilters.ts UNSPECIFIED_NAME).
+    await expect(filterSelect(page, 0).locator('option')).toHaveCount(9)  // 전체 + 마스터 7 + 미지정
+    await expect(filterSelect(page, 1).locator('option')).toHaveCount(11) // 전체 + 마스터 9 + 미지정
+    await expect(filterSelect(page, 2).locator('option')).toHaveCount(15) // 전체 + 마스터 13 + 미지정
+    for (const i of [0, 1, 2]) {
+      await expect(filterSelect(page, i).locator('option', { hasText: /^미지정$/ })).toHaveCount(1)
+    }
 
     // 발주처·시설용도 후보는 한 페이지(100건)에서 뽑은 것보다 많아야 한다.
     // 후보는 별도 집계 조회로 오므로(페이지 조회와 병렬) 채워질 때까지 기다린다.

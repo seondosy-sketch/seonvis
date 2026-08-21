@@ -17,9 +17,11 @@ import {
 import {
   ALL,
   EMPTY_FILTER,
+  NO_UNSPECIFIED_IDS,
   UNSET,
   filterQuestions,
   type QuestionFilterState,
+  type UnspecifiedIds,
 } from './questionFilters'
 
 function filter(overrides: Partial<QuestionFilterState> = {}): QuestionFilterState {
@@ -97,12 +99,38 @@ describe('buildQuestionQueryPlan — 필터를 DB 조건으로', () => {
     expect(plan.filters).toEqual([])
   })
 
-  it("'미지정'은 IS NULL 로 간다 — client-side 필터의 !value 와 같은 의미", () => {
+  it("마스터에 '미지정' 행이 없으면 '미지정'은 IS NULL 로만 간다", () => {
     const plan = buildQuestionQueryPlan(
       filter({ evaluationTypeId: UNSET, groupId: UNSET, categoryId: UNSET }), 1)
     expect(find(plan.filters, 'evaluation_type_id')).toEqual([{ op: 'isNull', column: 'evaluation_type_id' }])
     expect(find(plan.filters, 'role_id')).toEqual([{ op: 'isNull', column: 'role_id' }])
     expect(find(plan.filters, 'category_id')).toEqual([{ op: 'isNull', column: 'category_id' }])
+  })
+
+  it("마스터 '미지정' id 를 주면 그 행과 NULL 을 함께 찾는다", () => {
+    // 화면에는 `미지정`이 한 칸만 있고, 그 한 칸이 두 상태를 모두 가리켜야 한다.
+    // 한쪽만 찾으면 나머지 데이터가 검색에서 사라진다(운영 DB는 대부분 마스터 미지정 쪽이다).
+    const plan = buildQuestionQueryPlan(
+      filter({ evaluationTypeId: UNSET, groupId: UNSET, categoryId: UNSET }), 1, QUESTION_PAGE_SIZE,
+      { evaluationTypeId: 't-unspec', groupId: 'g-unspec', categoryId: 'c-unspec' })
+    expect(find(plan.filters, 'evaluation_type_id')).toEqual([{ op: 'eqOrNull', column: 'evaluation_type_id', value: 't-unspec' }])
+    expect(find(plan.filters, 'role_id')).toEqual([{ op: 'eqOrNull', column: 'role_id', value: 'g-unspec' }])
+    expect(find(plan.filters, 'category_id')).toEqual([{ op: 'eqOrNull', column: 'category_id', value: 'c-unspec' }])
+  })
+
+  it("축마다 따로 판단한다 — 마스터 '미지정'이 있는 축만 eqOrNull", () => {
+    const plan = buildQuestionQueryPlan(
+      filter({ groupId: UNSET, categoryId: UNSET }), 1, QUESTION_PAGE_SIZE,
+      { evaluationTypeId: null, groupId: 'g-unspec', categoryId: null })
+    expect(find(plan.filters, 'role_id')).toEqual([{ op: 'eqOrNull', column: 'role_id', value: 'g-unspec' }])
+    expect(find(plan.filters, 'category_id')).toEqual([{ op: 'isNull', column: 'category_id' }])
+  })
+
+  it("'미지정' 이 아닌 선택은 마스터 id 를 줘도 eq 그대로", () => {
+    const plan = buildQuestionQueryPlan(
+      filter({ categoryId: 'c-safety' }), 1, QUESTION_PAGE_SIZE,
+      { evaluationTypeId: null, groupId: null, categoryId: 'c-unspec' })
+    expect(find(plan.filters, 'category_id')).toEqual([{ op: 'eq', column: 'category_id', value: 'c-safety' }])
   })
 
   it('id 를 고르면 eq 조건', () => {
@@ -323,8 +351,12 @@ function ilikeToRegExp(pattern: string): RegExp {
   return new RegExp(`^${out}$`, 'i')
 }
 
-function applyPlanInMemory(rows: QuestionSearchRow[], f: QuestionFilterState): QuestionSearchRow[] {
-  const plan = buildQuestionQueryPlan(f, 1, rows.length || 1)
+function applyPlanInMemory(
+  rows: QuestionSearchRow[],
+  f: QuestionFilterState,
+  unspecified: UnspecifiedIds = NO_UNSPECIFIED_IDS,
+): QuestionSearchRow[] {
+  const plan = buildQuestionQueryPlan(f, 1, rows.length || 1, unspecified)
   const search = f.search.trim()
 
   const kept = rows.filter(r => {
@@ -338,6 +370,8 @@ function applyPlanInMemory(rows: QuestionSearchRow[], f: QuestionFilterState): Q
       switch (filterItem.op) {
         case 'isNull': return value === null
         case 'eq': return value === filterItem.value
+        // or=(col.eq.<id>,col.is.null) — 마스터 미지정 행 또는 값 없음
+        case 'eqOrNull': return value === null || value === filterItem.value
         case 'ilike': return value !== null && ilikeToRegExp(filterItem.pattern).test(String(value))
         // SQL 은 NULL 비교가 참이 되지 않는다 — 연도를 모르는 행은 자동으로 빠진다.
         case 'gte': return typeof value === 'number' && value >= filterItem.value
@@ -403,4 +437,45 @@ describe('서버측 계획 ↔ client-side 필터(oracle) 결과 일치', () => 
       expect(server).toEqual(oracle)
     })
   }
+})
+
+// ── `미지정` 한 칸이 마스터 미지정 + NULL 을 모두 찾는가 ─────────────────────────
+// 운영 DB에는 마스터 `미지정` 행을 가리키는 질문이 대부분이고 NULL 행은 지금 0건이지만, 컬럼이
+// nullable 이라 앞으로도 생길 수 있다. 화면의 `미지정` 한 칸이 둘 다 찾아야 어느 쪽도 검색에서
+// 사라지지 않는다. 서버측 계획과 oracle 이 같은 답을 내는지 함께 본다.
+describe("'미지정' 한 칸 = 마스터 미지정 + NULL", () => {
+  const UNSPEC: UnspecifiedIds = { evaluationTypeId: 't-unspec', groupId: 'g-unspec', categoryId: 'c-unspec' }
+  const rows: QuestionSearchRow[] = [
+    // 마스터 `미지정`을 가리키는 행(legacy import 가 만드는 실제 모양)
+    row({ id: 'm1', review_id: 'r1', question_text: '분류 없는 질문', role_id: 'g-unspec', category_id: 'c-unspec', evaluation_type_id: 't-unspec', evaluation_year_effective: 2024 }),
+    // 값이 아예 비어 있는 행
+    row({ id: 'n1', review_id: 'r2', question_text: '값이 비어 있는 질문', role_id: null, category_id: null, evaluation_type_id: null, evaluation_year_effective: 2023 }),
+    // 실제 분류가 있는 행
+    row({ id: 's1', review_id: 'r3', question_text: '안전 질문', role_id: 'g-lead', category_id: 'c-safety', evaluation_type_id: 't-soq', evaluation_year_effective: 2022 }),
+  ]
+  const oracleRows = rows.map(toQuestionWithReview)
+
+  const cases: Array<[string, QuestionFilterState, string[]]> = [
+    ['질의분류 미지정', filter({ categoryId: UNSET }), ['m1', 'n1']],
+    ['질의그룹 미지정', filter({ groupId: UNSET }), ['m1', 'n1']],
+    ['평가유형 미지정', filter({ evaluationTypeId: UNSET }), ['m1', 'n1']],
+    ['세 축 동시 미지정', filter({ evaluationTypeId: UNSET, groupId: UNSET, categoryId: UNSET }), ['m1', 'n1']],
+    ['실제 마스터 선택은 그 행만', filter({ categoryId: 'c-safety' }), ['s1']],
+    ['전체는 전부', filter(), ['m1', 'n1', 's1']],
+    ['미지정 + 다른 축 AND', filter({ categoryId: UNSET, yearFrom: '2024' }), ['m1']],
+    ['미지정 + 전체검색 AND', filter({ categoryId: UNSET, search: '비어 있는' }), ['n1']],
+  ]
+
+  for (const [label, f, expected] of cases) {
+    it(`${label}`, () => {
+      expect(applyPlanInMemory(rows, f, UNSPEC).map(r => r.id)).toEqual(expected)
+      expect(filterQuestions(oracleRows, f, UNSPEC).map(q => q.id)).toEqual(expected)
+    })
+  }
+
+  it('마스터 미지정 id 를 모르면 NULL 행만 찾는다(회귀 방지 기준)', () => {
+    const f = filter({ categoryId: UNSET })
+    expect(applyPlanInMemory(rows, f).map(r => r.id)).toEqual(['n1'])
+    expect(filterQuestions(oracleRows, f).map(q => q.id)).toEqual(['n1'])
+  })
 })
