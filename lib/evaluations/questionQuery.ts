@@ -17,7 +17,14 @@
  * 검색 의미는 questionFilters.ts(client-side 순수 필터)와 같아야 한다 — 그쪽은 이제 production
  * 조회 경로가 아니지만, 같은 데이터에 대해 두 결과가 일치하는지 확인하는 oracle로 쓴다.
  */
-import { ALL, UNSET, type QuestionFilterOptions, type QuestionFilterState } from './questionFilters'
+import {
+  ALL,
+  NO_UNSPECIFIED_IDS,
+  UNSET,
+  type QuestionFilterOptions,
+  type QuestionFilterState,
+  type UnspecifiedIds,
+} from './questionFilters'
 import type { QuestionWithReview } from './types'
 
 /** 조회 대상 view (질문 + 그 질문이 나온 기록의 조회용 필드). */
@@ -119,6 +126,12 @@ export function searchOrExpression(
 export type QuestionQueryFilter =
   | { op: 'eq'; column: string; value: string }
   | { op: 'isNull'; column: string }
+  /**
+   * 사용자에게 보이는 `미지정` 한 칸 — 마스터의 `미지정` 행과 NULL을 함께 찾는다.
+   * PostgREST에서는 or=(col.eq.<id>,col.is.null) 하나로 표현한다. or= 파라미터가 여러 개면
+   * PostgREST가 서로 AND로 묶어주므로 전체검색 or와 같이 써도 뜻이 섞이지 않는다(실측 확인).
+   */
+  | { op: 'eqOrNull'; column: string; value: string }
   | { op: 'ilike'; column: string; pattern: string }
   | { op: 'gte'; column: string; value: number }
   | { op: 'lte'; column: string; value: number }
@@ -155,10 +168,16 @@ export interface QuestionQueryPlan {
   to: number
 }
 
-/** id 기준 필터 한 칸(전체/미지정/특정 id)을 DB 조건으로. */
-function idFilter(column: string, value: string): QuestionQueryFilter | null {
+/**
+ * id 기준 필터 한 칸(전체/미지정/특정 id)을 DB 조건으로.
+ * `미지정`은 마스터의 `미지정` 행 + NULL을 함께 찾는다. 마스터에 그 행이 없으면 NULL만 찾는다
+ * (questionFilters.ts의 UNSPECIFIED_NAME 주석에 관계를 정리해 뒀다).
+ */
+function idFilter(column: string, value: string, unspecifiedId: string | null): QuestionQueryFilter | null {
   if (value === ALL) return null
-  if (value === UNSET) return { op: 'isNull', column }
+  if (value === UNSET) {
+    return unspecifiedId ? { op: 'eqOrNull', column, value: unspecifiedId } : { op: 'isNull', column }
+  }
   return { op: 'eq', column, value }
 }
 
@@ -172,15 +191,16 @@ export function buildQuestionQueryPlan(
   f: QuestionFilterState,
   page: number,
   pageSize: number = QUESTION_PAGE_SIZE,
+  unspecified: UnspecifiedIds = NO_UNSPECIFIED_IDS,
 ): QuestionQueryPlan {
   const filters: QuestionQueryFilter[] = []
 
-  for (const [column, value] of [
-    ['evaluation_type_id', f.evaluationTypeId],
-    ['role_id', f.groupId],
-    ['category_id', f.categoryId],
+  for (const [column, value, unspecifiedId] of [
+    ['evaluation_type_id', f.evaluationTypeId, unspecified.evaluationTypeId],
+    ['role_id', f.groupId, unspecified.groupId],
+    ['category_id', f.categoryId, unspecified.categoryId],
   ] as const) {
-    const filter = idFilter(column, value)
+    const filter = idFilter(column, value, unspecifiedId)
     if (filter) filters.push(filter)
   }
 

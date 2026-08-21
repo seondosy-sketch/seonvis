@@ -3,11 +3,14 @@ import {
   ALL,
   EMPTY_FILTER,
   UNSET,
+  UNSPECIFIED_NAME,
   buildFilterOptions,
   filterQuestions,
   hasActiveFilter,
   matchesQuestionFilter,
   questionYear,
+  resolveUnspecifiedIds,
+  splitUnspecifiedOption,
   type QuestionFilterState,
 } from './questionFilters'
 import type { QuestionWithReview } from './types'
@@ -353,5 +356,106 @@ describe('buildFilterOptions — 선택 후보를 데이터에서 뽑는다', ()
     expect(options.clients).toEqual(['조달청'])
     expect(options.facilities).toEqual(['군시설'])
     expect(options.years).toEqual([2023])
+  })
+})
+
+// ── 마스터의 `미지정` 과 사용자에게 보이는 `미지정` ──────────────────────────────
+describe('splitUnspecifiedOption — 선택지 중복 제거', () => {
+  const rows = [
+    { id: 'c-quality', name: '품질' },
+    { id: 'c-safety', name: '안전' },
+    { id: 'c-unspec', name: UNSPECIFIED_NAME },
+  ]
+
+  it("마스터의 `미지정` 행은 선택지에서 뺀다 — 화면에는 `미지정`이 한 번만 보여야 한다", () => {
+    const { options, unspecifiedId } = splitUnspecifiedOption(rows)
+    expect(options.map(o => o.name)).toEqual(['품질', '안전'])
+    expect(options.some(o => o.name === UNSPECIFIED_NAME)).toBe(false)
+    expect(unspecifiedId).toBe('c-unspec')
+  })
+
+  it('마스터에 `미지정` 이 없으면 그대로 두고 id 는 null', () => {
+    const { options, unspecifiedId } = splitUnspecifiedOption(rows.slice(0, 2))
+    expect(options).toHaveLength(2)
+    expect(unspecifiedId).toBeNull()
+  })
+
+  it('앞뒤 공백이 섞인 `미지정` 도 같은 값으로 본다', () => {
+    expect(splitUnspecifiedOption([{ id: 'x', name: ' 미지정 ' }]).unspecifiedId).toBe('x')
+  })
+
+  it('원본 순서를 흐트러뜨리지 않는다', () => {
+    const { options } = splitUnspecifiedOption([
+      { id: 'a', name: '가' }, { id: 'u', name: UNSPECIFIED_NAME }, { id: 'b', name: '나' },
+    ])
+    expect(options.map(o => o.id)).toEqual(['a', 'b'])
+  })
+
+  it('resolveUnspecifiedIds 는 세 축을 각각 본다', () => {
+    expect(resolveUnspecifiedIds(
+      [{ id: 't-unspec', name: UNSPECIFIED_NAME }, { id: 't-soq', name: 'SOQ' }],
+      [{ id: 'g-lead', name: '책임' }],
+      [{ id: 'c-unspec', name: UNSPECIFIED_NAME }],
+    )).toEqual({ evaluationTypeId: 't-unspec', groupId: null, categoryId: 'c-unspec' })
+  })
+})
+
+describe("`미지정` 필터 = 마스터 미지정 행 + 값 없음", () => {
+  const UNSPEC = { evaluationTypeId: 't-unspec', groupId: 'g-unspec', categoryId: 'c-unspec' }
+
+  it('질의분류 — 마스터 미지정과 NULL 을 모두 찾는다', () => {
+    const f = filter({ categoryId: UNSET })
+    expect(matchesQuestionFilter(makeQuestion({ category_id: 'c-unspec' }), f, UNSPEC)).toBe(true)
+    expect(matchesQuestionFilter(makeQuestion({ category_id: null }), f, UNSPEC)).toBe(true)
+    expect(matchesQuestionFilter(makeQuestion({ category_id: 'cat-quality' }), f, UNSPEC)).toBe(false)
+  })
+
+  it('질의그룹 — 마스터 미지정과 NULL 을 모두 찾는다', () => {
+    const f = filter({ groupId: UNSET })
+    expect(matchesQuestionFilter(makeQuestion({ role_id: 'g-unspec' }), f, UNSPEC)).toBe(true)
+    expect(matchesQuestionFilter(makeQuestion({ role_id: null }), f, UNSPEC)).toBe(true)
+    expect(matchesQuestionFilter(makeQuestion({ role_id: 'group-lead' }), f, UNSPEC)).toBe(false)
+  })
+
+  it('평가유형 — 마스터 미지정과 NULL 을 모두 찾는다', () => {
+    const f = filter({ evaluationTypeId: UNSET })
+    expect(matchesQuestionFilter(makeQuestion({ evaluationTypeId: 't-unspec' }), f, UNSPEC)).toBe(true)
+    expect(matchesQuestionFilter(makeQuestion({ evaluationTypeId: null }), f, UNSPEC)).toBe(true)
+    expect(matchesQuestionFilter(makeQuestion({ evaluationTypeId: 'type-soq' }), f, UNSPEC)).toBe(false)
+  })
+
+  it('실제 마스터 항목을 고르면 미지정 행은 걸리지 않는다', () => {
+    const f = filter({ categoryId: 'cat-quality' })
+    expect(matchesQuestionFilter(makeQuestion({ category_id: 'cat-quality' }), f, UNSPEC)).toBe(true)
+    expect(matchesQuestionFilter(makeQuestion({ category_id: 'c-unspec' }), f, UNSPEC)).toBe(false)
+    expect(matchesQuestionFilter(makeQuestion({ category_id: null }), f, UNSPEC)).toBe(false)
+  })
+
+  it('`전체` 는 여전히 전부 포함', () => {
+    const f = filter({ categoryId: ALL })
+    expect(matchesQuestionFilter(makeQuestion({ category_id: 'c-unspec' }), f, UNSPEC)).toBe(true)
+    expect(matchesQuestionFilter(makeQuestion({ category_id: null }), f, UNSPEC)).toBe(true)
+  })
+
+  it('마스터 id 를 넘기지 않으면 예전처럼 NULL 만 (회귀 방지 기준)', () => {
+    const f = filter({ categoryId: UNSET })
+    expect(matchesQuestionFilter(makeQuestion({ category_id: null }), f)).toBe(true)
+    expect(matchesQuestionFilter(makeQuestion({ category_id: 'c-unspec' }), f)).toBe(false)
+  })
+
+  it('다른 축과 AND 로 묶인다', () => {
+    const f = filter({ categoryId: UNSET, groupId: 'group-lead' })
+    expect(matchesQuestionFilter(makeQuestion({ category_id: 'c-unspec', role_id: 'group-lead' }), f, UNSPEC)).toBe(true)
+    expect(matchesQuestionFilter(makeQuestion({ category_id: 'c-unspec', role_id: 'group-safety' }), f, UNSPEC)).toBe(false)
+  })
+
+  it('filterQuestions 도 같은 의미로 거른다', () => {
+    const list = [
+      makeQuestion({ id: 'a', category_id: 'c-unspec' }),
+      makeQuestion({ id: 'b', category_id: null }),
+      makeQuestion({ id: 'c', category_id: 'cat-quality' }),
+    ]
+    expect(filterQuestions(list, filter({ categoryId: UNSET }), UNSPEC).map(q => q.id).sort())
+      .toEqual(['a', 'b'])
   })
 })

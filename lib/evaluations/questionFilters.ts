@@ -27,6 +27,70 @@ import type { QuestionWithReview } from './types'
 export const ALL = '전체'
 export const UNSET = '미지정'
 
+/**
+ * 마스터 테이블에 실제로 들어 있는 "미지정" 행의 이름.
+ *
+ * 평가유형·질의그룹·질의분류 마스터에는 각각 이름이 `미지정`인 행이 있고(legacy 자료를 넣을 때
+ * 분류를 추측하지 않기 위해 쓴다), 필터 UI는 그와 별개로 "값이 비어 있음(NULL)"을 고르는 칸을
+ * 따로 두고 있었다. 그래서 사용자에게는 `미지정`이 두 번 보였다.
+ *
+ * 정리한 관계:
+ *   - 마스터의 `미지정` 행  … 실제 데이터가 가리키는 id (운영 DB에서 이게 대부분이다)
+ *   - legacy NULL          … 컬럼이 nullable이라 앞으로도 생길 수 있는 상태
+ *   - 사용자에게 보이는 `미지정` 한 칸(UNSET) … 위 **둘 다**를 찾는다
+ * 두 상태를 사용자에게 구분해 보여줄 이유가 없고(둘 다 "분류가 없다"는 뜻), 한쪽만 찾으면 나머지가
+ * 검색에서 사라진다. 그래서 선택지는 하나로 합치고 조회는 둘을 OR로 본다.
+ */
+export const UNSPECIFIED_NAME = '미지정'
+
+/** 축별 마스터 `미지정` 행의 id. 마스터에 그 행이 없으면 null(그때는 NULL만 찾는다). */
+export interface UnspecifiedIds {
+  evaluationTypeId: string | null
+  groupId: string | null
+  categoryId: string | null
+}
+
+/** 마스터를 아직 못 읽었을 때 쓰는 값 — `미지정`은 NULL만 뜻하게 된다. */
+export const NO_UNSPECIFIED_IDS: UnspecifiedIds = {
+  evaluationTypeId: null,
+  groupId: null,
+  categoryId: null,
+}
+
+/**
+ * 마스터 목록에서 `미지정` 행을 떼어낸다.
+ * `options`는 select에 그대로 그릴 목록(중복이 생기지 않도록 `미지정`을 뺀 것),
+ * `unspecifiedId`는 사용자에게 보이는 `미지정` 한 칸이 함께 찾아야 하는 id다.
+ */
+export function splitUnspecifiedOption<T extends { id: string; name: string }>(
+  rows: readonly T[],
+): { options: T[]; unspecifiedId: string | null } {
+  const options: T[] = []
+  let unspecifiedId: string | null = null
+  for (const row of rows) {
+    if (row.name.trim() === UNSPECIFIED_NAME) {
+      // 마스터에 `미지정`이 여러 개일 이유는 없지만, 있으면 첫 행을 대표로 쓴다.
+      if (unspecifiedId === null) unspecifiedId = row.id
+      continue
+    }
+    options.push(row)
+  }
+  return { options, unspecifiedId }
+}
+
+/** 세 축의 마스터에서 `미지정` id를 한 번에 뽑는다. */
+export function resolveUnspecifiedIds(
+  evaluationTypes: readonly { id: string; name: string }[],
+  roles: readonly { id: string; name: string }[],
+  categories: readonly { id: string; name: string }[],
+): UnspecifiedIds {
+  return {
+    evaluationTypeId: splitUnspecifiedOption(evaluationTypes).unspecifiedId,
+    groupId: splitUnspecifiedOption(roles).unspecifiedId,
+    categoryId: splitUnspecifiedOption(categories).unspecifiedId,
+  }
+}
+
 export interface QuestionFilterState {
   /** 전체검색 — 질문 본문 + 용역명 + 발주처 + 시설용도를 함께 훑는다. */
   search: string
@@ -72,10 +136,13 @@ export function questionYear(q: QuestionWithReview): number | null {
   return q.review.evaluation_year_effective ?? null
 }
 
-/** id 기준 필터 한 칸(전체/미지정/특정 id) 판정 — 평가유형·질의그룹·질의분류가 같은 규칙을 쓴다. */
-function matchesIdFilter(value: string | null, filter: string): boolean {
+/**
+ * id 기준 필터 한 칸(전체/미지정/특정 id) 판정 — 평가유형·질의그룹·질의분류가 같은 규칙을 쓴다.
+ * `미지정`은 값이 비어 있는 행(NULL)과 마스터의 `미지정` 행을 모두 포함한다(UNSPECIFIED_NAME 참고).
+ */
+function matchesIdFilter(value: string | null, filter: string, unspecifiedId: string | null): boolean {
   if (filter === ALL) return true
-  if (filter === UNSET) return !value
+  if (filter === UNSET) return !value || value === unspecifiedId
   return value === filter
 }
 
@@ -84,7 +151,11 @@ function matchesIdFilter(value: string | null, filter: string): boolean {
  * 예) 평가유형 TP + 질의그룹 '책임' + 질의분류 '공정' + 발주처 "한국전력공사" + 시설용도 "변전소"
  *     + 2022~2026.
  */
-export function matchesQuestionFilter(q: QuestionWithReview, f: QuestionFilterState): boolean {
+export function matchesQuestionFilter(
+  q: QuestionWithReview,
+  f: QuestionFilterState,
+  unspecified: UnspecifiedIds = NO_UNSPECIFIED_IDS,
+): boolean {
   const search = f.search.trim()
   if (search) {
     const hit =
@@ -95,9 +166,9 @@ export function matchesQuestionFilter(q: QuestionWithReview, f: QuestionFilterSt
     if (!hit) return false
   }
 
-  if (!matchesIdFilter(q.review.evaluation_type_id, f.evaluationTypeId)) return false
-  if (!matchesIdFilter(q.role_id, f.groupId)) return false
-  if (!matchesIdFilter(q.category_id, f.categoryId)) return false
+  if (!matchesIdFilter(q.review.evaluation_type_id, f.evaluationTypeId, unspecified.evaluationTypeId)) return false
+  if (!matchesIdFilter(q.role_id, f.groupId, unspecified.groupId)) return false
+  if (!matchesIdFilter(q.category_id, f.categoryId, unspecified.categoryId)) return false
 
   const client = f.clientQuery.trim()
   if (client && !includesFold(q.review.client_snapshot, client)) return false
@@ -124,9 +195,10 @@ export function matchesQuestionFilter(q: QuestionWithReview, f: QuestionFilterSt
 export function filterQuestions(
   questions: readonly QuestionWithReview[],
   f: QuestionFilterState,
+  unspecified: UnspecifiedIds = NO_UNSPECIFIED_IDS,
 ): QuestionWithReview[] {
   return questions
-    .filter(q => matchesQuestionFilter(q, f))
+    .filter(q => matchesQuestionFilter(q, f, unspecified))
     .sort((a, b) => {
       const ya = questionYear(a)
       const yb = questionYear(b)
