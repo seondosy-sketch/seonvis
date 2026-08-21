@@ -25,6 +25,7 @@ import {
   type QuestionFilterState,
   type UnspecifiedIds,
 } from './questionFilters'
+import { PRIVATE_LEGACY_MAX_YEAR, YEAR_COLUMN } from './privateLegacy'
 import type { QuestionWithReview } from './types'
 
 /** 조회 대상 view (질문 + 그 질문이 나온 기록의 조회용 필드). */
@@ -132,6 +133,11 @@ export type QuestionQueryFilter =
    * PostgREST가 서로 AND로 묶어주므로 전체검색 or와 같이 써도 뜻이 섞이지 않는다(실측 확인).
    */
   | { op: 'eqOrNull'; column: string; value: string }
+  /**
+   * 공개분만 — 연도가 경계보다 크거나, 연도를 모르는 행. 개인 비공개 자료(2020년 이하)를
+   * 화면에서 빼는 편의 필터다(차단은 RLS가 한다: lib/evaluations/privateLegacy.ts).
+   */
+  | { op: 'gtOrNull'; column: string; value: number }
   | { op: 'ilike'; column: string; pattern: string }
   | { op: 'gte'; column: string; value: number }
   | { op: 'lte'; column: string; value: number }
@@ -186,14 +192,23 @@ function idFilter(column: string, value: string, unspecifiedId: string | null): 
  *
  * 연도 범위는 evaluation_year_effective(generated column)에만 걸린다. 연도를 모르는 행은
  * SQL 비교에서 자동으로 빠진다(NULL 비교는 참이 아니다) — client-side 필터와 같은 결과다.
+ *
+ * includePrivateLegacy는 기본 false다 — 개인 비공개 자료(2020년 이하)를 빼는 쪽이 기본이어야
+ * 실수로 켜지는 일이 없다. 이 값이 무엇이든 권한 없는 사용자에게 행이 가지 않는 것은 RLS가
+ * 보장한다(supabase/migration_interview_private_legacy.sql).
  */
 export function buildQuestionQueryPlan(
   f: QuestionFilterState,
   page: number,
   pageSize: number = QUESTION_PAGE_SIZE,
   unspecified: UnspecifiedIds = NO_UNSPECIFIED_IDS,
+  includePrivateLegacy = false,
 ): QuestionQueryPlan {
   const filters: QuestionQueryFilter[] = []
+
+  if (!includePrivateLegacy) {
+    filters.push({ op: 'gtOrNull', column: YEAR_COLUMN, value: PRIVATE_LEGACY_MAX_YEAR })
+  }
 
   for (const [column, value, unspecifiedId] of [
     ['evaluation_type_id', f.evaluationTypeId, unspecified.evaluationTypeId],
@@ -256,9 +271,14 @@ export interface QuestionFacetRow {
  * 현재 페이지 100건이 아니라 **전체 데이터** 기준이어야 한다 — 페이지를 넘길 때마다 후보 목록이
  * 달라지면 필터를 쓸 수 없다. 정렬은 기존 화면과 같게 빈도 내림차순(동수면 이름순), 연도는
  * 숫자 내림차순.
+ *
+ * includePrivateLegacy가 false면 개인 비공개 연도(2020년 이하)를 연도 후보에서 뺀다 — 소유자가
+ * 토글을 끈 상태에서 고를 수 없는 연도가 목록에 남아 있으면 안 된다. 발주처·시설용도 후보는
+ * facets view가 연도를 주지 않아 그대로 둔다(소유자 본인에게만 건수가 조금 더 세어 보인다).
  */
 export function buildFilterOptionsFromFacets(
   rows: readonly QuestionFacetRow[],
+  includePrivateLegacy = false,
 ): QuestionFilterOptions {
   // 값은 다듬어서 합친다 — 실제 데이터에 앞뒤 공백이 섞인 값이 있어(예: ' 교육연구시설(...)')
   // 그대로 두면 같은 값이 후보에 두 번 나온다. view도 btrim하지만 여기서도 한 번 더 막는다.
@@ -279,6 +299,7 @@ export function buildFilterOptionsFromFacets(
     .filter(r => r.facet === 'year')
     .map(r => parseInt(r.value, 10))
     .filter(y => Number.isFinite(y))
+    .filter(y => includePrivateLegacy || y > PRIVATE_LEGACY_MAX_YEAR)
     .sort((a, b) => b - a)
 
   return {

@@ -165,7 +165,9 @@ test.describe('질의 탭 — 필터', () => {
     await searchBox(page).fill('변전소')
     await filterSelect(page, 1).selectOption({ label: '건축' })
     await clientBox(page).fill('한국전력공사')
-    await filterSelect(page, 3).selectOption({ label: '2020' })
+    // 연도 하한은 공개 범위에서 고른다 — 2020년 이하는 개인 비공개 자료라 선택지에 없다
+    // (supabase/migration_interview_private_legacy.sql).
+    await filterSelect(page, 3).selectOption({ label: '2021' })
 
     await pollTotal(page).toBeLessThan(all)
     const count = await totalCount(page)
@@ -228,6 +230,148 @@ test.describe('질의 탭 — 필터', () => {
     await page.getByRole('button', { name: '다음' }).click()
     await expect(pageIs(page, 2).first()).toBeVisible()
     expect(await page.locator('#question-client-options option').count()).toBe(before)
+  })
+})
+
+test.describe('면접 DB — 2020년 이하 개인 비공개 자료', () => {
+  /**
+   * 일반 사용자(Test Auth 계정)로 도는 검증이다. 이 계정은
+   * allowed_users.can_view_private_legacy = false 이므로 개인자료가 화면에도, 응답에도 없어야 한다.
+   *
+   * 여기서 확인하는 것은 "화면이 감추는가"가 아니라 "애초에 오지 않는가"다 — 차단은
+   * supabase/migration_interview_private_legacy.sql 의 RLS가 하고, 이 테스트는 그 결과를 본다.
+   */
+  test('일반 사용자에게는 `내 과거자료 포함` 토글이 없다', async ({ page }) => {
+    await page.goto('/interviews')
+    await expect(page.getByRole('button', { name: '면접후기', exact: true })).toBeVisible()
+    await expect(page.getByText('내 과거자료 포함')).toHaveCount(0)
+  })
+
+  test('후기 탭에 2020년 이하 기록이 하나도 없다', async ({ page }) => {
+    await page.goto('/interviews')
+    const label = page.getByText(/^후기 [\d,]+건/)
+    await expect(label).toBeVisible()
+
+    // 첫 칸이 평가일이다. 목록은 연도 내림차순이므로 여기 있는 모든 연도가 2021 이상이어야 한다.
+    const dateCells = page.locator('table tbody tr td:first-child')
+    await expect.poll(() => dateCells.count(), { timeout: 15_000 }).toBeGreaterThan(100)
+    const years = (await dateCells.allInnerTexts())
+      .flatMap(r => [...r.matchAll(/\b(20\d{2})\b/g)].map(m => Number(m[1])))
+    // 검증이 헛돌지 않게 실제로 연도를 읽었는지부터 확인한다(선택자가 어긋나면 여기서 걸린다).
+    expect(years.length).toBeGreaterThan(100)
+    expect(Math.min(...years)).toBeGreaterThanOrEqual(2021)
+  })
+
+  test('연도 필터 후보에 2020년 이하가 없다', async ({ page }) => {
+    await openQuestionTab(page)
+    await pollTotal(page).toBeGreaterThan(0)
+
+    for (const i of [3, 4]) {
+      const opts = await filterSelect(page, i).locator('option').allInnerTexts()
+      const years = opts.map(t => Number(t.trim())).filter(n => Number.isFinite(n) && n > 1990)
+      expect(years.length).toBeGreaterThan(0)
+      expect(Math.min(...years)).toBeGreaterThanOrEqual(2021)
+    }
+  })
+
+  test('2020년 이하를 요청해도 결과가 늘지 않는다 (연도 하한을 강제로 낮춘다)', async ({ page }) => {
+    await openQuestionTab(page)
+    const publicTotal = await totalCount(page)
+    expect(publicTotal).toBeGreaterThan(0)
+
+    // select 에 없는 값을 주입해서 "일반 사용자가 직접 더 넓은 범위를 요청한" 상황을 만든다.
+    // RLS가 막으므로 건수가 그대로여야 한다 — 화면 필터가 유일한 방어선이면 여기서 늘어난다.
+    await filterSelect(page, 3).evaluate(el => {
+      const opt = document.createElement('option')
+      opt.value = '2000'
+      opt.text = '2000'
+      el.appendChild(opt)
+    })
+    await filterSelect(page, 3).selectOption('2000')
+    await pollTotal(page).toBe(publicTotal)
+
+    const shown = await page.locator(QUESTION_CARD).count()
+    expect(shown).toBeGreaterThan(0)
+  })
+})
+
+test.describe('면접 DB — 소유자 화면(권한 시뮬레이션)', () => {
+  /**
+   * 소유자에게만 보이는 `내 과거자료 포함` 토글을 검증한다.
+   *
+   * 실제 소유자 계정의 비밀번호·쿠키·Google token은 쓰지 않는다. 대신 "나에게 토글을 보여줄지"만
+   * 묻는 RPC 응답 하나를 가로채 소유자 화면을 띄운다. **데이터 요청은 가로채지 않는다** — 그래서
+   * 이 테스트는 토글을 켰을 때 연도 조건이 요청에서 빠지는 것까지 확인하면서도, 돌아오는 행은
+   * 여전히 RLS가 정한 범위뿐임을 함께 증명한다. 화면 토글이 보안 경계가 아니라는 뜻이다.
+   */
+  const OWNER_RPC = '**/rest/v1/rpc/can_view_private_legacy*'
+  const YEAR_CONDITION = 'evaluation_year_effective.gt.2020'
+
+  /** "후기 243건" → 243. 숫자만 남긴다(쉼표·문구 제거). */
+  async function reviewCount(page: Page): Promise<number> {
+    const label = page.getByText(/^후기 /)
+    await expect(label).toBeVisible()
+    return Number((await label.innerText()).replace(/[^0-9]/g, ''))
+  }
+
+  /** 후기 목록 첫 칸(평가일)의 연도들. 형식이 "2026년 ..." 이라 앞 4자리를 읽는다. */
+  async function listedYears(page: Page): Promise<number[]> {
+    const cells = page.locator('table tbody tr td:first-child')
+    await expect.poll(() => cells.count(), { timeout: 15_000 }).toBeGreaterThan(0)
+    return (await cells.allInnerTexts())
+      .map(t => Number(t.trim().slice(0, 4)))
+      .filter(n => Number.isFinite(n) && n > 1990)
+  }
+
+  test('소유자에게는 토글이 보이고 기본은 꺼져 있다', async ({ page }) => {
+    await page.route(OWNER_RPC, route =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: 'true' }))
+    await page.goto('/interviews')
+
+    await expect(page.getByText('내 과거자료 포함')).toBeVisible()
+    await expect(page.getByRole('checkbox')).not.toBeChecked()
+  })
+
+  test('토글 OFF는 공개분만 요청한다', async ({ page }) => {
+    const withYear: string[] = []
+    page.on('request', req => {
+      const url = decodeURIComponent(req.url())
+      if (url.includes('/rest/v1/evaluation_reviews') && url.includes(YEAR_CONDITION)) withYear.push(url)
+    })
+    await page.route(OWNER_RPC, route =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: 'true' }))
+    await page.goto('/interviews')
+
+    await expect.poll(() => withYear.length, { timeout: 15_000 }).toBeGreaterThan(0)
+    const years = await listedYears(page)
+    expect(years.length).toBeGreaterThan(0)
+    expect(Math.min(...years)).toBeGreaterThanOrEqual(2021)
+  })
+
+  test('토글 ON은 연도 조건을 빼고 요청하지만, 권한 밖 자료는 오지 않는다', async ({ page }) => {
+    await page.route(OWNER_RPC, route =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: 'true' }))
+    await page.goto('/interviews')
+
+    const before = await reviewCount(page)
+    expect(before).toBeGreaterThan(0)
+
+    const withoutYear: string[] = []
+    page.on('request', req => {
+      const url = decodeURIComponent(req.url())
+      if (url.includes('/rest/v1/evaluation_reviews') && !url.includes(YEAR_CONDITION)) withoutYear.push(url)
+    })
+
+    await page.getByRole('checkbox').check()
+    await expect(page.getByRole('checkbox')).toBeChecked()
+
+    // 연도 조건이 아예 빠진 요청이 실제로 나갔는지 먼저 확인한다(안 나갔으면 아래 단정이 헛돈다).
+    await expect.poll(() => withoutYear.length, { timeout: 15_000 }).toBeGreaterThan(0)
+
+    // 그런데도 건수와 연도 범위는 그대로다 — 이 계정에는 권한이 없으므로 RLS가 막는다.
+    await expect.poll(() => reviewCount(page), { timeout: 15_000 }).toBe(before)
+    const years = await listedYears(page)
+    expect(Math.min(...years)).toBeGreaterThanOrEqual(2021)
   })
 })
 
