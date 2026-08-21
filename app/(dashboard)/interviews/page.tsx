@@ -11,6 +11,7 @@ import {
   type QuestionFilterOptions,
   type QuestionFilterState,
 } from '@/lib/evaluations/questionFilters'
+import { publicOnlyOrExpression } from '@/lib/evaluations/privateLegacy'
 import {
   QUESTION_FACETS_VIEW,
   QUESTION_PAGE_SIZE,
@@ -77,6 +78,16 @@ export default function InterviewsPage() {
 
   const [reviewSearch, setReviewSearch] = useState('')
 
+  // ── 2020년 이하 개인 비공개 자료 ────────────────────────────────────────────
+  // 자료 소유자 본인에게만 `내 과거자료 포함` 토글을 보여주고, 기본은 끈 상태다(평소 화면은
+  // 회사 공용 자료만). 누가 소유자인지는 코드가 아니라 DB에 있다 —
+  // allowed_users.can_view_private_legacy 를 public.can_view_private_legacy() RPC로 물어본다.
+  //
+  // 이 두 상태는 화면 편의일 뿐 보안 경계가 아니다. 권한이 없으면 토글을 켜든 PostgREST를 직접
+  // 호출하든 행 자체가 오지 않는다(supabase/migration_interview_private_legacy.sql의 RLS).
+  const [canViewPrivateLegacy, setCanViewPrivateLegacy] = useState(false)
+  const [includePrivateLegacy, setIncludePrivateLegacy] = useState(false)
+
   // ── 질의 탭 상태 ────────────────────────────────────────────────────────────
   // questionFilter는 사용자가 지금 입력칸에 넣은 값(즉시 반영), appliedQuestionFilter는 실제로 DB에
   // 보낸 조건이다. 검색어는 타이핑 중이라 300ms 뒤에 적용하므로 둘을 나눠 둔다.
@@ -113,11 +124,21 @@ export default function InterviewsPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // 내가 개인자료 소유자인지 DB에 묻는다(토글을 보여줄지 결정하는 용도). 실패하면 false로 두면
+  // 토글이 안 보일 뿐이고, 어차피 볼 수 있는 자료는 RLS가 정한다.
+  useEffect(() => {
+    supabase.rpc('can_view_private_legacy').then(({ data }) => setCanViewPrivateLegacy(data === true))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   /** 후기 목록 — 참석자와 질문 수를 함께 읽는다(목록에 그대로 보여줄 값들). */
-  const loadReviews = useCallback(async (): Promise<void> => {
-    const { data, error } = await supabase
+  const loadReviews = useCallback(async (include: boolean): Promise<void> => {
+    let builder = supabase
       .from('evaluation_reviews')
       .select('*, attendees:evaluation_review_attendees(*), question_count:evaluation_questions(count)')
+    // 토글이 꺼져 있으면 공개분만 — 소유자 본인 화면에서 개인자료를 빼 둔다.
+    if (!include) builder = builder.or(publicOnlyOrExpression())
+    const { data, error } = await builder
       .order('evaluation_year_effective', { ascending: false, nullsFirst: false })
 
     if (error) {
@@ -157,7 +178,11 @@ export default function InterviewsPage() {
     () => resolveUnspecifiedIds(evaluationTypes, roles, categories),
     [evaluationTypes, roles, categories],
   )
-  const loadQuestionPage = useCallback(async (f: QuestionFilterState, page: number): Promise<void> => {
+  const loadQuestionPage = useCallback(async (
+    f: QuestionFilterState,
+    page: number,
+    include: boolean,
+  ): Promise<void> => {
     // 조건을 빠르게 바꾸면 조회가 겹친다. 응답이 도착한 순서는 보낸 순서와 다를 수 있어, 늦게 온
     // 이전 조회 결과가 최신 결과를 덮어쓸 수 있다(페이지를 넘긴 직후 필터를 걸면 재현된다).
     // 그래서 요청마다 번호를 매기고, 돌아왔을 때 최신 요청이 아니면 결과를 버린다.
@@ -165,7 +190,7 @@ export default function InterviewsPage() {
     questionRequestRef.current = requestId
     const isStale = () => questionRequestRef.current !== requestId
 
-    const plan = buildQuestionQueryPlan(f, page, QUESTION_PAGE_SIZE, unspecifiedIds)
+    const plan = buildQuestionQueryPlan(f, page, QUESTION_PAGE_SIZE, unspecifiedIds, include)
 
     let query = supabase.from(QUESTION_SEARCH_VIEW).select('*', { count: 'exact' })
     if (plan.or) query = query.or(plan.or)
@@ -175,6 +200,8 @@ export default function InterviewsPage() {
         case 'isNull': query = query.is(filter.column, null); break
         // `미지정` — 마스터의 미지정 행과 NULL을 함께. or= 가 여러 개면 PostgREST가 AND로 묶는다.
         case 'eqOrNull': query = query.or(`${filter.column}.eq.${filter.value},${filter.column}.is.null`); break
+        // 공개분만 — 2020년 이하 개인자료를 뺀다(차단 자체는 RLS가 한다).
+        case 'gtOrNull': query = query.or(`${filter.column}.gt.${filter.value},${filter.column}.is.null`); break
         case 'ilike': query = query.ilike(filter.column, filter.pattern); break
         case 'gte': query = query.gte(filter.column, filter.value); break
         case 'lte': query = query.lte(filter.column, filter.value); break
@@ -211,13 +238,17 @@ export default function InterviewsPage() {
    * 후보는 현재 페이지가 아니라 전체 데이터 기준이어야 한다 — 페이지마다 후보가 달라지면 필터를
    * 쓸 수 없다. 발주처/시설용도는 마스터가 없는 자유 입력이라 실제 값에서 뽑는다(집계 view).
    */
-  const loadQuestionFacets = useCallback(async (): Promise<void> => {
+  const loadQuestionFacets = useCallback(async (include: boolean): Promise<void> => {
+    let totalQuery = supabase.from(QUESTION_SEARCH_VIEW).select('id', { count: 'exact', head: true })
+    if (!include) totalQuery = totalQuery.or(publicOnlyOrExpression())
     const [facetRes, totalRes] = await Promise.all([
       supabase.from(QUESTION_FACETS_VIEW).select('facet, value, question_count').order('question_count', { ascending: false }),
-      supabase.from(QUESTION_SEARCH_VIEW).select('id', { count: 'exact', head: true }),
+      totalQuery,
     ])
     if (!facetRes.error) {
-      setQuestionOptions(buildFilterOptionsFromFacets((facetRes.data ?? []) as unknown as QuestionFacetRow[]))
+      setQuestionOptions(
+        buildFilterOptionsFromFacets((facetRes.data ?? []) as unknown as QuestionFacetRow[], include),
+      )
     }
     if (!totalRes.error) setQuestionTotalAll(totalRes.count ?? 0)
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -258,10 +289,12 @@ export default function InterviewsPage() {
   // 최초 진입 시 한 번만 전부 읽는다. setLoading(true)를 effect 본문에서 동기로 호출하지 않고
   // loading의 초기값(true)을 그대로 쓰는 이유는 react-hooks/set-state-in-effect 규칙 때문이다 —
   // effect 본문에서 곧바로 setState하면 연쇄 렌더가 발생한다.
+  // `내 과거자료 포함`을 켜고 끄면 후기 목록을 다시 읽어야 하므로 includePrivateLegacy도 의존성에
+  // 넣는다. 마스터가 함께 다시 읽히지만 소유자가 토글을 누를 때만이고 loading은 다시 켜지 않는다.
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      const [, missingMasters] = await Promise.all([loadReviews(), loadMasters()])
+      const [, missingMasters] = await Promise.all([loadReviews(includePrivateLegacy), loadMasters()])
       if (cancelled) return
       if (missingMasters.length > 0) {
         setLoadError(
@@ -271,7 +304,7 @@ export default function InterviewsPage() {
       setLoading(false)
     })()
     return () => { cancelled = true }
-  }, [loadReviews, loadMasters])
+  }, [loadReviews, loadMasters, includePrivateLegacy])
 
   /**
    * 검색어·발주처·시설용도는 타이핑 중이므로 300ms 뒤에 적용하고, select 필터는 곧바로 적용한다.
@@ -293,8 +326,8 @@ export default function InterviewsPage() {
   /** 질의 탭을 열었을 때(그리고 저장/삭제 후) 필터 후보와 전체 건수를 읽는다. */
   useEffect(() => {
     if (tab !== 'questions') return
-    void (async () => { await loadQuestionFacets() })()
-  }, [tab, questionReloadKey, loadQuestionFacets])
+    void (async () => { await loadQuestionFacets(includePrivateLegacy) })()
+  }, [tab, questionReloadKey, includePrivateLegacy, loadQuestionFacets])
 
   /** 조건·페이지가 바뀔 때마다 그 페이지만 조회한다. */
   useEffect(() => {
@@ -302,11 +335,11 @@ export default function InterviewsPage() {
     let cancelled = false
     void (async () => {
       setQuestionsLoading(true)
-      await loadQuestionPage(appliedQuestionFilter, questionPage)
+      await loadQuestionPage(appliedQuestionFilter, questionPage, includePrivateLegacy)
       if (!cancelled) setQuestionsLoading(false)
     })()
     return () => { cancelled = true }
-  }, [tab, appliedQuestionFilter, questionPage, questionReloadKey, unspecifiedIds, loadQuestionPage])
+  }, [tab, appliedQuestionFilter, questionPage, questionReloadKey, unspecifiedIds, includePrivateLegacy, loadQuestionPage])
 
   /** 상세/수정에 필요한 후기 1건 전체(참석자 + 질문)를 읽는다. */
   const fetchDetail = useCallback(async (reviewId: string): Promise<ReviewDetail | null> => {
@@ -368,13 +401,13 @@ export default function InterviewsPage() {
     }
 
     setDetail(null)
-    await loadReviews()
+    await loadReviews(includePrivateLegacy)
     setQuestionReloadKey(k => k + 1)
     showToast('삭제했습니다.')
   }
 
   async function handleSaved(reviewId: string) {
-    await loadReviews()
+    await loadReviews(includePrivateLegacy)
     setQuestionReloadKey(k => k + 1)
     showToast('저장했습니다.')
     // 저장 직후 방금 쓴 후기를 바로 확인할 수 있게 상세를 열어준다.
@@ -406,17 +439,31 @@ export default function InterviewsPage() {
       <header style={{ background: '#fff', borderBottom: '1px solid #e8e8e6' }}>
         <div style={{ maxWidth: 1400, margin: '0 auto', padding: isMobile ? '0 12px' : '0 24px', height: 56, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span style={{ fontSize: 14, color: '#555' }}>면접 DB</span>
-          {canWrite && (
-            // 마스터(평가유형·질의그룹·질의분류)를 읽기 전에 열면 select가 빈 상태로 뜨고, 첫 질의그룹이
-            // 선택되지 않은 채 시작된다. 로딩 중에는 열지 못하게 막는다.
-            <button
-              onClick={() => setFormTarget({ review: null })}
-              disabled={loading}
-              style={loading ? { ...outlineBtn, color: '#bbb', cursor: 'default' } : outlineBtn}
-            >
-              면접후기 등록
-            </button>
-          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            {/* 자료 소유자 본인에게만 보인다. 켜면 2020년 이하 개인자료까지 함께 보여준다. */}
+            {canViewPrivateLegacy && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#555', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={includePrivateLegacy}
+                  onChange={e => setIncludePrivateLegacy(e.target.checked)}
+                  style={{ cursor: 'pointer' }}
+                />
+                내 과거자료 포함
+              </label>
+            )}
+            {canWrite && (
+              // 마스터(평가유형·질의그룹·질의분류)를 읽기 전에 열면 select가 빈 상태로 뜨고, 첫 질의그룹이
+              // 선택되지 않은 채 시작된다. 로딩 중에는 열지 못하게 막는다.
+              <button
+                onClick={() => setFormTarget({ review: null })}
+                disabled={loading}
+                style={loading ? { ...outlineBtn, color: '#bbb', cursor: 'default' } : outlineBtn}
+              >
+                면접후기 등록
+              </button>
+            )}
+          </div>
         </div>
       </header>
 

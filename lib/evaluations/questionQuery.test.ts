@@ -23,6 +23,7 @@ import {
   type QuestionFilterState,
   type UnspecifiedIds,
 } from './questionFilters'
+import { PRIVATE_LEGACY_MAX_YEAR, isPrivateLegacyYear, publicOnlyOrExpression } from './privateLegacy'
 
 function filter(overrides: Partial<QuestionFilterState> = {}): QuestionFilterState {
   return { ...EMPTY_FILTER, ...overrides }
@@ -31,6 +32,14 @@ function filter(overrides: Partial<QuestionFilterState> = {}): QuestionFilterSta
 /** 조건 하나를 찾기 쉽게 — 계획의 filters는 순서를 계약하지 않는다. */
 function find(filters: QuestionQueryFilter[], column: string) {
   return filters.filter(f => f.column === column)
+}
+
+/**
+ * 기본으로 항상 붙는 조건 — 2020년 이하 개인 비공개 자료를 뺀다.
+ * 아래 테스트들이 "필터가 없으면 조건도 없다"를 확인할 때 이 한 칸은 남아 있어야 한다.
+ */
+const PUBLIC_ONLY: QuestionQueryFilter = {
+  op: 'gtOrNull', column: 'evaluation_year_effective', value: 2020,
 }
 
 describe('ilikePattern — 사용자 입력을 리터럴 부분일치로', () => {
@@ -88,7 +97,7 @@ describe('buildQuestionQueryPlan — 필터를 DB 조건으로', () => {
   it('필터가 없으면 조건도 없다', () => {
     const plan = buildQuestionQueryPlan(EMPTY_FILTER, 1)
     expect(plan.or).toBeNull()
-    expect(plan.filters).toEqual([])
+    expect(plan.filters).toEqual([PUBLIC_ONLY])
     expect(plan.from).toBe(0)
     expect(plan.to).toBe(QUESTION_PAGE_SIZE - 1)
   })
@@ -96,7 +105,7 @@ describe('buildQuestionQueryPlan — 필터를 DB 조건으로', () => {
   it("'전체'는 조건을 만들지 않는다", () => {
     const plan = buildQuestionQueryPlan(
       filter({ evaluationTypeId: ALL, groupId: ALL, categoryId: ALL }), 1)
-    expect(plan.filters).toEqual([])
+    expect(plan.filters).toEqual([PUBLIC_ONLY])
   })
 
   it("마스터에 '미지정' 행이 없으면 '미지정'은 IS NULL 로만 간다", () => {
@@ -155,12 +164,13 @@ describe('buildQuestionQueryPlan — 필터를 DB 조건으로', () => {
   it('공백만 입력한 칸은 조건이 되지 않는다', () => {
     const plan = buildQuestionQueryPlan(filter({ search: '   ', clientQuery: '  ', facilityQuery: ' ' }), 1)
     expect(plan.or).toBeNull()
-    expect(plan.filters).toEqual([])
+    expect(plan.filters).toEqual([PUBLIC_ONLY])
   })
 
   it('연도 범위는 evaluation_year_effective 에만 걸린다', () => {
     const plan = buildQuestionQueryPlan(filter({ yearFrom: '2020', yearTo: '2026' }), 1)
     expect(plan.filters).toEqual([
+      PUBLIC_ONLY,
       { op: 'gte', column: 'evaluation_year_effective', value: 2020 },
       { op: 'lte', column: 'evaluation_year_effective', value: 2026 },
     ])
@@ -168,9 +178,9 @@ describe('buildQuestionQueryPlan — 필터를 DB 조건으로', () => {
 
   it('연도는 한쪽만 지정할 수 있다', () => {
     expect(buildQuestionQueryPlan(filter({ yearFrom: '2024' }), 1).filters)
-      .toEqual([{ op: 'gte', column: 'evaluation_year_effective', value: 2024 }])
+      .toEqual([PUBLIC_ONLY, { op: 'gte', column: 'evaluation_year_effective', value: 2024 }])
     expect(buildQuestionQueryPlan(filter({ yearTo: '2019' }), 1).filters)
-      .toEqual([{ op: 'lte', column: 'evaluation_year_effective', value: 2019 }])
+      .toEqual([PUBLIC_ONLY, { op: 'lte', column: 'evaluation_year_effective', value: 2019 }])
   })
 
   it('복합필터를 모두 AND 로 싣는다 (발주처+시설용도+질의그룹+연도범위)', () => {
@@ -178,8 +188,9 @@ describe('buildQuestionQueryPlan — 필터를 DB 조건으로', () => {
       clientQuery: '한국전력공사', facilityQuery: '변전소',
       groupId: 'group-lead', yearFrom: '2020', yearTo: '2026',
     }), 1)
-    expect(plan.filters).toHaveLength(5)
-    expect(plan.filters.map(f => f.op).sort()).toEqual(['eq', 'gte', 'ilike', 'ilike', 'lte'])
+    expect(plan.filters).toHaveLength(6)
+    expect(plan.filters.map(f => f.op).sort())
+      .toEqual(['eq', 'gtOrNull', 'gte', 'ilike', 'ilike', 'lte'])
   })
 
   it('전체검색은 or 표현식으로 간다', () => {
@@ -209,6 +220,51 @@ describe('buildQuestionQueryPlan — 필터를 DB 조건으로', () => {
     for (const page of [0, -3, Number.NaN]) {
       expect(buildQuestionQueryPlan(EMPTY_FILTER, page, 100)).toMatchObject({ from: 0, to: 99 })
     }
+  })
+})
+
+describe('개인 비공개 자료(2020년 이하) 가리기', () => {
+  it('기본은 가리는 쪽이다 — 아무 것도 안 넘기면 공개분 조건이 붙는다', () => {
+    // 기본값이 "포함"이면 실수로 켜졌을 때 개인자료가 화면에 뜬다. 안전한 쪽을 기본으로 둔다.
+    expect(buildQuestionQueryPlan(EMPTY_FILTER, 1).filters).toContainEqual(PUBLIC_ONLY)
+  })
+
+  it('포함으로 켜면 그 조건이 사라진다', () => {
+    const plan = buildQuestionQueryPlan(EMPTY_FILTER, 1, QUESTION_PAGE_SIZE, NO_UNSPECIFIED_IDS, true)
+    expect(plan.filters).toEqual([])
+  })
+
+  it('경계는 2020/2021 — 2020은 비공개, 2021은 공개', () => {
+    expect(PRIVATE_LEGACY_MAX_YEAR).toBe(2020)
+    expect(isPrivateLegacyYear(2020)).toBe(true)
+    expect(isPrivateLegacyYear(2021)).toBe(false)
+    expect(isPrivateLegacyYear(1999)).toBe(true)
+  })
+
+  it('연도 미상(NULL)은 공개로 본다 — 평가일 없이 저장한 신규 후기가 여기 들어온다', () => {
+    // 비공개로 두면 사용자가 방금 쓴 자기 후기를 못 보게 된다. 이관 자료에는 NULL이 없다.
+    expect(isPrivateLegacyYear(null)).toBe(false)
+    expect(isPrivateLegacyYear(undefined)).toBe(false)
+    expect(publicOnlyOrExpression()).toBe(
+      'evaluation_year_effective.gt.2020,evaluation_year_effective.is.null')
+  })
+
+  it('사용자가 고른 연도 범위와 함께 걸려도 서로 지우지 않는다 (AND)', () => {
+    // 소유자가 토글을 끈 채 2015~2026을 고르면 결과는 2021~2026이어야 한다.
+    const plan = buildQuestionQueryPlan(filter({ yearFrom: '2015', yearTo: '2026' }), 1)
+    expect(plan.filters).toContainEqual(PUBLIC_ONLY)
+    expect(plan.filters).toContainEqual({ op: 'gte', column: 'evaluation_year_effective', value: 2015 })
+  })
+
+  it('연도 후보에서도 비공개 연도를 뺀다 — 고를 수 없는 연도가 목록에 남으면 안 된다', () => {
+    const facets = [
+      { facet: 'year', value: '2026', question_count: 10 },
+      { facet: 'year', value: '2021', question_count: 5 },
+      { facet: 'year', value: '2020', question_count: 7 },
+      { facet: 'year', value: '2015', question_count: 3 },
+    ]
+    expect(buildFilterOptionsFromFacets(facets).years).toEqual([2026, 2021])
+    expect(buildFilterOptionsFromFacets(facets, true).years).toEqual([2026, 2021, 2020, 2015])
   })
 })
 
@@ -254,7 +310,8 @@ describe('buildFilterOptionsFromFacets — 후보는 전체 데이터 기준', (
   })
 
   it('연도는 숫자 내림차순', () => {
-    expect(buildFilterOptionsFromFacets(facets).years).toEqual([2026, 2020, 2015])
+    // 정렬만 보는 테스트라 개인 비공개 연도까지 포함해서 확인한다(가리기는 전용 테스트에서).
+    expect(buildFilterOptionsFromFacets(facets, true).years).toEqual([2026, 2020, 2015])
   })
 
   it('빈 값은 후보에서 뺀다', () => {
@@ -356,7 +413,9 @@ function applyPlanInMemory(
   f: QuestionFilterState,
   unspecified: UnspecifiedIds = NO_UNSPECIFIED_IDS,
 ): QuestionSearchRow[] {
-  const plan = buildQuestionQueryPlan(f, 1, rows.length || 1, unspecified)
+  // includePrivateLegacy = true — 개인자료 가리기는 questionFilters.ts 의 검색 의미가 아니므로
+  // oracle 비교에서는 빼 둔다(그 조건은 privateLegacy 전용 테스트에서 따로 확인한다).
+  const plan = buildQuestionQueryPlan(f, 1, rows.length || 1, unspecified, true)
   const search = f.search.trim()
 
   const kept = rows.filter(r => {
@@ -372,6 +431,8 @@ function applyPlanInMemory(
         case 'eq': return value === filterItem.value
         // or=(col.eq.<id>,col.is.null) — 마스터 미지정 행 또는 값 없음
         case 'eqOrNull': return value === null || value === filterItem.value
+        // or=(col.gt.N,col.is.null) — 공개분만(연도 미상 포함)
+        case 'gtOrNull': return value === null || (typeof value === 'number' && value > filterItem.value)
         case 'ilike': return value !== null && ilikeToRegExp(filterItem.pattern).test(String(value))
         // SQL 은 NULL 비교가 참이 되지 않는다 — 연도를 모르는 행은 자동으로 빠진다.
         case 'gte': return typeof value === 'number' && value >= filterItem.value
