@@ -12,6 +12,7 @@ AI(Claude Code, ChatGPT 등)가 이 프로젝트를 이어서 작업할 때 반�
 | [deployment.md](./deployment.md) | 환경 변수, 실행 방법, Supabase 설정 | 환경 구성 시 |
 | [changelog.md](./changelog.md) | 기능 변경 이력 | 히스토리 파악 시 |
 | [overtime.md](./overtime.md) | 연장근무 관리(제안서팀) 단계별 설계·로드맵 | 이 기능 작업 시 |
+| [home-hero.md](./home-hero.md) | 홈 브랜드 영상 Hero — 배치·하루 1회 자동재생·asset·fallback | 홈 화면/Hero 작업 시 |
 
 ## 빠른 컨텍스트 요약
 

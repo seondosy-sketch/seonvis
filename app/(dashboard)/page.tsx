@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import WeeklyCalendar, { Holiday, TeamEvent } from '../components/WeeklyCalendar'
+import FutureTeamHero from '../components/FutureTeamHero'
 import { PerformingProject } from '@/lib/supabase'
 import { useIsMobile } from '@/lib/useIsMobile'
 // 주차·일정 계산은 홈화면 위젯(app/api/widget/summary)과 공유한다 — lib/weekSchedule.ts 참고.
@@ -216,6 +217,9 @@ export default function DashboardPage() {
   if (isMobile) {
     return (
       <div style={{ background: '#f8f8f7', minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+        {/* 브랜드 Hero */}
+        <FutureTeamHero maxHeight={200} style={{ margin: '12px 12px 0' }} />
+
         {/* 금주 일정 */}
         <div style={{ margin: '12px 12px 0', background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8 }}>
           <div style={{ padding: '10px 14px', borderBottom: '1px solid #f0f0ee' }}>
@@ -389,9 +393,10 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* 상단 우 — 금주 일정 */}
+      {/* 상단 우 — 브랜드 Hero + 금주 일정 */}
       <div style={{ padding: '16px 24px 8px 8px', display: 'flex', flexDirection: 'column', gap: 8, overflow: 'hidden' }}>
-        <div style={{ flex: 1, background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <FutureTeamHero maxHeight={250} style={{ flex: '0 0 auto' }} />
+        <div style={{ flex: 1, minHeight: 0, background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ padding: '12px 16px', borderBottom: '1px solid #f0f0ee', flexShrink: 0 }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: '#111' }}>금주 일정</div>
             <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>{weekStart.getMonth()+1}/{weekStart.getDate()} ~ {weekEnd.getMonth()+1}/{weekEnd.getDate()}</div>

@@ -1,0 +1,147 @@
+'use client'
+
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import {
+  autoplayDecisionForThisLoad,
+  autoplayDecisionOnServer,
+  markPlayed,
+  notePlaybackFinished,
+  subscribeAutoplayDecision,
+} from '@/lib/hero/dailyPlayback'
+
+const VIDEO_SRC = '/brand/future-team-hero.mp4'
+const POSTER_SRC = '/brand/future-team-hero-poster.webp'
+
+/** 재생이 시작되지 않은 채 이만큼 지나면 poster로 되돌린다(무한 대기 방지). */
+const START_TIMEOUT_MS = 8000
+
+type HeroState = 'idle' | 'playing' | 'ended'
+
+interface Props {
+  /** 16:9로 잡은 높이의 상한. 데스크톱 340 / 모바일 200 */
+  maxHeight: number
+  /** 배치용 여백·flex만 넘긴다(카드 자체 모양은 여기서 고정). */
+  style?: React.CSSProperties
+}
+
+/**
+ * 미래Hub Home 상단의 브랜드 Hero.
+ *
+ * poster가 바닥 레이어로 항상 깔려 있고 video는 재생할 때만 그 위에 마운트된다. 그래서
+ * 404·autoplay 차단·디코딩 실패 같은 상황이 예외 처리가 아니라 "원래 상태로 남는 것"이
+ * 되고, Hero가 깨질 수 있는 경로 자체가 없다. 같은 날 재방문이면 video를 아예 마운트하지
+ * 않으므로 mp4를 한 바이트도 받지 않는다.
+ *
+ * 재생 정책(하루 1회·reduced motion·save data)의 판정은 전부 lib/hero/dailyPlayback.ts에 있다.
+ */
+export default function FutureTeamHero({ maxHeight, style }: Props) {
+  // 자동재생 여부는 localStorage·matchMedia 같은 "React 밖의 값"이라 useSyncExternalStore로
+  // 읽는다. 서버 스냅샷이 항상 false라서 SSR과 첫 페인트는 언제나 poster이고, 렌더 중에
+  // 브라우저 API를 만지지 않으므로 hydration mismatch가 없다.
+  const autoplay = useSyncExternalStore(
+    subscribeAutoplayDecision,
+    autoplayDecisionForThisLoad,
+    autoplayDecisionOnServer,
+  )
+  // 사용자 조작·재생 결과가 자동재생 판정을 덮어쓴다(다시보기 / 종료 / 실패).
+  const [override, setOverride] = useState<HeroState | null>(null)
+  const state: HeroState = override ?? (autoplay ? 'playing' : 'idle')
+  const videoRef = useRef<HTMLVideoElement>(null)
+
+  useEffect(() => {
+    if (state !== 'playing') return
+    const video = videoRef.current
+    if (!video) return
+
+    // muted를 속성이 아니라 프로퍼티로 직접 보장한다 — SSR로 그려진 HTML에서 muted 속성이
+    // 누락되면 Chrome이 autoplay를 막는다.
+    video.muted = true
+    video.play()?.catch(() => setOverride('idle'))
+
+    const timer = setTimeout(() => { if (video.paused) setOverride('idle') }, START_TIMEOUT_MS)
+    return () => clearTimeout(timer)
+  }, [state])
+
+  return (
+    <div
+      style={{
+        position: 'relative',
+        // width:'100%'가 아니라 auto다 — 모바일은 좌우 margin 12px을 쓰는데, 100%는 부모
+        // 콘텐츠 폭 전체라서 margin이 그대로 넘쳐 가로 스크롤이 생긴다. auto(=stretch)면
+        // 데스크톱 컬럼에서도 같은 폭이 나오고 모바일에서는 margin을 제대로 뺀다.
+        width: 'auto',
+        aspectRatio: '16 / 9',
+        maxHeight,
+        border: '1px solid #e8e8e6',
+        borderRadius: 8,
+        overflow: 'hidden',
+        // maxHeight가 걸려 상자가 16:9보다 납작해지면 contain 때문에 좌우에 여백이 남는다.
+        // 그 여백 색을 상태에 따라 다르게 둔다:
+        //  - idle/ended: 정지화면(마지막 프레임) 가장자리 색 #a2a088~#aeab91의 중간값 →
+        //    여백이 그림에 묻혀 보이지 않는다. 화면에 거의 항상 떠 있는 상태라 여기를 우선한다.
+        //  - playing: 영상 중반(약 5.9~7.4초)에 배경이 짙은 초록으로 바뀌어 올리브 여백이
+        //    띠처럼 도드라진다. 재생 동안만 어둡게 두면 어떤 장면에서도 레터박스로 읽힌다.
+        background: state === 'playing' ? '#22231f' : '#a8a68d',
+        transition: 'background-color 300ms ease',
+        ...style,
+      }}
+    >
+      {/* 이미 16:9로 딱 맞게 뽑아둔 정적 asset이라 next/image 최적화가 얻을 게 없다 — 위젯
+          화면(app/(dashboard)/widget/page.tsx)과 같은 이유로 img를 그대로 쓴다. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={POSTER_SRC}
+        alt="SEON 미래사업팀"
+        width={1280}
+        height={720}
+        style={{ width: '100%', height: '100%', objectFit: 'contain', objectPosition: 'center', display: 'block' }}
+      />
+
+      {state === 'playing' && (
+        <video
+          ref={videoRef}
+          src={VIDEO_SRC}
+          poster={POSTER_SRC}
+          muted
+          playsInline
+          loop={false}
+          preload="auto"
+          aria-hidden="true"
+          tabIndex={-1}
+          onPlaying={() => markPlayed()}
+          onEnded={() => { notePlaybackFinished(); setOverride('ended') }}
+          onError={() => setOverride('idle')}
+          style={{
+            position: 'absolute',
+            inset: 0,
+            width: '100%',
+            height: '100%',
+            objectFit: 'contain',
+            objectPosition: 'center',
+          }}
+        />
+      )}
+
+      {state !== 'playing' && (
+        <button
+          onClick={() => setOverride('playing')}
+          aria-label="미래사업팀 소개 영상 다시 재생"
+          style={{
+            position: 'absolute',
+            right: 8,
+            bottom: 8,
+            fontSize: 11,
+            padding: '4px 9px',
+            borderRadius: 6,
+            border: 'none',
+            background: 'rgba(0,0,0,0.42)',
+            color: '#fff',
+            cursor: 'pointer',
+          }}
+        >
+          ↺ 다시보기
+        </button>
+      )}
+    </div>
+  )
+}
