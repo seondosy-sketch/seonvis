@@ -145,6 +145,85 @@ test.describe('홈 Hero — 실패 fallback', () => {
   })
 })
 
+/**
+ * 데스크톱 Hero는 재생할 때만 16:9로 펼쳐지고, 그 외에는 로고 띠로 접힌다.
+ * 접혀 있는 동안 그 아래 금주 일정이 그만큼 넓어지는 것이 이 동작의 목적이다.
+ */
+test.describe('홈 Hero — 접힘/펼침 (데스크톱)', () => {
+  const COLLAPSED_MAX = 90 // 실제 86px + 반올림 여유
+
+  /** Hero 카드와 바로 아래 금주 일정 카드의 높이, 그리고 일정 목록이 잘리는지 */
+  const layout = (page: Page) => page.evaluate(() => {
+    const card = document.querySelector('img[alt="SEON 미래사업팀"]')!.parentElement!
+    const weekly = card.nextElementSibling as HTMLElement
+    const scroller = [...weekly.querySelectorAll('*')]
+      .find(e => getComputedStyle(e).overflowY === 'auto') as HTMLElement | undefined
+    return {
+      heroH: Math.round(card.getBoundingClientRect().height),
+      weeklyH: Math.round(weekly.getBoundingClientRect().height),
+      weeklyClipped: scroller ? scroller.scrollHeight > scroller.clientHeight + 1 : null,
+    }
+  })
+
+  test('재생하지 않는 날은 로고 띠로 접혀 있다', async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 1080 })
+    await openHome(page, kstKey())
+    await expect(page.locator(VIDEO)).toHaveCount(0)
+    const { heroH, weeklyClipped } = await layout(page)
+    expect(heroH).toBeLessThanOrEqual(COLLAPSED_MAX)
+    // 접힌 만큼 금주 일정이 넓어져 목록이 잘리지 않는다
+    expect(weeklyClipped).toBe(false)
+  })
+
+  test('재생 중에는 16:9로 펼쳐진다', async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 1080 })
+    await openHome(page, null)
+    const video = page.locator(VIDEO).first()
+    await expect(video).toBeAttached()
+    await expect.poll(async () => (await layout(page)).heroH, { timeout: 15_000 })
+      .toBeGreaterThan(COLLAPSED_MAX)
+    // 카드가 영상 비율과 맞아떨어져 좌우 여백이 생기지 않는다
+    const { heroH } = await layout(page)
+    const w = (await stableBox(page.locator(POSTER).first())).width
+    expect(Math.abs(heroH - (w * 9) / 16)).toBeLessThan(2)
+  })
+
+  test('재생이 끝나면 다시 접히고 금주 일정이 되돌아온다', async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 1080 })
+    await openHome(page, null)
+    await page.locator(VIDEO).first().waitFor()
+    const expanded = await layout(page)
+    expect(expanded.heroH).toBeGreaterThan(COLLAPSED_MAX)
+
+    // 끝까지 기다리지 않고 마지막으로 보내 ended를 유도한다.
+    // duration은 메타데이터가 와야 값이 잡히므로 그때까지 기다린다.
+    await page.locator(VIDEO).first().evaluate(async (v: HTMLVideoElement) => {
+      if (!Number.isFinite(v.duration)) {
+        await new Promise(r => v.addEventListener('loadedmetadata', r, { once: true }))
+      }
+      v.currentTime = Math.max(0, v.duration - 0.05)
+    })
+
+    await expect(page.locator(VIDEO)).toHaveCount(0, { timeout: 15_000 })
+    await expect.poll(async () => (await layout(page)).heroH, { timeout: 15_000 })
+      .toBeLessThanOrEqual(COLLAPSED_MAX)
+
+    const collapsed = await layout(page)
+    expect(collapsed.weeklyH).toBeGreaterThan(expanded.weeklyH)
+    expect(collapsed.weeklyClipped).toBe(false)
+    await expect(page.locator(REPLAY).first()).toBeVisible()
+  })
+
+  test('모바일은 접지 않는다 (기존 배치 유지)', async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 812 })
+    await openHome(page, kstKey())
+    await settleMobileLayout(page)
+    const hero = await stableBox(page.locator(POSTER).first())
+    expect(hero.height).toBeGreaterThan(COLLAPSED_MAX)
+    expect(hero.height).toBeLessThanOrEqual(200)
+  })
+})
+
 test.describe('홈 Hero — 레이아웃', () => {
   test('데스크톱: Hero가 금주 일정 위에 있고 세로 스크롤이 생기지 않는다', async ({ page }) => {
     await page.setViewportSize({ width: 1920, height: 1080 })
