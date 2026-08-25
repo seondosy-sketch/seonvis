@@ -10,6 +10,8 @@ function makeProject(overrides: Partial<ProjectForValidation> = {}): ProjectForV
     id: 'proj-1',
     announce_date: '2026-06-01',
     interview_date: '2026-08-10',
+    interview_written: false,
+    submit_date: '2026-07-25',
     director: '홍길동',
     isCancelled: false,
     ...overrides,

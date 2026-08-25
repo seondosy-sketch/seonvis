@@ -27,6 +27,8 @@ export interface ProjectForValidation {
   id: string
   announce_date: string | null
   interview_date: string | null
+  interview_written: boolean | null
+  submit_date: string | null
   director: string // projects.director — 참여기술인 목록과의 불일치 검사용
   isCancelled: boolean
 }
@@ -139,6 +141,8 @@ function findAttendanceOutOfPeriod(
     const period = computeAttendancePeriod({
       announceDate: project.announce_date,
       interviewDate: project.interview_date,
+      interviewWritten: project.interview_written ?? false,
+      submitDate: project.submit_date ?? null,
       participationStart: participant.participation_start,
       participationEnd: participant.participation_end,
       viewedPeriodEnd: periodEnd,

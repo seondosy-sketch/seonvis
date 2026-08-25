@@ -24,6 +24,8 @@ export interface MonthlyExportProject {
   name: string
   announce_date: string | null
   interview_date: string | null
+  interview_written: boolean | null
+  submit_date: string | null
 }
 
 export interface MonthlyExportParticipantRow {
@@ -83,6 +85,8 @@ export function buildMonthlyExportBlocks(
       const period = computeAttendancePeriod({
         announceDate: project.announce_date,
         interviewDate: project.interview_date,
+        interviewWritten: project.interview_written ?? false,
+        submitDate: project.submit_date ?? null,
         participationStart: participant.participation_start,
         participationEnd: participant.participation_end,
         viewedPeriodEnd: periodEndOfView,

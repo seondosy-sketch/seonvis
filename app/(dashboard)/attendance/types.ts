@@ -10,6 +10,9 @@ export interface AttendanceProjectRow {
   client: string
   announce_date: string | null
   interview_date: string | null
+  /** 서면평가 건이면 true — 면접일 대신 제출일까지를 출근 체크 기간으로 쓴다 */
+  interview_written: boolean | null
+  submit_date: string | null
   bid_date: string | null
   status: string
   director: string

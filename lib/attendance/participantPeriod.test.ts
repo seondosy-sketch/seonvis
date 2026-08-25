@@ -11,6 +11,8 @@ const base = {
   participationStart: null,
   participationEnd: null,
   viewedPeriodEnd: '2026-08-20',
+  interviewWritten: false,
+  submitDate: '2026-07-01',
 }
 
 describe('computeAttendancePeriod', () => {
@@ -41,6 +43,58 @@ describe('computeAttendancePeriod', () => {
     const result = computeAttendancePeriod({ ...base, interviewDate: '서면' })
     expect(result.effectiveEnd).not.toBe('서면')
     expect(result.effectiveEnd).toBe('2026-08-20')
+  })
+
+  // ── 서면평가 ──────────────────────────────────────────────────────────────
+  // 서면평가 건은 기다릴 발표가 없어 Project List가 interview_date를 null로 저장한다.
+  // 그대로 두면 "면접일 미입력" 취급이 되어 회계월 말일까지 열리는데, 서면평가는 일정이
+  // 미확정인 게 아니라 제출로 끝나는 일정이다 — 제출일이 종료일이다(사용자 지시).
+  it('서면평가면 제출일이 종료일이 되고 경고가 없다', () => {
+    const result = computeAttendancePeriod({
+      ...base, interviewWritten: true, interviewDate: null, submitDate: '2026-07-01',
+    })
+    expect(result).toEqual({ effectiveStart: '2026-06-01', effectiveEnd: '2026-07-01', warnings: [] })
+  })
+
+  it('서면평가면 면접일에 값이 남아 있어도 제출일을 쓴다', () => {
+    const result = computeAttendancePeriod({
+      ...base, interviewWritten: true, interviewDate: '2026-07-15', submitDate: '2026-07-01',
+    })
+    expect(result.effectiveEnd).toBe('2026-07-01')
+    expect(result.warnings).toEqual([])
+  })
+
+  it('서면평가인데 제출일이 없으면 기준월 20일까지 + 제출일 미입력 경고', () => {
+    const result = computeAttendancePeriod({
+      ...base, interviewWritten: true, interviewDate: null, submitDate: null,
+    })
+    expect(result.effectiveEnd).toBe('2026-08-20')
+    expect(result.warnings).toEqual([
+      ATTENDANCE_PERIOD_WARNINGS.SUBMIT_DATE_MISSING,
+      ATTENDANCE_PERIOD_WARNINGS.CONFIRM_BEFORE_CLOSE,
+    ])
+  })
+
+  it('서면평가인데 제출일이 비날짜 텍스트면 그 값을 종료일로 쓰지 않는다', () => {
+    const result = computeAttendancePeriod({
+      ...base, interviewWritten: true, interviewDate: null, submitDate: '추후',
+    })
+    expect(result.effectiveEnd).not.toBe('추후')
+    expect(result.effectiveEnd).toBe('2026-08-20')
+  })
+
+  it('서면평가라도 participationEnd(관리자 예외조정)가 제출일보다 우선한다', () => {
+    const result = computeAttendancePeriod({
+      ...base, interviewWritten: true, interviewDate: null,
+      submitDate: '2026-07-01', participationEnd: '2026-09-01',
+    })
+    expect(result.effectiveEnd).toBe('2026-09-01')
+    expect(result.warnings).toEqual([])
+  })
+
+  it('서면평가가 아니면 제출일이 있어도 종료일에 쓰지 않는다(기존 동작 유지)', () => {
+    const result = computeAttendancePeriod({ ...base, submitDate: '2026-07-01' })
+    expect(result.effectiveEnd).toBe('2026-07-15')
   })
 
   it('participationEnd(관리자 예외조정)가 있으면 면접일보다 우선한다', () => {

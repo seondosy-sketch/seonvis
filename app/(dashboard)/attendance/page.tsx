@@ -23,7 +23,7 @@ const MONTH_NAMES = ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8�
 const STATUS_OPTIONS = ['전체', '진행중', '수주', '탈락', '취소']
 
 const PROJECT_COLUMNS =
-  'id,project_number,name,client,announce_date,interview_date,bid_date,status,director,staff_arch,staff_civil,staff_mech,staff_safety'
+  'id,project_number,name,client,announce_date,interview_date,interview_written,submit_date,bid_date,status,director,staff_arch,staff_civil,staff_mech,staff_safety'
 
 export default function AttendancePage() {
   const isMobile = useIsMobile()

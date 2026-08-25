@@ -24,6 +24,8 @@ export interface AttendancePeriodInput {
   participationStart: string | null // project_participants.participation_start (관리자 예외 조정)
   participationEnd: string | null   // project_participants.participation_end
   viewedPeriodEnd: string           // 지금 조회 중인 회계월의 종료일(YYYY-MM-DD, 대개 20일)
+  interviewWritten: boolean         // projects.interview_written — 서면평가 건이면 기다릴 발표가 없다
+  submitDate: string | null         // projects.submit_date — 서면평가 건의 종료일로 쓴다
 }
 
 export interface AttendancePeriodResult {
@@ -36,6 +38,7 @@ export const ATTENDANCE_PERIOD_WARNINGS = {
   ANNOUNCE_DATE_MISSING: '공고일 미입력',
   ANNOUNCE_DATE_INVALID: '공고일 확인 필요',
   INTERVIEW_DATE_MISSING: '면접일 미입력',
+  SUBMIT_DATE_MISSING: '제출일 미입력',
   SCHEDULE_UNCONFIRMED: '일정 미확정',
   CONFIRM_BEFORE_CLOSE: '월 마감 전 확인 필요',
 } as const
@@ -69,6 +72,18 @@ export function computeAttendancePeriod(input: AttendancePeriodInput): Attendanc
   if (input.participationEnd) {
     // 관리자가 명시적으로 조정한 종료일이 항상 최우선
     effectiveEnd = input.participationEnd
+  } else if (input.interviewWritten) {
+    // 서면평가 건은 기다릴 발표가 없어 면접일이 애초에 비어 있다(Project List가 저장할 때
+    // interview_date를 null로 넣는다). 그대로 두면 아래 fallback으로 떨어져 "면접일 미입력"
+    // 경고와 함께 회계월 말일까지 열리는데, 서면평가는 일정이 미확정인 게 아니라 제출로
+    // 끝나는 일정이다. 제출일을 종료일로 쓴다(사용자 지시).
+    if (isIsoDate(input.submitDate)) {
+      effectiveEnd = input.submitDate
+    } else {
+      effectiveEnd = input.viewedPeriodEnd
+      warnings.push(ATTENDANCE_PERIOD_WARNINGS.SUBMIT_DATE_MISSING)
+      warnings.push(ATTENDANCE_PERIOD_WARNINGS.CONFIRM_BEFORE_CLOSE)
+    }
   } else if (isIsoDate(input.interviewDate)) {
     effectiveEnd = input.interviewDate
   } else {

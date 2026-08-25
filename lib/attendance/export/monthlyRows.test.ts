@@ -14,6 +14,8 @@ const PROJECT: MonthlyExportProject = {
   name: '테스트 감리용역',
   announce_date: '2026-07-01',
   interview_date: '2026-08-31',
+  interview_written: false,
+  submit_date: '2026-07-25',
 }
 
 function participant(over: Partial<ProjectParticipant> & { id: string }): ProjectParticipant {

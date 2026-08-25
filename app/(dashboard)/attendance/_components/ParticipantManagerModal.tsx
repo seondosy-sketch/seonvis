@@ -146,6 +146,8 @@ export default function ParticipantManagerModal({
     return computeAttendancePeriod({
       announceDate: project.announce_date,
       interviewDate: project.interview_date,
+      interviewWritten: project.interview_written ?? false,
+      submitDate: project.submit_date ?? null,
       participationStart: participant.participation_start,
       participationEnd: participant.participation_end,
       viewedPeriodEnd,
