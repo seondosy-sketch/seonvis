@@ -445,8 +445,21 @@ export default function ProjectsPage() {
         if (projErr) { setSaveError(`저장 실패: ${projErr.message}`); return }
         savedProjectId = inserted?.id ?? null
         if (hasTooltipData) {
-          const { error: tipErr } = await supabase.from('project_tooltips').insert(tooltipPayload)
-          if (tipErr) { setSaveError(`상세정보 저장 실패: ${tipErr.message}`); return }
+          // 수정 경로와 똑같이 upsert다. insert로 두면 같은 공사번호의 상세정보 행이 이미
+          // 있을 때 PK 충돌로 실패한다 — 삭제된 프로젝트가 남긴 행이거나, 직전 저장 시도가
+          // 만들어 둔 행이 그렇다. 새로 등록하는 값이 맞으니 덮어쓰는 게 옳다.
+          const { error: tipErr } = await supabase.from('project_tooltips')
+            .upsert({ ...tooltipPayload, updated_at: new Date().toISOString() }, { onConflict: 'project_number' })
+          if (tipErr) {
+            // 프로젝트는 이미 insert된 뒤다. 그대로 두면 사용자가 저장을 다시 누를 때마다
+            // 같은 프로젝트가 한 행씩 쌓인다(실제로 7행까지 늘어난 적이 있다). 되돌린다.
+            const { error: rollbackErr } = await supabase.from('projects').delete().eq('id', savedProjectId!)
+            savedProjectId = null
+            setSaveError(rollbackErr
+              ? `상세정보 저장 실패: ${tipErr.message} — 프로젝트만 등록된 상태입니다. 목록에서 확인해 주세요.`
+              : `상세정보 저장 실패: ${tipErr.message}`)
+            return
+          }
         }
       }
 
