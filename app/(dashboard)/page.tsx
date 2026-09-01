@@ -1,13 +1,26 @@
 'use client'
 
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import WeeklyCalendar, { Holiday, TeamEvent } from '../components/WeeklyCalendar'
+// 달력에 그릴 주차별 스냅샷 합치기 — 규칙과 테스트는 lib/dashboard/performingCalendar.ts 참고
+import { applyProjectDates, dedupePerformingByName, keepYear, type ProjectDateSource } from '@/lib/dashboard/performingCalendar'
+// 보이는 범위를 덮는 주차 키 — 홈화면 위젯이 쓰는 것과 같은 함수를 재사용한다
+import { weekKeysInRange } from '@/lib/widget/calendar'
 import FutureTeamHero from '../components/FutureTeamHero'
 import { PerformingProject } from '@/lib/supabase'
 import { useIsMobile } from '@/lib/useIsMobile'
 // 주차·일정 계산은 홈화면 위젯(app/api/widget/summary)과 공유한다 — lib/weekSchedule.ts 참고.
 import { getCurrentWeek, getWeekBounds, buildSchedule } from '@/lib/weekSchedule'
+
+/**
+ * YYYY-MM-DD → 로컬 자정 Date. new Date("YYYY-MM-DD")는 UTC로 파싱돼 KST에서 하루 밀리므로
+ * 쓰지 않는다(docs/conventions.md). 달력이 넘겨준 문자열만 들어오니 형식은 신뢰한다.
+ */
+function parseISODate(iso: string): Date {
+  const [y, m, d] = iso.split('-').map(Number)
+  return new Date(y, m - 1, d)
+}
 
 interface PendingAction { name: string; args: Record<string, unknown> }
 interface Message {
@@ -25,6 +38,14 @@ export default function DashboardPage() {
 
   // Calendar
   const [performing, setPerforming] = useState<PerformingProject[]>([])
+  // 달력 전용 목록 — 금주 일정(buildSchedule)은 이번주 스냅샷만 봐야 하므로 따로 들고 있는다.
+  const [calPerforming, setCalPerforming] = useState<PerformingProject[]>([])
+  // 달력이 알려주는 "지금 보이는 범위". 휠로 스크롤하면 바뀌고, 그때마다 그 범위의 주차를 읽는다.
+  const [calRange, setCalRange] = useState<{ from: string; to: string } | null>(null)
+  const handleCalRange = useCallback((from: string, to: string) => {
+    // 같은 범위면 상태를 그대로 둔다 — 새 객체를 넣으면 로드 effect가 헛돌고 렌더 고리가 된다.
+    setCalRange(prev => (prev && prev.from === from && prev.to === to ? prev : { from, to }))
+  }, [])
   const [calNotes, setCalNotes] = useState<Record<string, Record<string, string>>>({})
   const [holidays, setHolidays] = useState<Holiday[]>([])
   const [teamEvents, setTeamEvents] = useState<TeamEvent[]>([])
@@ -35,8 +56,21 @@ export default function DashboardPage() {
   const [cmakNews, setCmakNews] = useState<{ idx: string; title: string; date: string }[]>([])
   const [cmakLoading, setCmakLoading] = useState(true)
 
+  // 읽어올 주차 — 달력이 보이는 범위를 덮는 주차 전부. 아직 범위를 못 받았으면(첫 렌더)
+  // 이번주만 읽어 화면을 먼저 채우고, 달력이 범위를 알려주면 그 주차들로 다시 읽는다.
+  // 이번주는 금주 일정에 항상 필요하므로 어떤 경우에도 빠뜨리지 않는다.
+  const weekKeys = useMemo(() => {
+    const keys = calRange
+      ? weekKeysInRange(parseISODate(calRange.from), parseISODate(calRange.to))
+      : []
+    return keys.includes(week) ? keys : [...keys, week]
+  }, [calRange, week])
+  // 배열은 렌더마다 새 객체라 deps로 쓰면 로드가 헛돈다 — 내용이 같으면 같은 문자열이 되게 접는다.
+  const weekKeysSig = weekKeys.join(',')
+
   const loadPerforming = useCallback(async () => {
-    const { data: perf } = await supabase.from('performing_projects').select('*').eq('week', week).order('sort_order')
+    const keys = weekKeysSig.split(',')
+    const { data: perf } = await supabase.from('performing_projects').select('*').in('week', keys).order('sort_order')
 
     // projects 테이블에서 bid_date 등 날짜 정보 항상 로드
     const { data: projs } = await supabase
@@ -45,25 +79,24 @@ export default function DashboardPage() {
       .order('project_number', { ascending: true })
     const projByName: Record<string, any> = {}
     if (projs) for (const p of projs) projByName[p.name] = p
+    const projDatesByName = new Map<string, ProjectDateSource>(Object.entries(projByName))
 
-    // 달력과 금주 일정에는 연도가 살아 있는 ISO 날짜(YYYY-MM-DD)를 그대로 넘긴다.
-    // 예전에는 fmtDate로 "M/D"까지 줄여서 넘겼는데, 그러면 연도가 사라지고 받는 쪽
-    // (WeeklyCalendar / buildSchedule)이 현재 주의 연도를 다시 붙여버려서 2025년 일정이
-    // 2026년 같은 월·일에 찍혔다(예: 2025-11-25 잠실5단지 → 2026-11-25).
-    // 화면에 보여줄 "M/D" 변환은 표시하는 쪽에서 한다.
-    const keepYear = (raw: string | null | undefined): string => (raw?.trim() ? raw : '추후')
+    const perfRows = (perf ?? []) as PerformingProject[]
+    // 금주 일정(buildSchedule)은 예전과 똑같이 이번주 스냅샷만 본다 — 달력 때문에 여러 주차를
+    // 읽게 됐다고 해서 이번주 목록에서 뺀 사업이 금주 일정에 되살아나면 안 된다.
+    const thisWeekRows = perfRows.filter(p => p.week === week)
 
-    if (perf && perf.length > 0) {
+    if (thisWeekRows.length > 0) {
       // 날짜는 Project List(projects)를 우선한다 — 주간보고 화면(app/dashboard.tsx)도 같은 규칙이다.
       // Project List에 없는 수동 추가 행만 저장된 "M/D"를 그대로 쓴다(애초에 연도 정보가 없다).
-      const merged = (perf as PerformingProject[]).map(p => ({
-        ...p,
-        submit_date: keepYear(projByName[p.name]?.submit_date ?? p.submit_date),
-        interview_date: keepYear(projByName[p.name]?.interview_date ?? p.interview_date),
-        result_date: keepYear(projByName[p.name]?.bid_date ?? p.result_date),
-      }))
-      setPerforming(merged)
-    } else {
+      setPerforming(applyProjectDates(thisWeekRows, projDatesByName))
+    }
+    // 달력은 읽어온 주차를 전부 합치되 같은 사업이 주차 수만큼 겹치지 않게 이름으로 접는다.
+    if (perfRows.length > 0) {
+      setCalPerforming(applyProjectDates(dedupePerformingByName(perfRows), projDatesByName))
+    }
+
+    if (thisWeekRows.length === 0) {
       // 저장된 주간 데이터가 없으면 projects 테이블에서 직접 불러오기
       if (projs) {
         const rows: PerformingProject[] = projs
@@ -86,6 +119,9 @@ export default function DashboardPage() {
             week,
           }))
         setPerforming(rows)
+        // 어느 주차에도 스냅샷이 없으면 달력도 같은 fallback을 쓴다. 일부 주차에만 스냅샷이
+        // 있을 때는 그 주차 것들이 이미 들어가 있으므로 여기서 덮어쓰지 않는다.
+        if (perfRows.length === 0) setCalPerforming(rows)
       }
     }
 
@@ -102,7 +138,8 @@ export default function DashboardPage() {
       }
       setCalNotes(map)
     }
-  }, [week])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [week, weekKeysSig])
   useEffect(() => {
     loadPerforming()
     const onVisible = () => { if (document.visibilityState === 'visible') loadPerforming() }
@@ -252,7 +289,7 @@ export default function DashboardPage() {
 
         {/* 달력 */}
         <div style={{ margin: '10px 12px 0' }}>
-          <WeeklyCalendar week={week} performing={performing} notes={calNotes} holidays={holidays} teamEvents={teamEvents} onDateClick={d => { setAddEventPopup({ date: d }); setNewEventTitle(''); setNewEventColor('#7c3aed') }} onTeamEventClick={(id, title) => setDeleteConfirm({ id, title })} />
+          <WeeklyCalendar week={week} performing={calPerforming} notes={calNotes} holidays={holidays} teamEvents={teamEvents} onDateClick={d => { setAddEventPopup({ date: d }); setNewEventTitle(''); setNewEventColor('#7c3aed') }} onTeamEventClick={(id, title) => setDeleteConfirm({ id, title })} onVisibleRangeChange={handleCalRange} />
         </div>
 
         {/* 미래봇 */}
@@ -389,7 +426,7 @@ export default function DashboardPage() {
       {/* 상단 좌 — 달력 (스크롤 없이 한 박스에 표시, 휠로 강조 주 이동) */}
       <div style={{ overflow: 'hidden', padding: '16px 16px 8px 24px', display: 'flex', flexDirection: 'column' }}>
         <div style={{ flex: 1, overflow: 'hidden' }}>
-          <WeeklyCalendar week={week} performing={performing} notes={calNotes} holidays={holidays} teamEvents={teamEvents} onDateClick={d => { setAddEventPopup({ date: d }); setNewEventTitle(''); setNewEventColor('#7c3aed') }} onTeamEventClick={(id, title) => setDeleteConfirm({ id, title })} />
+          <WeeklyCalendar week={week} performing={calPerforming} notes={calNotes} holidays={holidays} teamEvents={teamEvents} onDateClick={d => { setAddEventPopup({ date: d }); setNewEventTitle(''); setNewEventColor('#7c3aed') }} onTeamEventClick={(id, title) => setDeleteConfirm({ id, title })} onVisibleRangeChange={handleCalRange} />
         </div>
       </div>
 

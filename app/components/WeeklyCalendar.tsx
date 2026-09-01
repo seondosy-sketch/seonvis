@@ -9,6 +9,7 @@ import { parseDate } from '@/lib/weekSchedule'
 // 보이는 주 창(window) 계산 — 계산 규칙과 테스트는 lib/calendarWindow.ts 참고
 import {
   HOME_ROW,
+  VISIBLE_WEEKS,
   gridWeekStart,
   highlightWeekStart,
   homeWindowTop,
@@ -58,6 +59,11 @@ function dateKey(d: Date) {
   return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
 }
 
+/** 부모에게 넘길 YYYY-MM-DD — dateKey와 달리 달을 1부터 세고 0으로 채운다. */
+function isoDate(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
 function weekRange(week: string): [Date, Date] {
   const [year, w] = week.split('-W')
   const jan4 = new Date(parseInt(year), 0, 4)
@@ -89,6 +95,7 @@ export default function WeeklyCalendar({
   teamEvents = [],
   onDateClick,
   onTeamEventClick,
+  onVisibleRangeChange,
 }: {
   week: string
   performing: PerformingProject[]
@@ -97,6 +104,12 @@ export default function WeeklyCalendar({
   teamEvents?: TeamEvent[]
   onDateClick?: (dateStr: string) => void
   onTeamEventClick?: (id: string, title: string) => void
+  /**
+   * 지금 보이는 창의 첫날~마지막날(YYYY-MM-DD). 휠로 창이 움직일 때마다 불린다.
+   * 프로젝트 일정은 주차별 스냅샷이라, 부모가 이 범위를 덮는 주차를 읽어와야 지난주·다음주
+   * 칸이 비지 않는다(lib/dashboard/performingCalendar.ts 참고).
+   */
+  onVisibleRangeChange?: (from: string, to: string) => void
 }) {
   // 프로젝트 일정의 "M/D" 표기를 몇 년으로 읽을지는 week prop 기준을 유지한다
   const refYear = weekRange(week)[0].getFullYear()
@@ -135,6 +148,19 @@ export default function WeeklyCalendar({
   const [weekOffset, setWeekOffset] = useState(0)
   const topStart = useMemo(() => shiftWindow(homeTop, weekOffset), [homeTop, weekOffset])
   const atHome = weekOffset === 0
+
+  // 보이는 범위를 부모에게 알린다 — Date가 아니라 YYYY-MM-DD 문자열로 넘긴다. Date를 넘기면
+  // 렌더마다 새 객체라서 부모의 effect가 매번 다시 돌고, 그게 다시 렌더를 부르는 고리가 된다.
+  const rangeFrom = useMemo(() => isoDate(topStart), [topStart])
+  const rangeTo = useMemo(() => {
+    const last = shiftWindow(topStart, VISIBLE_WEEKS)
+    last.setDate(last.getDate() - 1) // 창의 마지막 날 = 첫날 + VISIBLE_WEEKS주 - 1일
+    return isoDate(last)
+  }, [topStart])
+  useEffect(() => {
+    onVisibleRangeChange?.(rangeFrom, rangeTo)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rangeFrom, rangeTo])
 
   // 마우스 휠로 창을 한 주씩 이동 — 휠 한 번(이벤트 묶음)당 한 주만 움직이도록 쿨다운을 둔다.
   // 모바일은 터치 스크롤로 페이지를 넘겨야 하므로 휠을 가로채지 않는다.
