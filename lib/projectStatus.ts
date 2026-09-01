@@ -18,15 +18,12 @@ export interface ProjectRef {
   staff_safety: string
 }
 
-export function getCurrentWeek(): string {
-  const now = new Date()
-  const jan4 = new Date(now.getFullYear(), 0, 4)
-  const startOfWeek1 = new Date(jan4)
-  startOfWeek1.setDate(jan4.getDate() - jan4.getDay() + 1)
-  const diff = now.getTime() - startOfWeek1.getTime()
-  const week = Math.ceil((diff / 86400000 + 1) / 7)
-  return `${now.getFullYear()}-W${String(week).padStart(2, '0')}`
-}
+/**
+ * 주차 계산은 lib/weekSchedule.ts 하나만 쓴다 — 여기에도 같은 식이 복사돼 있었고, 일요일에
+ * 한 주가 밀리는 버그를 한쪽만 고치면 주간보고 저장(app/dashboard.tsx)과 대시보드 조회가
+ * 서로 다른 주차를 가리키게 된다. 인자 없는 기존 호출부를 그대로 두려고 이름만 다시 내보낸다.
+ */
+export { getCurrentWeek } from '@/lib/weekSchedule'
 
 export function getWeekRange(week: string): { start: Date; end: Date } {
   const [year, w] = week.split('-W')

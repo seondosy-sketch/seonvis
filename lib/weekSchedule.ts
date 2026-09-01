@@ -27,8 +27,13 @@ export function getCurrentWeek(now: Date = new Date()): string {
   const jan4 = new Date(now.getFullYear(), 0, 4)
   const startOfWeek1 = new Date(jan4)
   startOfWeek1.setDate(jan4.getDate() - jan4.getDay() + 1)
-  const diff = now.getTime() - startOfWeek1.getTime()
-  const week = Math.ceil((diff / 86400000 + 1) / 7)
+  // 시:분을 떨어뜨리고 "달력 날짜"끼리 뺀다. 예전에는 now.getTime()을 그대로 빼서 diff가
+  // 소수(시각 포함)로 나왔는데, 그러면 주의 마지막 날인 일요일이 자정을 조금만 넘겨도
+  // (days+1)/7이 정수를 넘어서 ceil이 다음 주로 올라갔다 — 일요일 낮에는 항상 한 주가 밀렸다.
+  // 2020~2035년 전 날짜를 옛 식과 대조했을 때 결과가 달라지는 건 일요일뿐이다(다른 요일 0건).
+  const utc = (d: Date) => Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())
+  const days = Math.round((utc(now) - utc(startOfWeek1)) / 86400000)
+  const week = Math.ceil((days + 1) / 7)
   return `${now.getFullYear()}-W${String(week).padStart(2, '0')}`
 }
 

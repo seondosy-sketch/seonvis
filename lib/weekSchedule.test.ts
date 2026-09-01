@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildSchedule, fmtDate, getWeekBounds, parseDate } from '@/lib/weekSchedule'
+import { buildSchedule, fmtDate, getCurrentWeek, getWeekBounds, parseDate } from '@/lib/weekSchedule'
 import type { PerformingProject } from '@/lib/supabase'
 
 /**
@@ -85,5 +85,55 @@ describe('buildSchedule — 금주 일정 추출', () => {
 
   it('이름이 없는 행은 무시한다', () => {
     expect(buildSchedule([row({ name: '', submit_date: '2026-07-29' })], start, end).submit).toEqual([])
+  })
+})
+
+
+/**
+ * 회귀 테스트: 주차 계산이 일요일에 한 주 밀리던 버그.
+ *
+ * 예전 식은 now.getTime()에서 주 시작을 그대로 빼서 diff가 시각을 포함한 소수였다. 주의
+ * 마지막 날인 일요일은 자정을 조금만 넘겨도 (days+1)/7이 정수를 넘어 ceil이 다음 주로
+ * 올라갔다 — 일요일 낮에 대시보드를 열면 없는 주차를 읽고, 그날 주간보고를 저장하면
+ * performing_projects가 다음 주 칸에 들어갔다.
+ */
+describe('getCurrentWeek — 일요일 경계', () => {
+  // 2026-08-31(월) ~ 2026-09-06(일)이 2026-W35다.
+  const W35 = '2026-W35'
+
+  it('주의 첫날인 월요일은 자정이든 낮이든 같은 주차다', () => {
+    expect(getCurrentWeek(new Date(2026, 7, 31, 0, 0))).toBe(W35)
+    expect(getCurrentWeek(new Date(2026, 7, 31, 12, 0))).toBe(W35)
+  })
+
+  it('주 중간(수요일)도 같은 주차다', () => {
+    expect(getCurrentWeek(new Date(2026, 8, 2, 12, 0))).toBe(W35)
+  })
+
+  it('토요일 밤 늦게도 아직 같은 주차다', () => {
+    expect(getCurrentWeek(new Date(2026, 8, 5, 23, 59))).toBe(W35)
+  })
+
+  it('주의 마지막 날인 일요일은 시각과 무관하게 같은 주차다(회귀)', () => {
+    expect(getCurrentWeek(new Date(2026, 8, 6, 0, 0))).toBe(W35)
+    expect(getCurrentWeek(new Date(2026, 8, 6, 9, 30))).toBe(W35)
+    expect(getCurrentWeek(new Date(2026, 8, 6, 12, 0))).toBe(W35)
+    expect(getCurrentWeek(new Date(2026, 8, 6, 23, 59))).toBe(W35)
+  })
+
+  it('다음 월요일이 되어야 다음 주차로 넘어간다', () => {
+    expect(getCurrentWeek(new Date(2026, 8, 7, 0, 0))).toBe('2026-W36')
+    expect(getCurrentWeek(new Date(2026, 8, 7, 12, 0))).toBe('2026-W36')
+  })
+
+  it('주차 문자열이 getWeekBounds와 앞뒤가 맞는다 — 일요일 낮 기준', () => {
+    const sundayNoon = new Date(2026, 8, 6, 12, 0)
+    const { start, end } = getWeekBounds(getCurrentWeek(sundayNoon))
+    expect(start.getDate()).toBe(31) // 8/31 월
+    expect(end.getDate()).toBe(6)    // 9/6 일
+    // getWeekBounds의 start/end는 시:분 없는 "달력 날짜"다 — 시각이 붙은 값과 직접 부등호로
+    // 비교하면 일요일 낮이 end(일요일 자정)보다 커서 범위 밖으로 나온다. 날짜끼리 비교한다.
+    const sundayDate = new Date(2026, 8, 6)
+    expect(sundayDate >= start && sundayDate <= end).toBe(true)
   })
 })
