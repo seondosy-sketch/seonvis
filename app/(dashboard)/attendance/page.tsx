@@ -12,7 +12,7 @@ import {
 } from '@/lib/attendance/period'
 import type { AttendanceRecord, ProjectParticipant, ProjectParticipantLink } from '@/lib/attendance/types'
 import { findRecord, presentCountByParticipant } from '@/lib/attendance/summary'
-import { attendanceRecordErrorMessage, filterParticipantRows, filterVisibleProjects } from '@/lib/attendance/gridFilters'
+import { attendanceRecordErrorMessage, filterParticipantRows, filterVisibleProjects, projectIdsWithActiveParticipantsInPeriod } from '@/lib/attendance/gridFilters'
 import { applyAutoSyncCandidates, selectAutoSyncCandidates } from '@/lib/attendance/autoSync'
 import type { EngineerContact, EngineerSpecialty } from '@/lib/engineers/types'
 import type { AttendanceProjectRow } from './types'
@@ -203,11 +203,13 @@ export default function AttendancePage() {
   const specialtiesById = useMemo(() => new Map(specialties.map(s => [s.id, s])), [specialties])
   const presentCounts = useMemo(() => presentCountByParticipant(records), [records])
 
-  // 표시할 프로젝트: (공고일~면접일이 이 기간과 겹침) + (이 기간에 참여기술인 또는 출근기록이 있음).
+  // 표시할 프로젝트: (공고일~종료일이 이 기간과 겹침) + (이 기간에 참여기술인 또는 출근기록이 있음).
   // 겹침 조건만 쓰면 이미 끝난 프로젝트의 과거 마감(추후 단계) 기록이 화면에서 사라져 보인다.
+  // 참여기술인 조건에도 반드시 기간을 건다 — status만 보면 일정이 끝난 프로젝트가 매달 다시 뜬다
+  // (projectIdsWithActiveParticipantsInPeriod 주석 참고).
   const projectIdsWithActiveParticipants = useMemo(
-    () => new Set(participants.filter(p => p.status === '진행중').map(p => p.project_id)),
-    [participants],
+    () => projectIdsWithActiveParticipantsInPeriod(participants, periodStart, periodEnd),
+    [participants, periodStart, periodEnd],
   )
   const projectIdsWithRecords = useMemo(() => new Set(records.map(r => r.project_id)), [records])
 

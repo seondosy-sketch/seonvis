@@ -13,6 +13,15 @@ export interface ProjectForGridFilter {
   bid_date: string | null // 개찰일 — 지난 회계기간에 대해서는 더 이상 "겹침"으로 보지 않는다(사용자 지시)
   status: string
   /**
+   * 서면평가 여부와 제출일 — 서면평가 건은 기다릴 발표가 없어 Project List가 interview_date를
+   * null로 저장한다. 종료일을 면접일에서만 찾으면 "면접일 미입력 = 계속 진행중"으로 잘못 읽혀
+   * 제출이 끝난 사업이 매달 목록에 다시 뜬다. 종료일 판정은 제출일로 한다
+   * (lib/attendance/participantPeriod.ts의 computeAttendancePeriod와 같은 규칙).
+   * 이 두 컬럼을 아직 읽지 않는 화면(숙박 등)도 있어 optional로 둔다 — 없으면 예전처럼 면접일만 본다.
+   */
+  interview_written?: boolean | null
+  submit_date?: string | null
+  /**
    * 발주처 — 출근부의 발주처 필터에서만 쓴다. 이 타입을 함께 쓰는 숙박관리
    * (lib/lodging/projectOptions.ts)는 발주처를 읽지 않으므로 optional로 둔다.
    */
@@ -20,9 +29,19 @@ export interface ProjectForGridFilter {
 }
 
 /**
- * 프로젝트의 공고일~면접일이 조회 중인 회계기간과 겹치는지. 면접일 없으면 계속 겹치는 것으로 본다 —
- * 다만 개찰일(bid_date)이 그 회계기간 시작보다 이전이면, 면접일이 없어도 이미 개찰이 끝난 사업이므로
- * 더 이상 겹치는 것으로 보지 않는다(사용자 지시 — 개찰이 끝난 사업은 출근부에 계속 남지 않게 함).
+ * 프로젝트 일정의 종료일 — 서면평가 건이면 제출일, 아니면 면접일.
+ * 값이 비어 있으면 null(= 종료일 미확정, 계속 겹치는 것으로 본다).
+ */
+function scheduleEndDate(project: ProjectForGridFilter): string | null {
+  if (project.interview_written) return project.submit_date || null
+  return project.interview_date || null
+}
+
+/**
+ * 프로젝트의 공고일~종료일(면접일, 서면평가면 제출일)이 조회 중인 회계기간과 겹치는지.
+ * 종료일이 없으면 계속 겹치는 것으로 본다 — 다만 개찰일(bid_date)이 그 회계기간 시작보다
+ * 이전이면, 종료일이 없어도 이미 개찰이 끝난 사업이므로 더 이상 겹치는 것으로 보지 않는다
+ * (사용자 지시 — 개찰이 끝난 사업은 출근부에 계속 남지 않게 함).
  */
 export function projectOverlapsPeriod(
   project: ProjectForGridFilter,
@@ -31,9 +50,43 @@ export function projectOverlapsPeriod(
 ): boolean {
   if (!project.announce_date) return false
   if (project.announce_date > periodEnd) return false
-  if (project.interview_date && project.interview_date < periodStart) return false
+  const end = scheduleEndDate(project)
+  if (end && end < periodStart) return false
   if (project.bid_date && project.bid_date < periodStart) return false
   return true
+}
+
+/**
+ * 이 회계기간에 "활성"으로 볼 참여기술인을 가진 프로젝트 id 집합.
+ *
+ * status가 '진행중'인 것만으로는 부족하다 — 참여자 status는 사람이 참여기술인 관리 모달에서 직접
+ * 종료 처리할 때만 '종료'로 바뀌고, 프로젝트 일정이 끝나도 자동으로 닫히지 않는다. 그래서 이 집합을
+ * 기간과 무관하게 만들면 한 번 참여자가 등록된 프로젝트는 일정이 끝나도(심지어 미래 월을 조회해도)
+ * 매번 목록에 다시 뜬다(사용자 지적).
+ *
+ * 그래서 "관리자가 participation_end를 명시적으로 잡아둔" 참여자만 활성으로 본다. 판단 기준은
+ * 오직 participation_end다 — 이 값이 NULL이면 프로젝트 일정(면접일, 서면평가면 제출일)을
+ * 상속한다는 뜻이므로(사용자 지시 #8, NULL=상속) 이 집합에 넣지 않고 projectOverlapsPeriod가
+ * 프로젝트 일정으로 판단하게 둔다. participation_start만 채워져 있고 end가 NULL인 경우도
+ * 마찬가지다 — 시작일만 조정한 것을 "종료일 없음 = 무기한 진행중"으로 읽으면 일정이 끝난
+ * 프로젝트가 다시 매달 뜬다(이 함수를 처음 넣을 때 실제로 그렇게 새어나갔다).
+ *
+ * 과거 기록이 있는 프로젝트는 filterVisibleProjects의 projectIdsWithRecords가 따로 붙잡아 준다.
+ */
+export function projectIdsWithActiveParticipantsInPeriod(
+  participants: readonly ProjectParticipant[],
+  periodStart: string,
+  periodEnd: string,
+): Set<string> {
+  const ids = new Set<string>()
+  for (const p of participants) {
+    if (p.status !== '진행중') continue
+    if (!p.participation_end) continue // NULL = 프로젝트 일정 상속 → projectOverlapsPeriod가 판단
+    if (p.participation_end < periodStart) continue
+    if (p.participation_start && p.participation_start > periodEnd) continue
+    ids.add(p.project_id)
+  }
+  return ids
 }
 
 export interface FilterParticipantRowsInput {

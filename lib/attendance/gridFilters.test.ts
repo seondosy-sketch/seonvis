@@ -3,6 +3,7 @@ import {
   attendanceRecordErrorMessage,
   filterParticipantRows,
   filterVisibleProjects,
+  projectIdsWithActiveParticipantsInPeriod,
   projectOverlapsPeriod,
   type ProjectForGridFilter,
 } from './gridFilters'
@@ -59,6 +60,83 @@ describe('projectOverlapsPeriod', () => {
     expect(
       projectOverlapsPeriod(makeProject({ interview_date: null, bid_date: '2026-08-01' }), periodStart, periodEnd),
     ).toBe(true)
+  })
+
+  it('서면평가 건은 제출일이 기간 시작 이전이면 false(면접일이 null이어도)', () => {
+    expect(
+      projectOverlapsPeriod(
+        makeProject({ interview_date: null, interview_written: true, submit_date: '2026-07-01' }),
+        periodStart,
+        periodEnd,
+      ),
+    ).toBe(false)
+  })
+
+  it('서면평가 건의 제출일이 기간 안이면 true', () => {
+    expect(
+      projectOverlapsPeriod(
+        makeProject({ interview_date: null, interview_written: true, submit_date: '2026-08-01' }),
+        periodStart,
+        periodEnd,
+      ),
+    ).toBe(true)
+  })
+
+  it('서면평가인데 제출일이 없으면 예전처럼 계속 겹치는 것으로 본다', () => {
+    expect(
+      projectOverlapsPeriod(
+        makeProject({ interview_date: null, interview_written: true, submit_date: null }),
+        periodStart,
+        periodEnd,
+      ),
+    ).toBe(true)
+  })
+
+  it('서면평가가 아니면 제출일이 지났어도 면접일로 판단한다', () => {
+    expect(
+      projectOverlapsPeriod(
+        makeProject({ interview_written: false, submit_date: '2026-07-01' }),
+        periodStart,
+        periodEnd,
+      ),
+    ).toBe(true)
+  })
+})
+
+describe('projectIdsWithActiveParticipantsInPeriod', () => {
+  it('참여기간이 비어 있으면(프로젝트 일정 상속) 집합에 넣지 않는다', () => {
+    const participants = [makeParticipant({ participation_start: null, participation_end: null })]
+    expect(projectIdsWithActiveParticipantsInPeriod(participants, periodStart, periodEnd).size).toBe(0)
+  })
+
+  it('시작일만 있고 종료일이 NULL이면 집합에 넣지 않는다(종료일 상속 — 실제로 새어나갔던 경우)', () => {
+    const participants = [makeParticipant({ participation_start: '2026-06-01', participation_end: null })]
+    expect(projectIdsWithActiveParticipantsInPeriod(participants, periodStart, periodEnd).size).toBe(0)
+  })
+
+  it('종료일이 NULL이면 조회 기간이 한참 미래여도 집합에 넣지 않는다', () => {
+    const participants = [makeParticipant({ participation_start: '2026-06-01', participation_end: null })]
+    expect(projectIdsWithActiveParticipantsInPeriod(participants, '2027-11-21', '2027-12-20').size).toBe(0)
+  })
+
+  it('참여 종료일이 기간 시작 이전이면 제외한다(일정 끝난 프로젝트가 계속 뜨지 않게)', () => {
+    const participants = [makeParticipant({ participation_end: '2026-07-10' })]
+    expect(projectIdsWithActiveParticipantsInPeriod(participants, periodStart, periodEnd).size).toBe(0)
+  })
+
+  it('참여 종료일이 기간 안이거나 이후면 포함한다', () => {
+    const participants = [makeParticipant({ participation_end: '2026-08-01' })]
+    expect([...projectIdsWithActiveParticipantsInPeriod(participants, periodStart, periodEnd)]).toEqual(['proj-1'])
+  })
+
+  it('참여 시작일이 기간 종료 이후면 제외한다(미래 참여 예정)', () => {
+    const participants = [makeParticipant({ participation_start: '2026-09-01', participation_end: '2026-10-01' })]
+    expect(projectIdsWithActiveParticipantsInPeriod(participants, periodStart, periodEnd).size).toBe(0)
+  })
+
+  it("status가 '종료'면 참여기간과 무관하게 제외한다", () => {
+    const participants = [makeParticipant({ status: '종료', participation_end: '2026-08-01' })]
+    expect(projectIdsWithActiveParticipantsInPeriod(participants, periodStart, periodEnd).size).toBe(0)
   })
 })
 

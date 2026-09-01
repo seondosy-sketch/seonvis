@@ -75,7 +75,7 @@ export default function LodgingPage() {
     // 날짜·상태까지 읽는 건 기술인 출근부와 같은 일정 기준으로 목록을 거르기 위함이다.
     supabase
       .from('projects')
-      .select('id,name,project_number,announce_date,interview_date,bid_date,status')
+      .select('id,name,project_number,announce_date,interview_date,interview_written,submit_date,bid_date,status')
       .order('project_number', { ascending: true })
       .then(({ data }) => {
         setProjects((data ?? []) as LodgingProjectRef[])
