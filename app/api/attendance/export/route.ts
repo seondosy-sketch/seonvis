@@ -15,7 +15,7 @@ import { createSupabaseServerClient } from '@/lib/supabase-server'
 import { permissionFor } from '@/lib/menuConfig'
 import { buildDownloadResponse } from '@/lib/export/response'
 import { getPayPeriodForLabel, getPayPeriodRangeForLabel, todayKST } from '@/lib/attendance/period'
-import { filterParticipantRows, filterVisibleProjects } from '@/lib/attendance/gridFilters'
+import { filterParticipantRows, filterVisibleProjects, projectIdsWithActiveParticipantsInPeriod } from '@/lib/attendance/gridFilters'
 import { currentClosureStatus, latestVersion } from '@/lib/attendance/closureLifecycle'
 import { buildMonthlyExportBlocks } from '@/lib/attendance/export/monthlyRows'
 import { buildMonthlyAttendanceWorkbook } from '@/lib/attendance/export/monthlyWorkbook'
@@ -150,9 +150,8 @@ export async function POST(request: Request) {
       statusFilter: filters.statusFilter ?? '전체',
       clientFilter: filters.clientFilter ?? '전체',
       search: filters.projectSearch ?? '',
-      projectIdsWithActiveParticipants: new Set(
-        participants.filter(p => p.status === '진행중').map(p => p.project_id),
-      ),
+      // 화면(app/(dashboard)/attendance/page.tsx)과 반드시 같은 기준을 써야 엑셀과 화면이 어긋나지 않는다.
+      projectIdsWithActiveParticipants: projectIdsWithActiveParticipantsInPeriod(participants, periodStart, periodEnd),
       projectIdsWithRecords: new Set(records.map(r => r.project_id)),
       rowParticipantCount: projectId => participantsOf(projectId).length,
       hasParticipantFilter: specialtyFilter !== '전체' || !!engineerSearch.trim(),

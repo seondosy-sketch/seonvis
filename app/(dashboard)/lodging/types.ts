@@ -15,6 +15,9 @@ export interface LodgingProjectRef {
   interview_date: string | null
   bid_date: string | null
   status: string
+  // 서면평가 건은 면접일 대신 제출일이 일정 종료일이다 — 출근부와 같은 기준으로 거르기 위해 함께 읽는다.
+  interview_written: boolean | null
+  submit_date: string | null
 }
 
 export interface LodgingEngineerRef {
