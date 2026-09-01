@@ -64,10 +64,14 @@ export function projectOverlapsPeriod(
  * 기간과 무관하게 만들면 한 번 참여자가 등록된 프로젝트는 일정이 끝나도(심지어 미래 월을 조회해도)
  * 매번 목록에 다시 뜬다(사용자 지적).
  *
- * 그래서 관리자가 명시적으로 잡아둔 참여기간(participation_start/end)이 조회 기간과 겹칠 때만
- * 활성으로 본다. 참여기간이 둘 다 비어 있으면(NULL = 프로젝트 일정 상속) 이 집합에 넣지 않는다 —
- * 그 경우의 판단은 projectOverlapsPeriod가 이미 프로젝트 일정으로 하고 있고, 과거 기록이 있는
- * 프로젝트는 filterVisibleProjects의 projectIdsWithRecords가 따로 붙잡아 준다.
+ * 그래서 "관리자가 participation_end를 명시적으로 잡아둔" 참여자만 활성으로 본다. 판단 기준은
+ * 오직 participation_end다 — 이 값이 NULL이면 프로젝트 일정(면접일, 서면평가면 제출일)을
+ * 상속한다는 뜻이므로(사용자 지시 #8, NULL=상속) 이 집합에 넣지 않고 projectOverlapsPeriod가
+ * 프로젝트 일정으로 판단하게 둔다. participation_start만 채워져 있고 end가 NULL인 경우도
+ * 마찬가지다 — 시작일만 조정한 것을 "종료일 없음 = 무기한 진행중"으로 읽으면 일정이 끝난
+ * 프로젝트가 다시 매달 뜬다(이 함수를 처음 넣을 때 실제로 그렇게 새어나갔다).
+ *
+ * 과거 기록이 있는 프로젝트는 filterVisibleProjects의 projectIdsWithRecords가 따로 붙잡아 준다.
  */
 export function projectIdsWithActiveParticipantsInPeriod(
   participants: readonly ProjectParticipant[],
@@ -77,8 +81,8 @@ export function projectIdsWithActiveParticipantsInPeriod(
   const ids = new Set<string>()
   for (const p of participants) {
     if (p.status !== '진행중') continue
-    if (!p.participation_start && !p.participation_end) continue
-    if (p.participation_end && p.participation_end < periodStart) continue
+    if (!p.participation_end) continue // NULL = 프로젝트 일정 상속 → projectOverlapsPeriod가 판단
+    if (p.participation_end < periodStart) continue
     if (p.participation_start && p.participation_start > periodEnd) continue
     ids.add(p.project_id)
   }

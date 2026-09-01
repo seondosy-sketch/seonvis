@@ -109,6 +109,16 @@ describe('projectIdsWithActiveParticipantsInPeriod', () => {
     expect(projectIdsWithActiveParticipantsInPeriod(participants, periodStart, periodEnd).size).toBe(0)
   })
 
+  it('시작일만 있고 종료일이 NULL이면 집합에 넣지 않는다(종료일 상속 — 실제로 새어나갔던 경우)', () => {
+    const participants = [makeParticipant({ participation_start: '2026-06-01', participation_end: null })]
+    expect(projectIdsWithActiveParticipantsInPeriod(participants, periodStart, periodEnd).size).toBe(0)
+  })
+
+  it('종료일이 NULL이면 조회 기간이 한참 미래여도 집합에 넣지 않는다', () => {
+    const participants = [makeParticipant({ participation_start: '2026-06-01', participation_end: null })]
+    expect(projectIdsWithActiveParticipantsInPeriod(participants, '2027-11-21', '2027-12-20').size).toBe(0)
+  })
+
   it('참여 종료일이 기간 시작 이전이면 제외한다(일정 끝난 프로젝트가 계속 뜨지 않게)', () => {
     const participants = [makeParticipant({ participation_end: '2026-07-10' })]
     expect(projectIdsWithActiveParticipantsInPeriod(participants, periodStart, periodEnd).size).toBe(0)
