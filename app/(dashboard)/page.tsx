@@ -37,10 +37,16 @@ export default function DashboardPage() {
   const { start: weekStart, end: weekEnd } = getWeekBounds(week)
 
   // Calendar
-  const [performing, setPerforming] = useState<PerformingProject[]>([])
-  // 달력 전용 목록 — 금주 일정(buildSchedule)은 이번주 스냅샷만 봐야 하므로 따로 들고 있는다.
-  const [calPerforming, setCalPerforming] = useState<PerformingProject[]>([])
-  // 달력이 알려주는 "지금 보이는 범위". 휠로 스크롤하면 바뀌고, 그때마다 그 범위의 주차를 읽는다.
+  // Project List 원본 — 날짜 보완과 fallback에 쓴다. 주차와 무관하므로 주차 조회와 분리해 읽는다.
+  const [projRows, setProjRows] = useState<Record<string, unknown>[]>([])
+  /**
+   * 주차별 스냅샷. 읽은 주차는 지우지 않고 쌓는다 — 달력을 스크롤해 창을 옮겼다고 해서 이미
+   * 그려둔 일정이 사라지면 안 된다(사용자 지적: 주차를 움직이면 내용이 삭제된다). 한 덩어리
+   * 배열로 갈아끼우면 스크롤할 때마다 직전 범위의 일정이 통째로 날아간다.
+   */
+  const [perfByWeek, setPerfByWeek] = useState<Record<string, PerformingProject[]>>({})
+  const loadedWeeksRef = useRef<Set<string>>(new Set())
+  // 달력이 알려주는 "지금 보이는 범위". 휠로 스크롤하면 바뀌고, 그때 아직 안 읽은 주차만 더 읽는다.
   const [calRange, setCalRange] = useState<{ from: string; to: string } | null>(null)
   const handleCalRange = useCallback((from: string, to: string) => {
     // 같은 범위면 상태를 그대로 둔다 — 새 객체를 넣으면 로드 effect가 헛돌고 렌더 고리가 된다.
@@ -56,9 +62,8 @@ export default function DashboardPage() {
   const [cmakNews, setCmakNews] = useState<{ idx: string; title: string; date: string }[]>([])
   const [cmakLoading, setCmakLoading] = useState(true)
 
-  // 읽어올 주차 — 달력이 보이는 범위를 덮는 주차 전부. 아직 범위를 못 받았으면(첫 렌더)
-  // 이번주만 읽어 화면을 먼저 채우고, 달력이 범위를 알려주면 그 주차들로 다시 읽는다.
-  // 이번주는 금주 일정에 항상 필요하므로 어떤 경우에도 빠뜨리지 않는다.
+  // 읽어야 할 주차 — 달력이 보이는 범위를 덮는 주차 전부. 이번주는 금주 일정에 항상 필요하므로
+  // 범위를 아직 못 받았어도(첫 렌더) 빠뜨리지 않는다.
   const weekKeys = useMemo(() => {
     const keys = calRange
       ? weekKeysInRange(parseISODate(calRange.from), parseISODate(calRange.to))
@@ -67,63 +72,48 @@ export default function DashboardPage() {
   }, [calRange, week])
   // 배열은 렌더마다 새 객체라 deps로 쓰면 로드가 헛돈다 — 내용이 같으면 같은 문자열이 되게 접는다.
   const weekKeysSig = weekKeys.join(',')
+  const weekKeysSigRef = useRef(weekKeysSig)
+  weekKeysSigRef.current = weekKeysSig
 
-  const loadPerforming = useCallback(async () => {
-    const keys = weekKeysSig.split(',')
-    const { data: perf } = await supabase.from('performing_projects').select('*').in('week', keys).order('sort_order')
+  /**
+   * 주차 스냅샷을 "아직 안 읽은 것만" 더 읽는다.
+   *
+   * 결과를 주차별 칸에 넣기만 하므로, 휠을 빠르게 굴려 요청이 여러 개 날아가도 각 응답이
+   * 담당하는 주차가 서로 겹치지 않는다 — 늦게 온 응답이 먼저 온 것을 덮어쓸 수 없다.
+   * 한 배열을 통째로 갈아끼우던 방식은 이 경합에도 취약했다.
+   */
+  const loadWeeks = useCallback(async (keys: string[]) => {
+    const missing = keys.filter(k => !loadedWeeksRef.current.has(k))
+    if (missing.length === 0) return
+    // 같은 주차를 두 번 요청하지 않도록 먼저 표시한다. 실패하면 되돌려 다음 기회에 다시 읽는다.
+    for (const k of missing) loadedWeeksRef.current.add(k)
+    const { data, error } = await supabase
+      .from('performing_projects')
+      .select('*')
+      .in('week', missing)
+      .order('sort_order')
+    if (error) {
+      for (const k of missing) loadedWeeksRef.current.delete(k)
+      return
+    }
+    const rows = (data ?? []) as PerformingProject[]
+    setPerfByWeek(prev => {
+      const next = { ...prev }
+      // 빈 주차도 칸을 만들어 둔다 — 그래야 스크롤할 때마다 없는 주차를 다시 묻지 않는다.
+      for (const k of missing) next[k] = []
+      for (const r of rows) next[r.week] = [...(next[r.week] ?? []), r]
+      return next
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
-    // projects 테이블에서 bid_date 등 날짜 정보 항상 로드
+  /** Project List와 비고 — 주차와 무관하므로 스크롤할 때마다 다시 읽지 않는다. */
+  const loadProjectsAndNotes = useCallback(async () => {
     const { data: projs } = await supabase
       .from('projects')
       .select('name, submit_date, interview_date, bid_date, participants, status_override, evaluation, result_score')
       .order('project_number', { ascending: true })
-    const projByName: Record<string, any> = {}
-    if (projs) for (const p of projs) projByName[p.name] = p
-    const projDatesByName = new Map<string, ProjectDateSource>(Object.entries(projByName))
-
-    const perfRows = (perf ?? []) as PerformingProject[]
-    // 금주 일정(buildSchedule)은 예전과 똑같이 이번주 스냅샷만 본다 — 달력 때문에 여러 주차를
-    // 읽게 됐다고 해서 이번주 목록에서 뺀 사업이 금주 일정에 되살아나면 안 된다.
-    const thisWeekRows = perfRows.filter(p => p.week === week)
-
-    if (thisWeekRows.length > 0) {
-      // 날짜는 Project List(projects)를 우선한다 — 주간보고 화면(app/dashboard.tsx)도 같은 규칙이다.
-      // Project List에 없는 수동 추가 행만 저장된 "M/D"를 그대로 쓴다(애초에 연도 정보가 없다).
-      setPerforming(applyProjectDates(thisWeekRows, projDatesByName))
-    }
-    // 달력은 읽어온 주차를 전부 합치되 같은 사업이 주차 수만큼 겹치지 않게 이름으로 접는다.
-    if (perfRows.length > 0) {
-      setCalPerforming(applyProjectDates(dedupePerformingByName(perfRows), projDatesByName))
-    }
-
-    if (thisWeekRows.length === 0) {
-      // 저장된 주간 데이터가 없으면 projects 테이블에서 직접 불러오기
-      if (projs) {
-        const rows: PerformingProject[] = projs
-          .filter((p: any) => {
-            if (p.status_override === '취소') return false
-            if (p.participants?.includes('드랍') || p.participants?.includes('드롭')) return false
-            if (p.evaluation === '선') return false
-            return true
-          })
-          .map((p: any, i: number) => ({
-            status: '진행중' as const,
-            name: p.name,
-            director: '',
-            submit_date: keepYear(p.submit_date),
-            interview_date: keepYear(p.interview_date),
-            result_date: keepYear(p.bid_date),
-            fee: null,
-            note: '',
-            sort_order: i,
-            week,
-          }))
-        setPerforming(rows)
-        // 어느 주차에도 스냅샷이 없으면 달력도 같은 fallback을 쓴다. 일부 주차에만 스냅샷이
-        // 있을 때는 그 주차 것들이 이미 들어가 있으므로 여기서 덮어쓰지 않는다.
-        if (perfRows.length === 0) setCalPerforming(rows)
-      }
-    }
+    if (projs) setProjRows(projs as Record<string, unknown>[])
 
     const [{ data: projsForNotes }, { data: notesData }] = await Promise.all([
       supabase.from('projects').select('project_number, name'),
@@ -139,13 +129,69 @@ export default function DashboardPage() {
       setCalNotes(map)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [week, weekKeysSig])
+  }, [])
+
+  useEffect(() => { loadWeeks(weekKeysSig.split(',')) }, [weekKeysSig, loadWeeks])
+
   useEffect(() => {
-    loadPerforming()
-    const onVisible = () => { if (document.visibilityState === 'visible') loadPerforming() }
+    loadProjectsAndNotes()
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return
+      // 화면에 돌아오면 최신값으로 다시 맞춘다 — 이미 읽은 주차도 다시 읽어야 하므로 표시를 지운다.
+      loadedWeeksRef.current.clear()
+      loadProjectsAndNotes()
+      loadWeeks(weekKeysSigRef.current.split(','))
+    }
     document.addEventListener('visibilitychange', onVisible)
     return () => document.removeEventListener('visibilitychange', onVisible)
-  }, [loadPerforming])
+  }, [loadProjectsAndNotes, loadWeeks])
+
+  const projDatesByName = useMemo(
+    () => new Map<string, ProjectDateSource>(projRows.map(p => [p.name as string, p as ProjectDateSource])),
+    [projRows],
+  )
+
+  /** 저장된 주간 데이터가 없을 때 쓰는 Project List 기반 행(취소·드랍·자사평가 제외). */
+  const fallbackRows = useMemo<PerformingProject[]>(() => projRows
+    .filter(p => {
+      if (p.status_override === '취소') return false
+      const participants = typeof p.participants === 'string' ? p.participants : ''
+      if (participants.includes('드랍') || participants.includes('드롭')) return false
+      if (p.evaluation === '선') return false
+      return true
+    })
+    .map((p, i) => ({
+      status: '진행중' as const,
+      name: p.name as string,
+      director: '',
+      submit_date: keepYear(p.submit_date as string | null),
+      interview_date: keepYear(p.interview_date as string | null),
+      result_date: keepYear(p.bid_date as string | null),
+      fee: null,
+      note: '',
+      sort_order: i,
+      week,
+    })), [projRows, week])
+
+  // 이번주 칸이 생겼는지 — 아직 안 읽었으면 fallback을 쓰지 않는다. 그러지 않으면 Project List가
+  // 먼저 도착하는 찰나에 전체 사업이 떴다가 스냅샷이 오면 줄어드는 깜빡임이 생긴다.
+  const thisWeekLoaded = week in perfByWeek
+  const thisWeekRows = useMemo(() => perfByWeek[week] ?? [], [perfByWeek, week])
+
+  // 금주 일정(buildSchedule)은 예전대로 이번주 스냅샷만 본다 — 달력 때문에 여러 주차를 읽게
+  // 됐다고 해서 이번주 목록에서 뺀 사업이 금주 일정에 되살아나면 안 된다.
+  const performing = useMemo(() => {
+    if (thisWeekRows.length > 0) return applyProjectDates(thisWeekRows, projDatesByName)
+    return thisWeekLoaded ? fallbackRows : []
+  }, [thisWeekRows, thisWeekLoaded, fallbackRows, projDatesByName])
+
+  // 달력은 지금까지 읽은 주차를 전부 합치되, 같은 사업이 주차 수만큼 겹치지 않게 이름으로 접는다.
+  const calPerforming = useMemo(() => {
+    const snapshots = Object.values(perfByWeek).flat()
+    const useFallback = thisWeekLoaded && thisWeekRows.length === 0
+    const rows = useFallback ? [...snapshots, ...fallbackRows] : snapshots
+    return applyProjectDates(dedupePerformingByName(rows), projDatesByName)
+  }, [perfByWeek, thisWeekLoaded, thisWeekRows, fallbackRows, projDatesByName])
 
   // 공휴일 로드 (현재 연도 + 다음 연도)
   useEffect(() => {
