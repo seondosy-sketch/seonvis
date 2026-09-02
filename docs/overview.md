@@ -8,7 +8,7 @@
 
 ## 주요 사용자
 - 미래사업팀 팀원 (Google 계정 로그인 후 관리자 승인 필요)
-- 관리자 (`ADMIN_EMAILS` 환경 변수에 등록된 이메일)
+- 관리자 (`ADMIN_EMAILS` 환경 변수에 등록된 이메일 또는 `allowed_users.is_admin`)
 
 ## 기술 스택
 

@@ -1,21 +1,10 @@
 import { createSupabaseAdminClient } from '@/lib/supabase-admin'
-import { createSupabaseServerClient } from '@/lib/supabase-server'
+import { normalizeEmail, requireAdminAccess } from '@/lib/access'
 import { NextResponse } from 'next/server'
 
-function getAdminEmails() {
-  return (process.env.ADMIN_EMAILS ?? '').split(',').map(e => e.trim()).filter(Boolean)
-}
-
-async function assertAdmin() {
-  const supabase = await createSupabaseServerClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user?.email || !getAdminEmails().includes(user.email)) return null
-  return user
-}
-
 export async function GET() {
-  const user = await assertAdmin()
-  if (!user) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  const actor = await requireAdminAccess()
+  if (!actor) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
   const admin = createSupabaseAdminClient()
   const { data, error } = await admin.from('access_requests').select('*').order('created_at', { ascending: false })
@@ -24,8 +13,8 @@ export async function GET() {
 }
 
 export async function PATCH(request: Request) {
-  const user = await assertAdmin()
-  if (!user) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  const actor = await requireAdminAccess()
+  if (!actor) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
   const { id, email, status } = await request.json()
   if (!id || !status) return NextResponse.json({ error: 'id, status required' }, { status: 400 })
@@ -43,13 +32,13 @@ export async function PATCH(request: Request) {
   const { error } = await admin.from('access_requests').update({
     status,
     reviewed_at: new Date().toISOString(),
-    reviewed_by: user.email,
+    reviewed_by: actor.email,
   }).eq('id', id)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
   // 승인이면 allowed_users에 추가
   if (status === 'approved' && email) {
-    const normalizedEmail = email.toLowerCase().trim()
+    const normalizedEmail = normalizeEmail(email)
     // 이미 있는 사용자를 다시 승인하는 경우, 관리자가 손으로 고쳐둔 메모를 신청서 내용으로
     // 덮어쓰지 않는다 — 비어 있을 때만 채운다.
     const { data: existing } = await admin
@@ -67,7 +56,7 @@ export async function PATCH(request: Request) {
       {
         email: normalizedEmail,
         is_admin: false,
-        added_by_email: user.email,
+        added_by_email: actor.email,
         note: existing?.note?.trim() ? existing.note : seededNote,
       },
       { onConflict: 'email' }
@@ -78,8 +67,8 @@ export async function PATCH(request: Request) {
 }
 
 export async function DELETE(request: Request) {
-  const user = await assertAdmin()
-  if (!user) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  const actor = await requireAdminAccess()
+  if (!actor) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
   const { id } = await request.json()
   const admin = createSupabaseAdminClient()

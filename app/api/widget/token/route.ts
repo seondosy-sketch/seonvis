@@ -6,26 +6,13 @@
  * (프록시 뒤에서 서버가 보는 호스트와 사용자가 접속한 호스트가 다를 수 있어서).
  */
 import { NextResponse } from 'next/server'
-import { createSupabaseAdminClient } from '@/lib/supabase-admin'
-import { createSupabaseServerClient } from '@/lib/supabase-server'
-import { getActiveWidgetToken, issueWidgetToken, normalizeEmail, revokeWidgetTokens } from '@/lib/widget/token'
+import { resolveSessionAccess } from '@/lib/access'
+import { getActiveWidgetToken, issueWidgetToken, revokeWidgetTokens } from '@/lib/widget/token'
 
-function getAdminEmails(): string[] {
-  return (process.env.ADMIN_EMAILS ?? '').split(',').map(e => e.trim()).filter(Boolean)
-}
-
-/** 로그인 + 승인된 사용자인지 확인. app/(dashboard)/layout.tsx와 같은 규칙. */
+/** 로그인 + 승인된 사용자인지 확인. app/(dashboard)/layout.tsx와 같은 규칙(lib/access.ts). */
 async function assertAllowedUser(): Promise<string | null> {
-  const supabase = await createSupabaseServerClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user?.email) return null
-
-  const email = normalizeEmail(user.email)
-  if (getAdminEmails().includes(user.email)) return email
-
-  const admin = createSupabaseAdminClient()
-  const { data } = await admin.from('allowed_users').select('email').eq('email', email).maybeSingle()
-  return data ? email : null
+  const access = await resolveSessionAccess()
+  return access?.email ?? null
 }
 
 export async function GET() {

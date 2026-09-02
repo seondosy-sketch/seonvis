@@ -6,27 +6,16 @@
  * (allowed_users 행 존재 + menu_permissions). 권한을 회수당한 사람의 위젯이 계속 살아 있으면
  * 웹에서 막은 것이 무의미해지기 때문이다.
  *
- * 권한 판정은 app/(dashboard)/layout.tsx와 같은 규칙을 쓴다:
- *   ADMIN_EMAILS(env)에 있으면 관리자 → 전부 write
- *   아니면 allowed_users 행이 있어야 하고, 없으면 미승인으로 간주해 거부
+ * 권한 판정은 화면(app/(dashboard)/layout.tsx)과 같은 규칙을 쓴다 — 판정 코드도 같은 것을
+ * 쓴다(lib/access.ts의 resolveAccessByEmail): 관리자(ADMIN_EMAILS env 또는
+ * allowed_users.is_admin)는 전부 write, 아니면 allowed_users 행이 있어야 하고 없으면 거부.
  */
 import { randomBytes } from 'node:crypto'
 import { createSupabaseAdminClient } from '@/lib/supabase-admin'
-import type { MenuPermission } from '@/lib/menuConfig'
+import { normalizeEmail, resolveAccessByEmail, type AccessIdentity } from '@/lib/access'
 
-export interface WidgetIdentity {
-  email: string
-  isAdmin: boolean
-  menuPermissions: Record<string, MenuPermission>
-}
-
-export function normalizeEmail(email: string): string {
-  return email.toLowerCase().trim()
-}
-
-function getAdminEmails(): string[] {
-  return (process.env.ADMIN_EMAILS ?? '').split(',').map(e => e.trim()).filter(Boolean)
-}
+/** 위젯 요청의 신원 — 화면 쪽 신원과 같은 모양이다(lib/access.ts). */
+export type WidgetIdentity = AccessIdentity
 
 function generateToken(): string {
   return `wgt_${randomBytes(16).toString('hex')}`
@@ -84,19 +73,9 @@ export async function resolveWidgetToken(token: string | null): Promise<WidgetId
     .maybeSingle()
   if (!row?.email) return null
 
-  const email = normalizeEmail(row.email)
-  const isAdmin = getAdminEmails().includes(email)
-
-  let menuPermissions: Record<string, MenuPermission> = {}
-  if (!isAdmin) {
-    const { data: user } = await admin
-      .from('allowed_users')
-      .select('email, menu_permissions')
-      .eq('email', email)
-      .maybeSingle()
-    if (!user) return null // 승인 취소·퇴사 → 토큰이 남아 있어도 거부
-    menuPermissions = (user.menu_permissions ?? {}) as Record<string, MenuPermission>
-  }
+  // 승인 취소·퇴사면 토큰이 남아 있어도 거부된다(resolveAccessByEmail이 null).
+  const identity = await resolveAccessByEmail(row.email)
+  if (!identity) return null
 
   // last_used_at은 "이 위젯이 아직 쓰이는지" 파악용 부가 정보라 매 요청마다 쓸 필요가 없다.
   // 마지막 기록이 1시간 이상 지났을 때만 UPDATE해서 불필요한 DB 쓰기를 없앤다(위젯은 자동
@@ -108,7 +87,7 @@ export async function resolveWidgetToken(token: string | null): Promise<WidgetId
       .eq('token', token)
   }
 
-  return { email, isAdmin, menuPermissions }
+  return identity
 }
 
 const LAST_USED_THROTTLE_MS = 60 * 60 * 1000
