@@ -24,6 +24,7 @@ import {
   reloadFromProject,
   type AutofillOwnership,
 } from '@/lib/evaluations/projectAutofill'
+import { legacyYearFor } from '@/lib/evaluations/reviewPayload'
 import {
   countValidQuestions,
   groupLabel,
@@ -40,14 +41,26 @@ import type {
   EvaluationQuestionCategory,
   EvaluationRole,
   EvaluationType,
-  ReviewDetail,
+  ReviewFormSeed,
   ReviewSavePayload,
 } from '@/lib/evaluations/types'
 import type { InterviewEngineerRef, InterviewProjectRef } from '../types'
 
+/** HWP 문서에서 읽어온 초안으로 열렸을 때 위에 띄우는 안내. */
+export interface ReviewImportInfo {
+  fileName: string
+  /** 사람이 확인해야 할 것들(lib/evaluations/importSeed.ts가 만든다). */
+  notes: string[]
+  /** 여러 건을 올렸을 때 "2 / 5" 같은 진행 표시. 1건이면 비워 둔다. */
+  progress: string
+}
+
 interface ReviewFormModalProps {
-  /** null = 신규 작성 */
-  review: ReviewDetail | null
+  /**
+   * null = 빈 폼으로 신규 작성.
+   * id가 있으면 수정, id가 null인 초안(HWP 업로드)이면 값이 채워진 신규 작성이다.
+   */
+  review: ReviewFormSeed | null
   projects: InterviewProjectRef[]
   engineers: InterviewEngineerRef[]
   roles: EvaluationRole[]
@@ -56,13 +69,15 @@ interface ReviewFormModalProps {
   /** 시설용도 입력칸 추천 목록 — 기존에 입력된 값들(자유 입력이라 고정 목록이 없다). */
   facilitySuggestions: string[]
   currentUserEmail: string
+  /** HWP 초안으로 열렸을 때만 넘어온다. */
+  importInfo?: ReviewImportInfo
   onClose: () => void
   onSaved: (reviewId: string) => void
 }
 
 export default function ReviewFormModal({
   review, projects, engineers, roles, categories, evaluationTypes, facilitySuggestions,
-  currentUserEmail, onClose, onSaved,
+  currentUserEmail, importInfo, onClose, onSaved,
 }: ReviewFormModalProps) {
   const supabase = createSupabaseBrowserClient()
   const [busy, setBusy] = useState(false)
@@ -347,7 +362,10 @@ export default function ReviewFormModal({
       facility_type: facilityType.trim(),
       evaluation_date: evaluationDate || null,
       // 신규 입력 화면은 실제 평가일만 받는다 — legacy 연도 칸은 이관 전용이라 입력을 요구하지 않는다.
-      evaluation_year: review?.evaluation_year ?? null,
+      // 다만 연도만 있던 자료(HWP 초안 포함)에 사용자가 다른 해의 평가일을 넣으면 DB CHECK가
+      // 막으므로, 어긋나는 연도는 버린다 — 정확한 날짜가 있으면 연도는 거기서 도출된다
+      // (evaluation_year_effective).
+      evaluation_year: legacyYearFor(evaluationDate, review?.evaluation_year ?? null),
       evaluation_time: evaluationTime.trim(),
       location: location.trim(),
       evaluator_count: evaluatorCount === '' ? null : Number(evaluatorCount),
@@ -375,7 +393,7 @@ export default function ReviewFormModal({
         return
       }
 
-      const savedId = (data as { id: string } | null)?.id ?? review?.id
+      const savedId = (data as { id: string } | null)?.id ?? review?.id ?? null
       if (savedId) onSaved(savedId)
       onClose()
     } finally {
@@ -389,11 +407,29 @@ export default function ReviewFormModal({
     <div style={overlay} onClick={busy ? undefined : onClose}>
       <div style={panel} onClick={e => e.stopPropagation()}>
         <div style={panelHeader}>
-          <span style={{ fontSize: 14, fontWeight: 600 }}>{review ? '면접후기 수정' : '면접후기 등록'}</span>
+          <span style={{ fontSize: 14, fontWeight: 600 }}>{review?.id ? '면접후기 수정' : '면접후기 등록'}</span>
           <button onClick={onClose} disabled={busy} style={closeBtn}>✕</button>
         </div>
 
         <div style={panelBody}>
+          {/* HWP 초안은 "아직 저장되지 않았다"는 사실과 파서가 놓친 항목을 먼저 알린다. */}
+          {importInfo && (
+            <div style={importBox}>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                {importInfo.progress && <span style={{ color: '#92400e', marginRight: 6 }}>{importInfo.progress}</span>}
+                {importInfo.fileName}에서 읽어온 초안입니다 — 아직 저장되지 않았습니다.
+              </div>
+              <div style={{ lineHeight: 1.6 }}>
+                값을 확인·수정한 뒤 아래 <strong>저장</strong>을 눌러야 면접 DB에 등록됩니다.
+                {importInfo.progress && ' 닫으면 이 문서는 저장하지 않고 다음 문서로 넘어갑니다.'}
+              </div>
+              {importInfo.notes.length > 0 && (
+                <ul style={{ margin: '6px 0 0', paddingLeft: 16, lineHeight: 1.7 }}>
+                  {importInfo.notes.map((note, i) => <li key={i}>{note}</li>)}
+                </ul>
+              )}
+            </div>
+          )}
           {mastersMissing && (
             <div style={errorBox}>
               평가유형·질의그룹·질의분류 목록을 불러오지 못해 후기를 저장할 수 없습니다.
@@ -726,6 +762,7 @@ const dropdown: React.CSSProperties = { position: 'absolute', top: '100%', left:
 const dropdownItem: React.CSSProperties = { padding: '6px 9px', fontSize: 12, cursor: 'pointer', borderBottom: '1px solid #f6f6f4' }
 const groupBox: React.CSSProperties = { border: '1px solid #e8e8e6', borderRadius: 8, padding: 10, marginBottom: 8, background: '#fcfcfb' }
 const errorBox: React.CSSProperties = { marginTop: 12, padding: '8px 12px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, fontSize: 12, color: '#b91c1c', lineHeight: 1.6 }
+const importBox: React.CSSProperties = { marginTop: 12, padding: '9px 12px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, fontSize: 12, color: '#78350f', lineHeight: 1.6 }
 const hint: React.CSSProperties = { fontSize: 11, color: '#999', marginTop: 4, lineHeight: 1.6 }
 const linkedBadge: React.CSSProperties = { position: 'absolute', right: 8, top: 8, fontSize: 9, color: '#0ea5e9', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 3, padding: '1px 4px' }
 const participantRow: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', cursor: 'pointer' }

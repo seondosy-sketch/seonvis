@@ -188,6 +188,15 @@ export interface ReviewDetail extends EvaluationReview {
   questions: EvaluationQuestion[]
 }
 
+/**
+ * 등록/수정 폼(ReviewFormModal)의 초기값.
+ *
+ * 저장된 기록(ReviewDetail)이거나, HWP 후기 문서에서 읽어온 **초안**이다. 초안은 아직 DB에 없으므로
+ * id가 null이고, 폼은 이 값을 신규 등록으로 저장한다(lib/evaluations/importSeed.ts가 만든다).
+ * ReviewDetail은 이 타입에 그대로 대입된다.
+ */
+export type ReviewFormSeed = Omit<ReviewDetail, 'id'> & { id: string | null }
+
 // ── 저장 페이로드 ──────────────────────────────────────────────────────────────
 // save_evaluation_review RPC에 넘기는 모양. 기록 + 참석자 + 질문을 한 트랜잭션으로 저장하기 위해
 // supabase-js의 insert/update를 여러 번 호출하지 않고 RPC 한 번으로 보낸다.
