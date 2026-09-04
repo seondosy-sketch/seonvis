@@ -59,7 +59,7 @@ export default function DashboardPage() {
   const [newEventTitle, setNewEventTitle] = useState('')
   const [newEventColor, setNewEventColor] = useState('#7c3aed')
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; title: string } | null>(null)
-  const [cmakNews, setCmakNews] = useState<{ idx: string; title: string; date: string }[]>([])
+  const [cmakNews, setCmakNews] = useState<{ idx: string; title: string; date: string; url: string }[]>([])
   const [cmakLoading, setCmakLoading] = useState(true)
 
   // 읽어야 할 주차 — 달력이 보이는 범위를 덮는 주차 전부. 이번주는 금주 일정에 항상 필요하므로
@@ -411,7 +411,7 @@ export default function DashboardPage() {
         <div style={{ margin: '10px 12px 0', background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8 }}>
           <div style={{ padding: '10px 14px', borderBottom: '1px solid #f0f0ee', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: '#111' }}>📰 CM업계소식</div>
-            <a href="https://www.cmak.or.kr/html/notice/news.asp" target="_blank" rel="noreferrer"
+            <a href="https://www.cmak.or.kr/notice/news" target="_blank" rel="noreferrer"
               style={{ fontSize: 11, color: '#aaa', textDecoration: 'none' }}>CMAK →</a>
           </div>
           <div style={{ padding: '4px 0' }}>
@@ -420,7 +420,7 @@ export default function DashboardPage() {
             ) : cmakNews.length === 0 ? (
               <div style={{ padding: '16px', textAlign: 'center', color: '#ccc', fontSize: 12 }}>소식을 불러오지 못했습니다</div>
             ) : cmakNews.map((item, i) => (
-              <a key={item.idx} href={`https://www.cmak.or.kr/html/notice/news_r.asp?code=0&search=&searchString=&no=${item.idx}`} target="_blank" rel="noreferrer"
+              <a key={item.idx} href={item.url} target="_blank" rel="noreferrer"
                 style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '6px 14px', textDecoration: 'none', borderBottom: i < cmakNews.length - 1 ? '1px solid #f8f8f7' : 'none' }}>
                 <span style={{ fontSize: 11, color: '#999', flexShrink: 0, minWidth: 44 }}>{item.date.slice(5)}</span>
                 <span style={{ fontSize: 12, color: '#222', lineHeight: 1.4, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical' as const }}>{item.title}</span>
@@ -593,7 +593,7 @@ export default function DashboardPage() {
         <div style={{ flex: '0 0 56%', background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ padding: '10px 14px', borderBottom: '1px solid #e8e8e6', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: '#111' }}>📰 CM업계소식</div>
-            <a href="https://www.cmak.or.kr/html/notice/news.asp" target="_blank" rel="noreferrer"
+            <a href="https://www.cmak.or.kr/notice/news" target="_blank" rel="noreferrer"
               style={{ fontSize: 11, color: '#aaa', textDecoration: 'none' }}>CMAK →</a>
           </div>
           <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
@@ -602,7 +602,7 @@ export default function DashboardPage() {
             ) : cmakNews.length === 0 ? (
               <div style={{ padding: '20px 16px', textAlign: 'center', color: '#ccc', fontSize: 12 }}>소식을 불러오지 못했습니다</div>
             ) : cmakNews.map((item, i) => (
-              <a key={item.idx} href={`https://www.cmak.or.kr/html/notice/news_r.asp?code=0&search=&searchString=&no=${item.idx}`} target="_blank" rel="noreferrer"
+              <a key={item.idx} href={item.url} target="_blank" rel="noreferrer"
                 style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '5px 14px', textDecoration: 'none', borderBottom: i < cmakNews.length - 1 ? '1px solid #f8f8f7' : 'none' }}>
                 <span style={{ fontSize: 11, color: '#999', flexShrink: 0, minWidth: 44 }}>{item.date.slice(5)}</span>
                 <span style={{ fontSize: 12, color: '#222', lineHeight: 1.4, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical' as const }}>{item.title}</span>
