@@ -24,6 +24,7 @@ import {
   type QuestionSearchRow,
 } from '@/lib/evaluations/questionQuery'
 import { searchReviews, sortReviewsByDateDesc } from '@/lib/evaluations/reviewFormat'
+import { buildReviewFormSeed } from '@/lib/evaluations/importSeed'
 import type {
   EvaluationAttendee,
   EvaluationQuestion,
@@ -32,11 +33,13 @@ import type {
   EvaluationType,
   QuestionWithReview,
   ReviewDetail,
+  ReviewFormSeed,
   ReviewListItem,
 } from '@/lib/evaluations/types'
 import type { InterviewEngineerRef, InterviewProjectRef } from './types'
 import ReviewListTable from './_components/ReviewListTable'
-import ReviewFormModal from './_components/ReviewFormModal'
+import ReviewFormModal, { type ReviewImportInfo } from './_components/ReviewFormModal'
+import ReviewImportModal, { type ImportedFile } from './_components/ReviewImportModal'
 import ReviewDetailDrawer from './_components/ReviewDetailDrawer'
 import QuestionSearchPanel from './_components/QuestionSearchPanel'
 
@@ -109,7 +112,27 @@ export default function InterviewsPage() {
   /** 질의 조회 요청 번호 — 늦게 도착한 이전 응답이 최신 결과를 덮어쓰지 않게 막는다. */
   const questionRequestRef = useRef(0)
 
-  const [formTarget, setFormTarget] = useState<{ review: ReviewDetail | null } | null>(null)
+  /**
+   * 등록/수정 폼 대상. key는 폼을 새로 마운트시키기 위한 값이다 —
+   * 폼은 첫 렌더에서만 review로 초기 state를 만들므로(useState 초기값), 폼이 열린 채로 대상만
+   * 바뀌면(HWP 초안 여러 건을 연달아 확인할 때) 이전 문서의 입력값이 그대로 남는다.
+   */
+  const [formTarget, setFormTarget] = useState<
+    { key: number; review: ReviewFormSeed | null; importInfo?: ReviewImportInfo } | null
+  >(null)
+  const formSeqRef = useRef(0)
+
+  function openForm(target: { review: ReviewFormSeed | null; importInfo?: ReviewImportInfo }) {
+    formSeqRef.current += 1
+    setFormTarget({ key: formSeqRef.current, ...target })
+  }
+
+  // ── HWP 후기 업로드 ────────────────────────────────────────────────────────
+  // 읽어낸 초안을 곧바로 저장하지 않고 큐에 담아 한 건씩 등록 폼으로 보여준다(사람이 확인 후 저장).
+  // 큐가 비어 있으면 업로드 흐름이 아니다 — 저장 후 상세를 열지 말지도 이 값으로 가른다.
+  const [importOpen, setImportOpen] = useState(false)
+  const [importQueue, setImportQueue] = useState<ImportedFile[]>([])
+  const [importIndex, setImportIndex] = useState(0)
   const [detail, setDetail] = useState<{ review: ReviewDetail; highlightQuestionId: string | null } | null>(null)
   const [detailBusy, setDetailBusy] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
@@ -381,7 +404,7 @@ export default function InterviewsPage() {
       return
     }
     setDetail(null)
-    setFormTarget({ review: found })
+    openForm({ review: found })
   }
 
   async function handleDelete(review: ReviewDetail) {
@@ -410,8 +433,57 @@ export default function InterviewsPage() {
     await loadReviews(includePrivateLegacy)
     setQuestionReloadKey(k => k + 1)
     showToast('저장했습니다.')
+    // 업로드 큐를 처리하는 중이면 상세를 열지 않는다 — 다음 문서의 확인 화면이 바로 열려야 한다.
+    if (importQueue.length > 0) return
     // 저장 직후 방금 쓴 후기를 바로 확인할 수 있게 상세를 열어준다.
     await openDetail(reviewId)
+  }
+
+  /**
+   * 업로드한 문서 중 index번째 초안을 등록 폼에 채워 연다.
+   * 마스터 id 연결(평가유형·질의그룹·프로젝트·기술인)은 lib/evaluations/importSeed.ts가 한다.
+   */
+  function openImportDraft(queue: ImportedFile[], index: number) {
+    const item = queue[index]
+    if (!item) return
+
+    const { seed, notes } = buildReviewFormSeed(item.draft, {
+      evaluationTypes, roles, categories, projects, engineers,
+    })
+    openForm({
+      review: seed,
+      importInfo: {
+        fileName: item.fileName,
+        notes,
+        progress: queue.length > 1 ? `${index + 1} / ${queue.length}` : '',
+      },
+    })
+  }
+
+  function startImport(files: ImportedFile[]) {
+    if (files.length === 0) return
+    setImportOpen(false)
+    setImportQueue(files)
+    setImportIndex(0)
+    openImportDraft(files, 0)
+  }
+
+  /**
+   * 등록 폼을 닫는다. 업로드 큐가 남아 있으면 다음 문서의 확인 화면으로 넘어간다 —
+   * 저장했든 건너뛰었든 같다(닫기는 "이 문서는 저장하지 않음"이라고 폼에서 안내한다).
+   */
+  function closeForm() {
+    setFormTarget(null)
+    if (importQueue.length === 0) return
+
+    const next = importIndex + 1
+    if (next >= importQueue.length) {
+      setImportQueue([])
+      setImportIndex(0)
+      return
+    }
+    setImportIndex(next)
+    openImportDraft(importQueue, next)
   }
 
   const typeNameById = useMemo(
@@ -455,13 +527,23 @@ export default function InterviewsPage() {
             {canWrite && (
               // 마스터(평가유형·질의그룹·질의분류)를 읽기 전에 열면 select가 빈 상태로 뜨고, 첫 질의그룹이
               // 선택되지 않은 채 시작된다. 로딩 중에는 열지 못하게 막는다.
-              <button
-                onClick={() => setFormTarget({ review: null })}
-                disabled={loading}
-                style={loading ? { ...outlineBtn, color: '#bbb', cursor: 'default' } : outlineBtn}
-              >
-                면접후기 등록
-              </button>
+              // HWP 업로드도 같은 마스터로 초안을 만들므로 같은 조건이다.
+              <>
+                <button
+                  onClick={() => setImportOpen(true)}
+                  disabled={loading}
+                  style={loading ? { ...outlineBtn, color: '#bbb', cursor: 'default' } : outlineBtn}
+                >
+                  HWP 후기 올리기
+                </button>
+                <button
+                  onClick={() => openForm({ review: null })}
+                  disabled={loading}
+                  style={loading ? { ...outlineBtn, color: '#bbb', cursor: 'default' } : outlineBtn}
+                >
+                  면접후기 등록
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -527,9 +609,15 @@ export default function InterviewsPage() {
         )}
       </div>
 
+      {importOpen && (
+        <ReviewImportModal onClose={() => setImportOpen(false)} onStart={startImport} />
+      )}
+
       {formTarget && (
         <ReviewFormModal
+          key={formTarget.key}
           review={formTarget.review}
+          importInfo={formTarget.importInfo}
           projects={projects}
           engineers={engineers}
           roles={roles}
@@ -537,7 +625,7 @@ export default function InterviewsPage() {
           evaluationTypes={evaluationTypes}
           facilitySuggestions={facilitySuggestions}
           currentUserEmail={currentUserEmail}
-          onClose={() => setFormTarget(null)}
+          onClose={closeForm}
           onSaved={handleSaved}
         />
       )}
