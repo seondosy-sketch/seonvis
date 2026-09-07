@@ -8,6 +8,7 @@ import { openDirectionsFromOffice } from '@/lib/kakaoMap'
 import { useMenuPermission } from '@/app/components/PermissionsProvider'
 import { syncProjectCalendar } from '@/lib/googleCalendar/trigger'
 import { WRITTEN_EVALUATION_LABEL } from '@/lib/projectStatus'
+import { buildStaffSummary, type ProjectParticipantRef } from '@/lib/projects/staffSummary'
 
 type ProjectStatus = '진행중' | '수주' | '탈락' | '취소'
 type ProjectType = '면접' | 'SOQ' | '종심제' | 'TP' | 'PQ' | '기타' | ''
@@ -268,6 +269,13 @@ export default function ProjectsPage() {
   const [viewMode, setViewMode] = useState<ViewMode>('일정')
   const [tooltipAll, setTooltipAll] = useState<Record<string, TooltipData>>({})
   const [tooltipView, setTooltipView] = useState<{ project: Project; data: TooltipData } | null>(null)
+  /**
+   * 상세 모달의 참여기술인 — 모달을 열 때 그 프로젝트 것만 읽는다(목록 전체를 미리 읽지 않는다).
+   * 출근부·면접 DB와 같은 소스(project_participants → engineer_contacts / engineer_specialties)를 쓰고,
+   * 손입력 분야기술자 텍스트와 합치는 규칙은 lib/projects/staffSummary.ts에 있다.
+   */
+  const [tooltipStaff, setTooltipStaff] = useState<ProjectParticipantRef[]>([])
+  const [tooltipStaffBusy, setTooltipStaffBusy] = useState(false)
   const [dirMsg, setDirMsg] = useState<string | null>(null)
   const [dirLoading, setDirLoading] = useState<string | null>(null)
   const [notes, setNotes] = useState<Record<string, Record<string, string>>>({})
@@ -371,7 +379,41 @@ export default function ProjectsPage() {
     })
   }
 
-  const closeTooltipView = () => { setTooltipView(null); setDirMsg(null) }
+  /**
+   * 공고 상세 모달 열기. 참여기술인은 여기서 한 번만 읽는다.
+   * 실패하면 목록을 비워 두고 손입력 분야기술자만 보여준다 — 상세 자체는 열려야 한다.
+   */
+  const openTooltipView = async (project: Project, data: TooltipData) => {
+    setTooltipView({ project, data })
+    setTooltipStaff([])
+    setTooltipStaffBusy(true)
+    const { data: rows } = await supabase
+      .from('project_participants')
+      .select('engineer_id, role, is_director, sort_order, engineer:engineer_contacts(id, name), specialty:engineer_specialties(name)')
+      .eq('project_id', project.id)
+      .order('sort_order', { ascending: true })
+
+    type Row = {
+      role: string | null
+      is_director: boolean
+      sort_order: number
+      engineer: { id: string; name: string } | null
+      specialty: { name: string } | null
+    }
+    setTooltipStaff(((rows ?? []) as unknown as Row[])
+      .filter(r => r.engineer)
+      .map(r => ({
+        engineer_contact_id: r.engineer!.id,
+        name: r.engineer!.name,
+        role: r.role ?? '',
+        specialty_name: r.specialty?.name ?? null,
+        is_director: r.is_director,
+        sort_order: r.sort_order,
+      })))
+    setTooltipStaffBusy(false)
+  }
+
+  const closeTooltipView = () => { setTooltipView(null); setTooltipStaff([]); setDirMsg(null) }
 
   const openDirections = async (label: string, address: string) => {
     setDirMsg(null)
@@ -671,7 +713,7 @@ export default function ProjectsPage() {
                     <span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 4, flexShrink: 0, ...STATUS_STYLE[status] }}>{status}</span>
                   </div>
                   <div
-                    onClick={() => { const d = tooltipAll[p.project_number]; if (d) setTooltipView({ project: p, data: d }) }}
+                    onClick={() => { const d = tooltipAll[p.project_number]; if (d) void openTooltipView(p, d) }}
                     style={{
                       fontSize: 14, fontWeight: 600, lineHeight: 1.4, marginBottom: fields.length ? 10 : 0,
                       color: hasTooltip ? '#1d4ed8' : '#111',
@@ -747,7 +789,7 @@ export default function ProjectsPage() {
                     <td style={{ ...tdnw, ...stickyCol(STICKY_NUM_WIDTH, STICKY_NAME_WIDTH, rowBg, true), overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       <span
                         style={{ fontWeight: 500, color: hasTooltip ? '#1d4ed8' : '#111', cursor: hasTooltip ? 'pointer' : 'default', textDecoration: hasTooltip ? 'underline dotted' : 'none' }}
-                        onClick={() => { const d = tooltipAll[p.project_number]; if (d) setTooltipView({ project: p, data: d }) }}
+                        onClick={() => { const d = tooltipAll[p.project_number]; if (d) void openTooltipView(p, d) }}
                       >{p.name}</span>
                     </td>
                     {show('type') && <td style={tdnw}><span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 3, background: '#f0f0ee', color: '#555' }}>{p.type}</span></td>}
@@ -828,11 +870,12 @@ export default function ProjectsPage() {
                 const rows: { label: string; value: string }[][] = [
                   [{ label: '발주청', value: p.client }, { label: '현장위치', value: d.location || '' }],
                   [{ label: '단장(PM)', value: p.director }, { label: '용역기간', value: p.duration_days || '' }],
-                  [{ label: '분야기술자', value: [p.staff_arch && `건축:${p.staff_arch}`, p.staff_civil && `토목:${p.staff_civil}`, p.staff_mech && `기계:${p.staff_mech}`, p.staff_safety && `안전:${p.staff_safety}`].filter(Boolean).join(' / ') || '' }, { label: '용역비', value: p.fee ? `${p.fee}억원` : '' }],
-                  [{ label: '연면적', value: d.area || '' }, { label: '규모', value: d.scale || '' }],
-                  [{ label: '추정공사비', value: d.est_cost || '' }, { label: '참여업체', value: d.competitors || p.participants || '' }],
-                  [{ label: '배점', value: d.score_dist || '' }, { label: '설계사', value: d.designer || '' }],
-                  [{ label: '시공사', value: d.builder || '' }, { label: '', value: '' }],
+                  // 분야기술자 텍스트 칸은 여기서 빼고 아래 '참여 기술인' 섹션이 참여기술인 행과
+                  // 합쳐 보여준다 — 같은 정보를 두 곳에 다르게 적지 않기 위함이다.
+                  [{ label: '용역비', value: p.fee ? `${p.fee}억원` : '' }, { label: '연면적', value: d.area || '' }],
+                  [{ label: '규모', value: d.scale || '' }, { label: '추정공사비', value: d.est_cost || '' }],
+                  [{ label: '참여업체', value: d.competitors || p.participants || '' }, { label: '배점', value: d.score_dist || '' }],
+                  [{ label: '설계사', value: d.designer || '' }, { label: '시공사', value: d.builder || '' }],
                 ]
                 return rows.filter(r => r.some(c => c.value)).map((row, ri) => (
                   <div key={ri} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', borderBottom: '1px solid #f5f5f3' }}>
@@ -845,6 +888,69 @@ export default function ProjectsPage() {
                   </div>
                 ))
               })()}
+              {/*
+                개찰 결과 — 프로젝트 List 표에는 열로 있지만 상세 모달에는 없어서, 상세만 열어서는
+                이 공고가 어떻게 끝났는지 알 수 없었다. 값이 하나도 없는 진행중 공고에서는
+                섹션 자체를 만들지 않는다(빈 칸만 늘리지 않기 위해).
+              */}
+              {(() => {
+                const p = tooltipView.project
+                const status = computeStatus(p.result_score, p.evaluation, p.participants, p.status_override)
+                const cells: { label: string; value: string }[] = [
+                  { label: '결과', value: p.result_score || '' },
+                  { label: '낙찰사', value: p.evaluation || '' },
+                  { label: '낙찰액', value: p.award_fee != null ? `${p.award_fee}억원` : '' },
+                  // 개찰일은 아래 '입찰 일정' 섹션에 이미 있어 여기서 다시 보여주지 않는다.
+                ]
+                if (!cells.some(c => c.value)) return null
+                return (
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: '#f8f8f7', borderRadius: 6, marginBottom: 4 }}>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: '#555' }}>평가 결과</span>
+                      <span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 4, ...STATUS_STYLE[status] }}>{status}</span>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr' }}>
+                      {cells.map((cell, ci) => (
+                        <div key={ci} style={{ padding: '8px 10px', display: 'flex', gap: 8, alignItems: 'baseline', borderBottom: '1px solid #f5f5f3' }}>
+                          <span style={{ fontSize: 11, color: '#888', minWidth: 44, flexShrink: 0 }}>{cell.label}</span>
+                          <span style={{ fontSize: 13, color: cell.value ? '#111' : '#ccc', fontWeight: cell.label === '결과' && cell.value ? 600 : 400 }}>{cell.value || '-'}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })()}
+
+              {/*
+                참여 기술인 — project_participants 행과 손입력 분야기술자 텍스트를 합쳐 보여준다.
+                둘 중 하나만 채워진 프로젝트가 많아서 어느 한쪽만 보여주면 정보가 사라진다
+                (규칙과 근거는 lib/projects/staffSummary.ts).
+              */}
+              {(() => {
+                const p = tooltipView.project
+                const staff = buildStaffSummary(tooltipStaff, p)
+                if (staff.length === 0 && !tooltipStaffBusy) return null
+                return (
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '6px 10px', background: '#f8f8f7', borderRadius: 6, marginBottom: 6 }}>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: '#555' }}>참여 기술인</span>
+                      <span style={{ fontSize: 11, color: '#aaa' }}>{tooltipStaffBusy ? '불러오는 중...' : `${staff.length}명`}</span>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '0 10px 4px' }}>
+                      {staff.map(entry => (
+                        <span key={`${entry.source}-${entry.name}`}
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid #e8e8e6', borderRadius: 14, padding: '3px 9px', background: '#fff' }}>
+                          <span style={{ fontSize: 10, color: '#0369a1', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 3, padding: '0 5px' }}>{entry.label}</span>
+                          <span style={{ fontSize: 12, color: '#222' }}>{entry.name}</span>
+                          {/* 주소록에 연결된 행이 아니라 손으로 적은 이름임을 구분해 둔다. */}
+                          {entry.source === 'text' && <span style={{ fontSize: 10, color: '#bbb' }}>입력</span>}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })()}
+
               {(tooltipView.data.location || tooltipView.data.interview_location) && (
                 <div style={{ marginTop: 10 }}>
                   <div style={{ fontSize: 11, fontWeight: 600, color: '#555', padding: '6px 10px', background: '#f8f8f7', borderRadius: 6, marginBottom: 4 }}>위치 정보</div>
