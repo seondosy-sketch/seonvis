@@ -176,7 +176,7 @@ export default function FieldOvertimePage() {
               onRecordClick={canWrite ? record => setEntry({ record, date: record.work_date }) : undefined}
             />
             <div style={{ fontSize: 11, color: '#aaa', marginTop: 8 }}>
-              인정시간 = 종료시간 − 18:00 − 휴게 1시간, 1시간 단위 절삭 (휴일은 입력한 시작시간부터 · 공휴일·회사휴무는 휴가관리 일정 기준){canWrite && ' · 날짜 칸을 누르면 그 날짜로 입력, 이름을 누르면 수정'}
+              인정시간 = 종료시간 − 18:00 − 휴게 1시간, 30분 단위 절삭 (휴일은 입력한 시작시간부터 · 공휴일·회사휴무는 휴가관리 일정 기준){canWrite && ' · 날짜 칸을 누르면 그 날짜로 입력, 이름을 누르면 수정'}
             </div>
           </>
         ) : tab === 'weekly' ? (
