@@ -3,25 +3,58 @@
 import { Employee } from '@/lib/overtime/types'
 import { formatHours } from '@/lib/overtime/summary'
 
+/** 표에서 고른 칸 — employeeId null = 전 직원(하단 합계 행), col null = 기간 전체(우측 합계 열) */
+export interface SummarySelection {
+  employeeId: string | null
+  col: number | null
+}
+
 interface Props {
   /** 열 머리글 — 주차별이면 "1주차 / 10/1~10/4", 월별이면 "1월" */
   columns: { title: string; sub?: string }[]
   employees: Employee[]
   /** employee_id → 열 순서대로의 합계 */
   totals: Map<string, number[]>
+  selected: SummarySelection | null
+  /** 시간이 있는 칸을 누르면 호출 — 같은 칸을 다시 누르면 null(닫기) */
+  onSelect: (selection: SummarySelection | null) => void
 }
 
 /**
  * 주차별/월별 집계가 같이 쓰는 표 — 행 = 직원, 열 = 기간, 우측 합계 열과 하단 합계 행.
  * 행은 재직자 전원 + (퇴사했지만 이 기간에 기록이 있는 직원) — 후자를 빼면 합계가 안 맞는다.
+ * 시간이 있는 칸(합계 포함)을 누르면 그 칸을 이루는 기록 목록이 표 아래에 열린다(RecordList).
  */
-export default function SummaryTable({ columns, employees, totals }: Props) {
+export default function SummaryTable({ columns, employees, totals, selected, onSelect }: Props) {
   const rows = employees.filter(e => e.is_active || totals.has(e.id))
   const colTotals = columns.map((_, i) => rows.reduce((s, e) => s + (totals.get(e.id)?.[i] ?? 0), 0))
   const grand = colTotals.reduce((a, b) => a + b, 0)
 
   if (rows.length === 0) {
     return <div style={{ padding: 40, textAlign: 'center', color: '#bbb', fontSize: 13, background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8 }}>직원이 없습니다 — 기술인 주소록에서 소속을 &quot;미래사업팀&quot;으로 등록하세요</div>
+  }
+
+  const isSelected = (employeeId: string | null, col: number | null) =>
+    !!selected && selected.employeeId === employeeId && selected.col === col
+
+  /** 시간 칸 하나 — 0이면 누를 것이 없으니 클릭을 막는다 */
+  const cell = (key: string | number, hours: number, employeeId: string | null, col: number | null, base: React.CSSProperties, empty = '-') => {
+    const active = isSelected(employeeId, col)
+    const clickable = hours > 0
+    return (
+      <td
+        key={key}
+        onClick={clickable ? () => onSelect(active ? null : { employeeId, col }) : undefined}
+        style={{
+          ...base,
+          cursor: clickable ? 'pointer' : 'default',
+          ...(active ? { background: '#fef3c7', boxShadow: 'inset 0 0 0 2px #f59e0b' } : {}),
+        }}
+        title={clickable ? '눌러서 기록 목록 보기' : undefined}
+      >
+        {hours ? formatHours(hours) : empty}
+      </td>
+    )
   }
 
   return (
@@ -50,10 +83,8 @@ export default function SummaryTable({ columns, employees, totals }: Props) {
                   {emp.position && <span style={{ fontSize: 11, color: '#999', marginLeft: 4 }}>{emp.position}</span>}
                   {!emp.is_active && <span style={{ fontSize: 10, color: '#b91c1c', marginLeft: 4 }}>(퇴사)</span>}
                 </td>
-                {row.map((h, i) => (
-                  <td key={i} style={{ ...td, color: h ? '#111' : '#ddd' }}>{h ? formatHours(h) : '-'}</td>
-                ))}
-                <td style={{ ...td, background: '#fafaf9', fontWeight: 600 }}>{formatHours(sum)}</td>
+                {row.map((h, i) => cell(i, h, emp.id, i, { ...td, color: h ? '#111' : '#ddd' }))}
+                {cell('sum', sum, emp.id, null, { ...td, background: '#fafaf9', fontWeight: 600 }, '0h')}
               </tr>
             )
           })}
@@ -61,10 +92,8 @@ export default function SummaryTable({ columns, employees, totals }: Props) {
         <tfoot>
           <tr>
             <td style={{ ...td, textAlign: 'left', position: 'sticky', left: 0, background: '#f8f8f7', fontWeight: 600 }}>합계</td>
-            {colTotals.map((h, i) => (
-              <td key={i} style={{ ...td, background: '#f8f8f7', fontWeight: 600 }}>{formatHours(h)}</td>
-            ))}
-            <td style={{ ...td, background: '#f0f0ee', fontWeight: 700 }}>{formatHours(grand)}</td>
+            {colTotals.map((h, i) => cell(i, h, null, i, { ...td, background: '#f8f8f7', fontWeight: 600 }, '0h'))}
+            {cell('grand', grand, null, null, { ...td, background: '#f0f0ee', fontWeight: 700 }, '0h')}
           </tr>
         </tfoot>
       </table>

@@ -12,7 +12,8 @@ import { monthRange, monthWeeks, sumByEmployeeMonth, sumByEmployeeWeek, toDateSt
 import { formatHours } from '@/lib/overtime/summary'
 import FieldCalendar from './_components/FieldCalendar'
 import FieldEntryModal from './_components/FieldEntryModal'
-import SummaryTable from './_components/SummaryTable'
+import SummaryTable, { SummarySelection } from './_components/SummaryTable'
+import RecordList from './_components/RecordList'
 
 type Tab = 'calendar' | 'weekly' | 'monthly'
 const MONTH_COLUMNS = Array.from({ length: 12 }, (_, i) => ({ title: `${i + 1}월` }))
@@ -47,6 +48,12 @@ export default function FieldOvertimePage() {
   const [error, setError] = useState<string | null>(null)
 
   const [entry, setEntry] = useState<{ record: FieldOvertimeRecord | null; date: string } | null>(null)
+  // 집계표에서 누른 칸 → 표 아래 기록 목록. 어느 탭·기간에서 고른 것인지(viewKey)를 함께 들고 있다가
+  // 탭이나 기간이 바뀌면 자연히 무효가 되게 한다(effect로 지우지 않기 위함).
+  const viewKey = `${tab}-${viewYear}-${viewMonth}`
+  const [selection, setSelection] = useState<(SummarySelection & { viewKey: string }) | null>(null)
+  const activeSelection = selection?.viewKey === viewKey ? selection : null
+  const select = (s: SummarySelection | null) => setSelection(s ? { ...s, viewKey } : null)
 
   // 퇴사자도 함께 불러온다 — 과거 기록의 이름 표시와 집계 행에 필요하다. 입력 선택지만 재직자로 거른다.
   const loadEmployees = useCallback(async () => {
@@ -108,6 +115,28 @@ export default function FieldOvertimePage() {
     if (tab === 'monthly') { setViewYear(y => y + 1); return }
     if (viewMonth === 11) { setViewYear(y => y + 1); setViewMonth(0) } else setViewMonth(m => m + 1)
   }
+
+  // 고른 칸을 이루는 기록 — 주차별은 그 주 날짜, 월별은 그 달. col null = 기간 전체, employeeId null = 전 직원
+  const listRecords = (() => {
+    if (!activeSelection) return []
+    const { employeeId, col } = activeSelection
+    const base = tab === 'monthly' ? yearRecords : records
+    const inCol = (r: FieldOvertimeRecord) => {
+      if (col === null) return true
+      if (tab === 'monthly') return parseInt(r.work_date.slice(5, 7), 10) - 1 === col
+      return weeks[col]?.dates.includes(r.work_date) ?? false
+    }
+    return base.filter(r => (employeeId === null || r.employee_id === employeeId) && inCol(r))
+  })()
+  const listTitle = (() => {
+    if (!activeSelection) return ''
+    const { employeeId, col } = activeSelection
+    const who = employeeId === null ? '전체 직원' : (employees.find(e => e.id === employeeId)?.name ?? '(알 수 없음)')
+    const when = tab === 'monthly'
+      ? (col === null ? `${viewYear}년 전체` : `${viewYear}년 ${col + 1}월`)
+      : (col === null ? `${viewYear}년 ${viewMonth + 1}월 전체` : `${weeks[col].index}주차 (${weeks[col].label})`)
+    return `${who} · ${when}`
+  })()
 
   // 신규 입력 기본 날짜: 보고 있는 달이 이번 달이면 오늘, 아니면 그 달 1일
   const defaultEntryDate = todayStr.slice(0, 7) === toDateStr(viewYear, viewMonth, 1).slice(0, 7) ? todayStr : toDateStr(viewYear, viewMonth, 1)
@@ -184,9 +213,32 @@ export default function FieldOvertimePage() {
             columns={weeks.map(w => ({ title: `${w.index}주차`, sub: w.label }))}
             employees={employees}
             totals={sumByEmployeeWeek(records, weeks)}
+            selected={activeSelection}
+            onSelect={select}
           />
         ) : (
-          <SummaryTable columns={MONTH_COLUMNS} employees={employees} totals={sumByEmployeeMonth(yearRecords)} />
+          <SummaryTable
+            columns={MONTH_COLUMNS}
+            employees={employees}
+            totals={sumByEmployeeMonth(yearRecords)}
+            selected={activeSelection}
+            onSelect={select}
+          />
+        )}
+
+        {tab !== 'calendar' && !employeesLoading && (
+          activeSelection ? (
+            <RecordList
+              title={listTitle}
+              records={listRecords}
+              employees={employees}
+              holidays={holidays}
+              onClose={() => select(null)}
+              onRecordClick={canWrite ? record => setEntry({ record, date: record.work_date }) : undefined}
+            />
+          ) : (
+            <div style={{ fontSize: 11, color: '#aaa', marginTop: 8 }}>시간을 누르면 그 기록 목록이 아래에 나옵니다 (합계 칸 포함){canWrite && ' · 목록의 행을 누르면 수정'}</div>
+          )
         )}
       </div>
 
