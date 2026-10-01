@@ -2,12 +2,14 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
+import Link from 'next/link'
 import { Employee, EmployeeTask } from '@/lib/overtime/types'
+import { syncTeamEmployees } from '@/lib/overtime/teamSync'
 
 /**
- * 직원 등록/수정/정렬 관리. 삭제는 그 직원의 overtime_work_records가 하나도 없을 때만
- * 가능하다(FK ON DELETE RESTRICT) — 퇴사자는 "재직여부"만 끄고 행은 지우지 않는다
- * (2단계에서 정한 소프트 삭제 원칙, 과거 근무 기록 보존).
+ * 직원 정렬순서·기본업무내용 관리. 명단 자체(이름·직급·재직여부, 추가/퇴사)의 원본은
+ * 기술인 주소록의 소속 '미래사업팀'이라 여기서는 읽기 전용으로 보여주기만 한다 —
+ * 여기서 고쳐도 다음 동기화(lib/overtime/teamSync.ts) 때 주소록 값으로 덮어써지기 때문.
  *
  * "기본업무내용" 관리(8단계 완료 후 추가): 직원마다 자주 쓰는 업무내용을 여기서 등록해두면
  * 향후 근무입력 화면에서 드롭박스 선택지로 쓸 수 있는 기초자료가 된다. 행 하나를 펼치면
@@ -23,9 +25,6 @@ export default function EmployeeManagerModal({
   const supabase = createSupabaseBrowserClient()
   const [employees, setEmployees] = useState<Employee[]>([])
   const [loading, setLoading] = useState(true)
-  const [newName, setNewName] = useState('')
-  const [newPosition, setNewPosition] = useState('')
-  const [adding, setAdding] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const [expandedId, setExpandedId] = useState<string | null>(null)
@@ -35,6 +34,7 @@ export default function EmployeeManagerModal({
 
   const load = useCallback(async () => {
     setLoading(true)
+    await syncTeamEmployees(supabase)
     const { data } = await supabase.from('overtime_employees').select('*').order('sort_order', { ascending: true })
     if (data) setEmployees(data as Employee[])
     setLoading(false)
@@ -43,43 +43,10 @@ export default function EmployeeManagerModal({
 
   useEffect(() => { load() }, [load])
 
-  async function handleAdd(e: React.FormEvent) {
-    e.preventDefault()
-    if (!newName.trim()) return
-    setAdding(true)
-    setError(null)
-    const nextSortOrder = employees.length ? Math.max(...employees.map(emp => emp.sort_order)) + 10 : 0
-    const { error: insertError } = await supabase
-      .from('overtime_employees')
-      .insert({ name: newName.trim(), position: newPosition.trim(), is_active: true, sort_order: nextSortOrder })
-    setAdding(false)
-    if (insertError) { setError(`추가 실패: ${insertError.message}`); return }
-    setNewName('')
-    setNewPosition('')
-    await load()
-    onChange()
-  }
-
   async function updateEmployee(id: string, patch: Partial<Employee>) {
     setError(null)
     const { error: updateError } = await supabase.from('overtime_employees').update(patch).eq('id', id)
     if (updateError) { setError(`저장 실패: ${updateError.message}`); return }
-    await load()
-    onChange()
-  }
-
-  async function handleDelete(emp: Employee) {
-    if (!confirm(`"${emp.name}"을 삭제하시겠습니까?`)) return
-    setError(null)
-    const { error: deleteError } = await supabase.from('overtime_employees').delete().eq('id', emp.id)
-    if (deleteError) {
-      setError(
-        deleteError.code === '23503'
-          ? '이 직원의 연장근무 기록이 있어 삭제할 수 없습니다. "재직여부"를 퇴사로 변경해 주세요.'
-          : `삭제 실패: ${deleteError.message}`
-      )
-      return
-    }
     await load()
     onChange()
   }
@@ -142,11 +109,10 @@ export default function EmployeeManagerModal({
           <button onClick={onClose} style={{ border: 'none', background: 'rgba(255,255,255,0.15)', color: '#fff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13 }}>✕</button>
         </div>
 
-        <form onSubmit={handleAdd} style={{ padding: '16px 20px', borderBottom: '1px solid #f0f0ee', display: 'flex', gap: 8 }}>
-          <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="이름" style={{ ...inp, flex: 1 }} />
-          <input value={newPosition} onChange={e => setNewPosition(e.target.value)} placeholder="직급" style={{ ...inp, width: 100 }} />
-          <button type="submit" disabled={adding} style={{ ...primaryBtn, opacity: adding ? 0.6 : 1 }}>{adding ? '추가 중...' : '추가'}</button>
-        </form>
+        <div style={{ padding: '12px 20px', borderBottom: '1px solid #f0f0ee', fontSize: 12, color: '#666', lineHeight: 1.6, background: '#f8f8f7' }}>
+          명단은 <Link href="/engineers" style={{ color: '#2563eb' }}>기술인 주소록</Link>의 소속 <b>미래사업팀</b>과 연동됩니다.
+          직원 추가·직급 변경·퇴사 처리는 주소록에서 하세요. 여기서는 정렬순서와 기본업무내용만 관리합니다.
+        </div>
 
         {error && <div style={{ margin: '0 20px', marginTop: 12, padding: '8px 12px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, fontSize: 12, color: '#b91c1c' }}>{error}</div>}
 
@@ -162,17 +128,10 @@ export default function EmployeeManagerModal({
               return (
                 <div key={emp.id} style={{ borderBottom: i < employees.length - 1 ? '1px solid #f0f0ee' : 'none' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 0' }}>
-                    <input
-                      defaultValue={emp.name}
-                      onBlur={e => { if (e.target.value.trim() && e.target.value !== emp.name) updateEmployee(emp.id, { name: e.target.value.trim() }) }}
-                      style={{ ...inp, flex: 1 }}
-                    />
-                    <input
-                      defaultValue={emp.position}
-                      onBlur={e => { if (e.target.value !== emp.position) updateEmployee(emp.id, { position: e.target.value.trim() }) }}
-                      placeholder="직급"
-                      style={{ ...inp, width: 90 }}
-                    />
+                    <div style={{ flex: 1, fontSize: 13, color: emp.is_active ? '#111' : '#aaa' }}>
+                      {emp.name}
+                      <span style={{ fontSize: 11, color: '#999', marginLeft: 6 }}>{emp.position}</span>
+                    </div>
                     <input
                       type="number"
                       defaultValue={emp.sort_order}
@@ -180,14 +139,10 @@ export default function EmployeeManagerModal({
                       style={{ ...inp, width: 64 }}
                       title="정렬순서"
                     />
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#555', flexShrink: 0 }}>
-                      <input type="checkbox" checked={emp.is_active} onChange={e => updateEmployee(emp.id, { is_active: e.target.checked })} />
-                      재직중
-                    </label>
+                    <span style={{ fontSize: 11, width: 36, flexShrink: 0, color: emp.is_active ? '#15803d' : '#b91c1c' }}>{emp.is_active ? '재직' : '퇴사'}</span>
                     <button onClick={() => toggleExpand(emp.id)} style={expanded ? taskBtnActive : taskBtn}>
                       기본업무내용{tasks.length > 0 ? ` (${tasks.length})` : ''} {expanded ? '▲' : '▼'}
                     </button>
-                    <button onClick={() => handleDelete(emp)} style={deleteBtn}>삭제</button>
                   </div>
 
                   {expanded && (
@@ -234,7 +189,6 @@ export default function EmployeeManagerModal({
 
 const inp: React.CSSProperties = { height: 34, padding: '0 10px', border: '1px solid #e8e8e6', borderRadius: 6, fontSize: 13, background: '#fff', boxSizing: 'border-box' }
 const primaryBtn: React.CSSProperties = { height: 34, padding: '0 16px', borderRadius: 6, border: 'none', background: '#111', color: '#fff', fontSize: 13, cursor: 'pointer' }
-const deleteBtn: React.CSSProperties = { height: 28, padding: '0 10px', borderRadius: 4, border: 'none', background: '#fee2e2', color: '#b91c1c', fontSize: 11, cursor: 'pointer', flexShrink: 0 }
 // border 축약형 + borderColor 개별 속성을 섞으면 React가 리렌더 시 스타일 충돌을 경고하므로 개별 속성으로만 정의
 const taskBtn: React.CSSProperties = { height: 28, padding: '0 10px', borderRadius: 4, borderWidth: 1, borderStyle: 'solid', borderColor: '#e8e8e6', background: '#fff', color: '#555', fontSize: 11, cursor: 'pointer', flexShrink: 0, whiteSpace: 'nowrap' }
 const taskBtnActive: React.CSSProperties = { ...taskBtn, background: '#111', color: '#fff', borderColor: '#111' }

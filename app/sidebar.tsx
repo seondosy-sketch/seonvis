@@ -14,6 +14,7 @@ const GROUPS = [
       { id: 2, label: '주간/월간보고',     key: 'weekly', href: '/weekly' },
       { id: 3, label: '근태관리',          href: null, children: [
         { id: 12, label: '연장근무',       key: 'overtime', href: '/overtime' },
+        { id: 17, label: '연장근무(실무자)', key: 'field_overtime', href: '/field-overtime' },
         { id: 13, label: '휴가관리',       key: 'leave', href: '/leave' },
         { id: 14, label: '기술인 출근부',  key: 'attendance', href: '/attendance' },
         { id: 15, label: '숙박관리',        key: 'lodging', href: '/lodging' },
