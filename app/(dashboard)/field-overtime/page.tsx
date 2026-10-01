@@ -39,6 +39,8 @@ export default function FieldOvertimePage() {
 
   const [employees, setEmployees] = useState<Employee[]>([])
   const [employeesLoading, setEmployeesLoading] = useState(true)
+  // 휴가관리의 공휴일·회사휴무(holidays) — 달력 표시와 휴일 근무(시작시간 입력) 판단에 쓴다
+  const [holidays, setHolidays] = useState<Map<string, string>>(new Map())
   const [records, setRecords] = useState<FieldOvertimeRecord[]>([])
   const [yearRecords, setYearRecords] = useState<FieldOvertimeRecord[]>([])
   const [loading, setLoading] = useState(true)
@@ -82,7 +84,16 @@ export default function FieldOvertimePage() {
     loadRecords(viewYear, viewMonth, tab === 'monthly')
   }, [loadRecords, viewYear, viewMonth, tab])
 
+  // 테이블이 작아(연 20건 남짓) 전부 한 번에 읽는다. 실패해도(권한 등) 주말만 휴일로 보고 화면은 그대로 뜬다.
+  const loadHolidays = useCallback(async () => {
+    const { data, error: holError } = await supabase.from('holidays').select('holiday_date, name')
+    if (holError) { console.warn('[holidays]', holError.message); return }
+    setHolidays(new Map((data as { holiday_date: string; name: string }[]).map(h => [h.holiday_date, h.name])))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   useEffect(() => { loadEmployees() }, [loadEmployees])
+  useEffect(() => { loadHolidays() }, [loadHolidays])
   useEffect(() => { reload() }, [reload])
 
   const weeks = monthWeeks(viewYear, viewMonth)
@@ -159,12 +170,13 @@ export default function FieldOvertimePage() {
               employees={employees}
               records={records}
               todayStr={todayStr}
+              holidays={holidays}
               isMobile={isMobile}
               onDayClick={canWrite ? date => setEntry({ record: null, date }) : undefined}
               onRecordClick={canWrite ? record => setEntry({ record, date: record.work_date }) : undefined}
             />
             <div style={{ fontSize: 11, color: '#aaa', marginTop: 8 }}>
-              인정시간 = 종료시간 − 18:00 − 휴게 1시간, 1시간 단위 절삭{canWrite && ' · 날짜 칸을 누르면 그 날짜로 입력, 이름을 누르면 수정'}
+              인정시간 = 종료시간 − 18:00 − 휴게 1시간, 1시간 단위 절삭 (휴일은 입력한 시작시간부터 · 공휴일·회사휴무는 휴가관리 일정 기준){canWrite && ' · 날짜 칸을 누르면 그 날짜로 입력, 이름을 누르면 수정'}
             </div>
           </>
         ) : tab === 'weekly' ? (
@@ -184,6 +196,7 @@ export default function FieldOvertimePage() {
           defaultDate={entry.date}
           employees={entryEmployees}
           records={records}
+          holidays={holidays}
           onClose={() => setEntry(null)}
           onSaved={reload}
         />
