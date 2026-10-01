@@ -6,7 +6,7 @@ import { FieldOvertimeRecord } from '@/lib/field-overtime/types'
 import { Employee } from '@/lib/overtime/types'
 import { FIELD_BREAK_HOURS, FIELD_START_TIME, HOLIDAY_DEFAULT_START, calculateFieldHours, normalizeEndTime, restDayName } from '@/lib/field-overtime/calc'
 
-const QUICK_END_TIMES = ['20:00', '21:00', '22:00', '23:00', '24:00']
+const QUICK_END_TIMES = ['20:00', '20:30', '21:00', '21:30', '22:00', '22:30', '23:00', '24:00']
 const QUICK_HOLIDAY_END_TIMES = ['12:00', '15:00', '18:00', '20:00', '22:00']
 
 interface Props {
@@ -138,7 +138,7 @@ export default function FieldEntryModal({ record, defaultDate, employees, record
           </div>
 
           <div style={{ padding: '10px 12px', borderRadius: 8, background: calc && !calc.ok ? '#fef2f2' : '#f8f8f7', border: `1px solid ${calc && !calc.ok ? '#fecaca' : '#e8e8e6'}`, fontSize: 12, color: '#555', lineHeight: 1.6 }}>
-            <div>{restDay ? '입력한 시작시간부터' : `시작 ${FIELD_START_TIME} 고정`} · 휴게 {FIELD_BREAK_HOURS}시간 차감 · 1시간 단위 절삭</div>
+            <div>{restDay ? '입력한 시작시간부터' : `시작 ${FIELD_START_TIME} 고정`} · 휴게 {FIELD_BREAK_HOURS}시간 차감 · 30분 단위 절삭</div>
             {!calc ? (
               <div style={{ color: '#aaa' }}>종료시간을 입력하면 인정시간이 계산됩니다</div>
             ) : calc.ok ? (

@@ -6,15 +6,17 @@ const rec = (employee_id: string, work_date: string, hours: number): FieldOverti
   ({ id: `${employee_id}-${work_date}`, employee_id, work_date, start_time: null, end_time: '', hours, note: '' })
 
 describe('calculateFieldHours', () => {
-  it('18:00 시작 · 휴게 1시간 · 1시간 절삭', () => {
+  it('18:00 시작 · 휴게 1시간 · 30분 절삭', () => {
     expect(calculateFieldHours('21:00')).toMatchObject({ ok: true, recognized: 2 })
-    expect(calculateFieldHours('22:30')).toMatchObject({ ok: true, raw: 3.5, recognized: 3 })
+    expect(calculateFieldHours('22:30')).toMatchObject({ ok: true, raw: 3.5, recognized: 3.5 })
+    expect(calculateFieldHours('22:45')).toMatchObject({ ok: true, raw: 3.75, recognized: 3.5 })
+    expect(calculateFieldHours('22:20')).toMatchObject({ ok: true, recognized: 3 })
     expect(calculateFieldHours('25:00')).toMatchObject({ ok: true, recognized: 6 })
   })
 
-  it('인정 1시간 미만이면 실패', () => {
-    expect(calculateFieldHours('19:30').ok).toBe(false)
-    expect(calculateFieldHours('20:00')).toMatchObject({ ok: true, recognized: 1 })
+  it('인정 30분 미만이면 실패', () => {
+    expect(calculateFieldHours('19:20').ok).toBe(false)
+    expect(calculateFieldHours('19:30')).toMatchObject({ ok: true, recognized: 0.5 })
   })
 
   it('형식 오류', () => {
@@ -22,10 +24,10 @@ describe('calculateFieldHours', () => {
     expect(calculateFieldHours('18:00', 'xx').ok).toBe(false)
   })
 
-  it('휴일은 입력한 시작시간부터 — 휴게 1시간·절삭은 동일', () => {
+  it('휴일은 입력한 시작시간부터 — 휴게 1시간·30분 절삭은 동일', () => {
     expect(calculateFieldHours('18:00', '09:00')).toMatchObject({ ok: true, recognized: 8 })
-    expect(calculateFieldHours('1330', '0900')).toMatchObject({ ok: true, raw: 3.5, recognized: 3 })
-    expect(calculateFieldHours('10:30', '09:00').ok).toBe(false)
+    expect(calculateFieldHours('1330', '0900')).toMatchObject({ ok: true, raw: 3.5, recognized: 3.5 })
+    expect(calculateFieldHours('10:20', '09:00').ok).toBe(false)
   })
 })
 

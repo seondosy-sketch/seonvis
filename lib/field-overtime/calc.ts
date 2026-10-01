@@ -3,13 +3,15 @@ import { FieldOvertimeRecord } from './types'
 
 /**
  * 실무자 연장근무 인정시간 규칙 — 종료시간만 입력받고 나머지는 고정한다.
- *   인정시간 = 종료시간 - 18:00 - 휴게 1시간, 1시간 단위 절삭(내림)
- *   예) 21:00 → 2시간, 22:30 → 3시간(3.5 절삭), 19:30 → 인정 없음
- * 계산식 자체는 제안서팀 팝오버 "기타" 유형과 같은 calculateRecognizedHours를 그대로 쓴다 —
- * 규칙이 두 군데서 따로 놀지 않게.
+ *   인정시간 = 종료시간 - 18:00 - 휴게 1시간, 30분 단위 절삭(내림)
+ *   예) 21:00 → 2시간, 22:30 → 3.5시간, 22:45 → 3.5시간(3.75 절삭), 19:00 → 인정 없음
+ * 종료-시작-휴게 계산은 제안서팀 팝오버와 같은 calculateRecognizedHours를 쓰고, 절삭 단위만
+ * 실무자 규칙(30분)으로 다시 내린다 — 제안서팀은 1시간 절삭 그대로.
  */
 export const FIELD_START_TIME = '18:00'
 export const FIELD_BREAK_HOURS = 1
+/** 인정시간 절삭 단위(시간) — 30분 */
+export const FIELD_UNIT_HOURS = 0.5
 
 /** "2130", "21", "21:3" 같은 빠른 입력을 "21:30" 형태로 정리한다. 해석 불가면 원문 그대로. */
 export function normalizeEndTime(input: string): string {
@@ -35,7 +37,7 @@ export type FieldHoursResult =
   | { ok: false; reason: string }
 
 /**
- * startTime을 주면(휴일 근무) 18:00 대신 그 시각부터 계산한다 — 휴게 1시간·1시간 절삭은 같다.
+ * startTime을 주면(휴일 근무) 18:00 대신 그 시각부터 계산한다 — 휴게 1시간·30분 절삭은 같다.
  *   예) 휴일 09:00~18:00 → 9 − 1 = 8시간
  */
 export function calculateFieldHours(endTime: string, startTime?: string | null): FieldHoursResult {
@@ -44,15 +46,16 @@ export function calculateFieldHours(endTime: string, startTime?: string | null):
   const start = startTime ? normalizeEndTime(startTime) : FIELD_START_TIME
   if (!isValidTimeText(start)) return { ok: false, reason: '시작시간 형식이 올바르지 않습니다 (예: 09:00)' }
   const result = calculateRecognizedHours(start, end, FIELD_BREAK_HOURS)
-  if (!result || result.recognized < 1) {
+  const recognized = result ? Math.floor(result.raw / FIELD_UNIT_HOURS) * FIELD_UNIT_HOURS : 0
+  if (!result || recognized < FIELD_UNIT_HOURS) {
     return {
       ok: false,
       reason: startTime
-        ? `인정시간이 1시간 미만입니다 (${start} 시작 · 휴게 ${FIELD_BREAK_HOURS}시간 차감)`
-        : `인정시간이 1시간 미만입니다 (18:00 시작 · 휴게 ${FIELD_BREAK_HOURS}시간 → 20:00 이후 종료부터 인정)`,
+        ? `인정시간이 30분 미만입니다 (${start} 시작 · 휴게 ${FIELD_BREAK_HOURS}시간 차감)`
+        : `인정시간이 30분 미만입니다 (18:00 시작 · 휴게 ${FIELD_BREAK_HOURS}시간 → 19:30 이후 종료부터 인정)`,
     }
   }
-  return { ok: true, ...result }
+  return { ok: true, raw: result.raw, recognized }
 }
 
 // ── 휴일 ─────────────────────────────────────────────────────
