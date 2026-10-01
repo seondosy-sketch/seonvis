@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { calculateFieldHours, monthWeeks, normalizeEndTime, sumByEmployeeMonth, sumByEmployeeWeek } from './calc'
+import { calculateFieldHours, monthWeeks, normalizeEndTime, restDayName, sumByEmployeeMonth, sumByEmployeeWeek } from './calc'
 import { FieldOvertimeRecord } from './types'
 
 const rec = (employee_id: string, work_date: string, hours: number): FieldOvertimeRecord =>
-  ({ id: `${employee_id}-${work_date}`, employee_id, work_date, end_time: '', hours, note: '' })
+  ({ id: `${employee_id}-${work_date}`, employee_id, work_date, start_time: null, end_time: '', hours, note: '' })
 
 describe('calculateFieldHours', () => {
   it('18:00 시작 · 휴게 1시간 · 1시간 절삭', () => {
@@ -19,6 +19,23 @@ describe('calculateFieldHours', () => {
 
   it('형식 오류', () => {
     expect(calculateFieldHours('abc').ok).toBe(false)
+    expect(calculateFieldHours('18:00', 'xx').ok).toBe(false)
+  })
+
+  it('휴일은 입력한 시작시간부터 — 휴게 1시간·절삭은 동일', () => {
+    expect(calculateFieldHours('18:00', '09:00')).toMatchObject({ ok: true, recognized: 8 })
+    expect(calculateFieldHours('1330', '0900')).toMatchObject({ ok: true, raw: 3.5, recognized: 3 })
+    expect(calculateFieldHours('10:30', '09:00').ok).toBe(false)
+  })
+})
+
+describe('restDayName', () => {
+  const holidays = new Map([['2026-10-05', '개천절 대체공휴일'], ['2026-10-09', '한글날']])
+  it('휴가관리 공휴일·회사휴무 이름 우선, 그다음 주말', () => {
+    expect(restDayName('2026-10-05', holidays)).toBe('개천절 대체공휴일')
+    expect(restDayName('2026-10-03', holidays)).toBe('토요일')
+    expect(restDayName('2026-10-04', holidays)).toBe('일요일')
+    expect(restDayName('2026-10-06', holidays)).toBeNull()
   })
 })
 

@@ -13,6 +13,8 @@ interface Props {
   employees: Employee[]
   records: FieldOvertimeRecord[]
   todayStr: string
+  /** 휴가관리 holidays(법정공휴일·회사휴무) — holiday_date → 이름. 날짜를 빨갛게 + 이름 표시 */
+  holidays: Map<string, string>
   isMobile: boolean
   /** 쓰기 권한이 없으면 undefined — 칸/칩 클릭이 막힌다 */
   onDayClick?: (date: string) => void
@@ -24,7 +26,7 @@ interface Props {
  * 주차별 집계 탭과 숫자가 그대로 맞물리게 했다. 날짜 칸에는 그날 입력된 직원 이름 + 인정시간이
  * 직원별 색 칩으로 쌓인다.
  */
-export default function FieldCalendar({ weeks, employees, records, todayStr, isMobile, onDayClick, onRecordClick }: Props) {
+export default function FieldCalendar({ weeks, employees, records, todayStr, holidays, isMobile, onDayClick, onRecordClick }: Props) {
   const byDate = new Map<string, FieldOvertimeRecord[]>()
   for (const r of records) {
     const list = byDate.get(r.work_date) ?? []
@@ -53,6 +55,8 @@ export default function FieldCalendar({ weeks, employees, records, todayStr, isM
               const day = parseInt(dateStr.slice(8), 10)
               const dayRecords = byDate.get(dateStr) ?? []
               const isToday = dateStr === todayStr
+              const holidayName = holidays.get(dateStr)
+              const red = di === 6 || !!holidayName
               return (
                 <div
                   key={dateStr}
@@ -66,8 +70,11 @@ export default function FieldCalendar({ weeks, employees, records, todayStr, isM
                   <div style={{
                     width: 20, height: 20, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
                     background: isToday ? '#111' : 'transparent', fontSize: 12, fontWeight: isToday ? 600 : 400,
-                    color: isToday ? '#fff' : di === 6 ? '#ef4444' : di === 5 ? '#3b82f6' : '#333',
+                    color: isToday ? '#fff' : red ? '#ef4444' : di === 5 ? '#3b82f6' : '#333',
                   }}>{day}</div>
+                  {holidayName && (
+                    <div title={holidayName} style={{ fontSize: 10, color: '#ef4444', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{holidayName}</div>
+                  )}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 4 }}>
                     {dayRecords.map(r => {
                       const color = employeeColor(orderOf.get(r.employee_id) ?? 0)
@@ -75,7 +82,7 @@ export default function FieldCalendar({ weeks, employees, records, todayStr, isM
                         <div
                           key={r.id}
                           onClick={onRecordClick ? e => { e.stopPropagation(); onRecordClick(r) } : undefined}
-                          title={`${nameOf.get(r.employee_id) ?? ''} · ~${r.end_time} · 인정 ${formatHours(Number(r.hours))}${r.note ? ` · ${r.note}` : ''}`}
+                          title={`${nameOf.get(r.employee_id) ?? ''} · ${r.start_time ? `${r.start_time}~${r.end_time}` : `~${r.end_time}`} · 인정 ${formatHours(Number(r.hours))}${r.note ? ` · ${r.note}` : ''}`}
                           style={{
                             display: 'flex', justifyContent: 'space-between', gap: 2,
                             fontSize: isMobile ? 10 : 11, lineHeight: 1.4, padding: '1px 4px',

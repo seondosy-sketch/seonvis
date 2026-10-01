@@ -34,14 +34,45 @@ export type FieldHoursResult =
   | { ok: true; raw: number; recognized: number }
   | { ok: false; reason: string }
 
-export function calculateFieldHours(endTime: string): FieldHoursResult {
+/**
+ * startTime을 주면(휴일 근무) 18:00 대신 그 시각부터 계산한다 — 휴게 1시간·1시간 절삭은 같다.
+ *   예) 휴일 09:00~18:00 → 9 − 1 = 8시간
+ */
+export function calculateFieldHours(endTime: string, startTime?: string | null): FieldHoursResult {
   const end = normalizeEndTime(endTime)
   if (!isValidTimeText(end)) return { ok: false, reason: '종료시간 형식이 올바르지 않습니다 (예: 21:30, 자정 이후는 25:00)' }
-  const result = calculateRecognizedHours(FIELD_START_TIME, end, FIELD_BREAK_HOURS)
+  const start = startTime ? normalizeEndTime(startTime) : FIELD_START_TIME
+  if (!isValidTimeText(start)) return { ok: false, reason: '시작시간 형식이 올바르지 않습니다 (예: 09:00)' }
+  const result = calculateRecognizedHours(start, end, FIELD_BREAK_HOURS)
   if (!result || result.recognized < 1) {
-    return { ok: false, reason: `인정시간이 1시간 미만입니다 (18:00 시작 · 휴게 ${FIELD_BREAK_HOURS}시간 → 20:00 이후 종료부터 인정)` }
+    return {
+      ok: false,
+      reason: startTime
+        ? `인정시간이 1시간 미만입니다 (${start} 시작 · 휴게 ${FIELD_BREAK_HOURS}시간 차감)`
+        : `인정시간이 1시간 미만입니다 (18:00 시작 · 휴게 ${FIELD_BREAK_HOURS}시간 → 20:00 이후 종료부터 인정)`,
+    }
   }
   return { ok: true, ...result }
+}
+
+// ── 휴일 ─────────────────────────────────────────────────────
+
+/** 휴일 근무의 시작시간 기본값 */
+export const HOLIDAY_DEFAULT_START = '09:00'
+
+/**
+ * 휴일(주말 + 휴가관리의 법정공휴일·회사휴무)이면 그 이름, 평일이면 null.
+ * 휴일 근무는 정규 근무가 없으니 18:00 고정 시작이 맞지 않아 시작시간도 입력받는다.
+ * holidays는 휴가관리 holidays 테이블의 holiday_date → name 맵 — 공휴일 목록을 여기서 따로 두지 않는다.
+ */
+export function restDayName(dateStr: string, holidays: Map<string, string>): string | null {
+  const named = holidays.get(dateStr)
+  if (named) return named
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const dow = new Date(y, m - 1, d).getDay()
+  if (dow === 0) return '일요일'
+  if (dow === 6) return '토요일'
+  return null
 }
 
 // ── 날짜 / 주차 ──────────────────────────────────────────────

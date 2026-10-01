@@ -4,9 +4,10 @@ import { useState } from 'react'
 import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import { FieldOvertimeRecord } from '@/lib/field-overtime/types'
 import { Employee } from '@/lib/overtime/types'
-import { FIELD_BREAK_HOURS, FIELD_START_TIME, calculateFieldHours, normalizeEndTime } from '@/lib/field-overtime/calc'
+import { FIELD_BREAK_HOURS, FIELD_START_TIME, HOLIDAY_DEFAULT_START, calculateFieldHours, normalizeEndTime, restDayName } from '@/lib/field-overtime/calc'
 
 const QUICK_END_TIMES = ['20:00', '21:00', '22:00', '23:00', '24:00']
+const QUICK_HOLIDAY_END_TIMES = ['12:00', '15:00', '18:00', '20:00', '22:00']
 
 interface Props {
   /** 수정이면 기존 기록, 신규면 null */
@@ -16,6 +17,8 @@ interface Props {
   employees: Employee[]
   /** 신규 입력 시 같은 직원·같은 날 기록이 이미 있는지 안내하는 데 쓴다 */
   records: FieldOvertimeRecord[]
+  /** 휴가관리 holidays(법정공휴일·회사휴무) — holiday_date → 이름 */
+  holidays: Map<string, string>
   onClose: () => void
   onSaved: () => void
 }
@@ -23,18 +26,23 @@ interface Props {
 /**
  * 실무자 연장근무 입력 — 직원·날짜·종료시간만 받는다. 시작(18:00)·휴게(1시간)는 규칙으로 고정이고
  * 인정시간은 입력하는 동안 바로 계산해 보여준다(lib/field-overtime/calc.ts).
+ * 휴일(주말·휴가관리의 공휴일/회사휴무)은 정규 근무가 없어 시작시간도 받는다(기본 09:00).
  * 하루 1인 1건(DB UNIQUE)이라, 신규 입력인데 같은 직원·날짜 기록이 이미 있으면 그 기록을 덮어쓴다.
  */
-export default function FieldEntryModal({ record, defaultDate, employees, records, onClose, onSaved }: Props) {
+export default function FieldEntryModal({ record, defaultDate, employees, records, holidays, onClose, onSaved }: Props) {
   const supabase = createSupabaseBrowserClient()
   const [date, setDate] = useState(record?.work_date ?? defaultDate)
   const [employeeId, setEmployeeId] = useState(record?.employee_id ?? '')
+  const [startTime, setStartTime] = useState(record?.start_time ?? HOLIDAY_DEFAULT_START)
   const [endTime, setEndTime] = useState(record?.end_time ?? '')
   const [note, setNote] = useState(record?.note ?? '')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const calc = endTime.trim() ? calculateFieldHours(endTime) : null
+  // 날짜를 바꾸면 휴일 여부가 바로 다시 정해진다 — 평일로 옮기면 시작시간은 저장하지 않는다(18:00 고정)
+  const restDay = date ? restDayName(date, holidays) : null
+  const effectiveStart = restDay ? startTime : null
+  const calc = endTime.trim() ? calculateFieldHours(endTime, effectiveStart) : null
   const duplicate = !record && employeeId
     ? records.find(r => r.employee_id === employeeId && r.work_date === date)
     : undefined
@@ -46,7 +54,7 @@ export default function FieldEntryModal({ record, defaultDate, employees, record
     if (!calc || !calc.ok) { setError(calc && !calc.ok ? calc.reason : '종료시간을 입력하세요.'); return }
     setSaving(true)
     setError(null)
-    const row = { employee_id: employeeId, work_date: date, end_time: normalizeEndTime(endTime), hours: calc.recognized, note: note.trim(), updated_at: new Date().toISOString() }
+    const row = { employee_id: employeeId, work_date: date, start_time: effectiveStart ? normalizeEndTime(effectiveStart) : null, end_time: normalizeEndTime(endTime), hours: calc.recognized, note: note.trim(), updated_at: new Date().toISOString() }
     const { error: saveError } = record
       ? await supabase.from('field_overtime_records').update(row).eq('id', record.id)
       : await supabase.from('field_overtime_records').upsert(row, { onConflict: 'employee_id,work_date' })
@@ -92,6 +100,26 @@ export default function FieldEntryModal({ record, defaultDate, employees, record
             </label>
           </div>
 
+          {restDay && (
+            <div style={{ fontSize: 12, color: '#b91c1c', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, padding: '8px 10px', marginBottom: -4 }}>
+              휴일 근무 — {restDay}. 시작시간부터 계산합니다.
+            </div>
+          )}
+
+          {restDay && (
+            <label style={lbl}>
+              근무 시작시간
+              <input
+                value={startTime}
+                onChange={e => setStartTime(e.target.value)}
+                onBlur={() => { if (startTime.trim()) setStartTime(normalizeEndTime(startTime)) }}
+                placeholder="예: 09:00"
+                inputMode="numeric"
+                style={inp}
+              />
+            </label>
+          )}
+
           <label style={lbl}>
             근무 종료시간
             <input
@@ -104,18 +132,18 @@ export default function FieldEntryModal({ record, defaultDate, employees, record
             />
           </label>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: -6 }}>
-            {QUICK_END_TIMES.map(t => (
+            {(restDay ? QUICK_HOLIDAY_END_TIMES : QUICK_END_TIMES).map(t => (
               <button key={t} type="button" onClick={() => setEndTime(t)} style={endTime === t ? chipActive : chip}>{t}</button>
             ))}
           </div>
 
           <div style={{ padding: '10px 12px', borderRadius: 8, background: calc && !calc.ok ? '#fef2f2' : '#f8f8f7', border: `1px solid ${calc && !calc.ok ? '#fecaca' : '#e8e8e6'}`, fontSize: 12, color: '#555', lineHeight: 1.6 }}>
-            <div>시작 {FIELD_START_TIME} 고정 · 휴게 {FIELD_BREAK_HOURS}시간 차감 · 1시간 단위 절삭</div>
+            <div>{restDay ? '입력한 시작시간부터' : `시작 ${FIELD_START_TIME} 고정`} · 휴게 {FIELD_BREAK_HOURS}시간 차감 · 1시간 단위 절삭</div>
             {!calc ? (
               <div style={{ color: '#aaa' }}>종료시간을 입력하면 인정시간이 계산됩니다</div>
             ) : calc.ok ? (
               <div>
-                {FIELD_START_TIME} ~ {normalizeEndTime(endTime)} →
+                {effectiveStart ? normalizeEndTime(effectiveStart) : FIELD_START_TIME} ~ {normalizeEndTime(endTime)} →
                 {calc.raw !== calc.recognized && <> 계산 {calc.raw}시간 →</>}
                 <b style={{ fontSize: 14, color: '#111', marginLeft: 4 }}>인정 {calc.recognized}시간</b>
               </div>

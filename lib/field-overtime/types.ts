@@ -10,6 +10,7 @@ export interface FieldOvertimeRecord {
   id: string
   employee_id: string
   work_date: string // YYYY-MM-DD
+  start_time: string | null // 휴일 근무만 "HH:mm". null = 평일(18:00 고정 시작)
   end_time: string  // "HH:mm". 자정을 넘기면 "24:00" 이상
   hours: number     // 인정시간 — 저장 시점에 lib/field-overtime/calc.ts로 계산
   note: string
