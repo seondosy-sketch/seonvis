@@ -36,6 +36,7 @@ export const RESTRICTABLE_MENU_ITEMS: MenuItemConfig[] = [
   { key: 'projects', label: '프로젝트 List' },
   { key: 'weekly', label: '주간/월간보고' },
   { key: 'overtime', label: '연장근무' },
+  { key: 'field_overtime', label: '연장근무(실무자)' },
   { key: 'leave', label: '휴가관리' },
   { key: 'engineers', label: '기술인 주소록' },
   { key: 'sites', label: '현장 현황' },

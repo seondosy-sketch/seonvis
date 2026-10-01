@@ -7,6 +7,7 @@ import { useIsMobile } from '@/lib/useIsMobile'
 import { DailySummary, Employee, EmployeeTask, Project, ProjectMember, WorkRecord } from '@/lib/overtime/types'
 import { currentPayPeriod, payPeriodDays, payPeriodRange, summarizeByEmployeeAndDate, summaryKey } from '@/lib/overtime/summary'
 import { syncBidProjects } from '@/lib/overtime/sync'
+import { syncTeamEmployees } from '@/lib/overtime/teamSync'
 import { loadProjectNumbers, sortOvertimeProjects } from '@/lib/overtime/projectOrder'
 import { useMenuPermission } from '@/app/components/PermissionsProvider'
 import MonthGrid from './_components/MonthGrid'
@@ -54,6 +55,8 @@ export default function OvertimePage() {
 
   const loadEmployees = useCallback(async () => {
     setEmployeesLoading(true)
+    // 직원 명단의 원본은 기술인 주소록(소속 '미래사업팀') — 읽기 전에 맞춰 넣는다
+    await syncTeamEmployees(supabase)
     // 기본업무내용(employeeTasks)은 팝오버 입력창의 업무내용 드롭다운 선택지 — 직원과 함께 불러온다
     const [empRes, taskRes] = await Promise.all([
       supabase.from('overtime_employees').select('*').eq('is_active', true).order('sort_order', { ascending: true }),
