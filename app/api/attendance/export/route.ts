@@ -13,6 +13,7 @@ import { NextResponse } from 'next/server'
 import { createSupabaseAdminClient } from '@/lib/supabase-admin'
 import { createSupabaseServerClient } from '@/lib/supabase-server'
 import { permissionFor } from '@/lib/menuConfig'
+import { adminEmailList } from '@/lib/auth/menuAccess'
 import { buildDownloadResponse } from '@/lib/export/response'
 import { getPayPeriodForLabel, getPayPeriodRangeForLabel, todayKST } from '@/lib/attendance/period'
 import { filterParticipantRows, filterVisibleProjects, projectIdsWithActiveParticipantsInPeriod } from '@/lib/attendance/gridFilters'
@@ -54,6 +55,8 @@ async function assertAttendanceExportAccess(): Promise<boolean> {
   const supabase = await createSupabaseServerClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user?.email) return false
+  // ADMIN_EMAILS 관리자는 화면(대시보드 레이아웃)과 같게 모든 메뉴 허용 — 이전에는 allowed_users.is_admin만 봐서 403이 났다
+  if (adminEmailList().includes(user.email)) return true
 
   const admin = createSupabaseAdminClient()
   const { data: row } = await admin

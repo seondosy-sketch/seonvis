@@ -1,6 +1,12 @@
 import { createSupabaseServerClient } from '@/lib/supabase-server'
+import { chatMode, getMenuAccess } from '@/lib/auth/menuAccess'
 
 export async function POST(request: Request) {
+  // 프로젝트 등록·수정 — UI·RLS만 믿지 않고 서버에서 프로젝트 List 쓰기 권한을 확인한다
+  if (chatMode(await getMenuAccess()) !== 'write') {
+    return Response.json({ success: false, message: '프로젝트 List 쓰기 권한이 없어요.' }, { status: 403 })
+  }
+
   const { action } = await request.json() as {
     action: { name: string; args: Record<string, unknown> }
   }
