@@ -4,6 +4,8 @@ import { useState } from 'react'
 import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import { Project, WorkRecord } from '@/lib/overtime/types'
 import { calculateHours } from '@/lib/overtime/time'
+import { precheckManualSave } from '@/lib/overtime/monthlyCap'
+import { friendlyOvertimeError } from '@/lib/overtime/planning/errors'
 
 /**
  * 업무 1건(WorkRecord) 추가/수정 폼. 저장 시 연장시간(hours)은 항상 이 폼에서
@@ -45,9 +47,14 @@ export default function WorkRecordForm({
       setError('시작/종료 시간을 "HH:mm" 형식으로 입력하세요. 종료시간은 시작시간보다 늦어야 합니다 (자정을 넘으면 24:00 이상으로 입력, 예: 21:00~24:00)')
       return
     }
+    // 자동확정 기록은 수정 불가(목록에서 수정 버튼도 없다 — DB 트리거가 최종 방어)
+    if (initial?.source === 'auto') { setError('자동배정으로 확정된 기록이라 여기서 고치거나 지울 수 없습니다. 바꾸려면 관리자에게 확정 취소를 요청하세요.'); return }
 
     setSaving(true)
     setError(null)
+    // 월 목표·주 12시간 사전검증 — DB 트리거와 같은 규칙(lib/overtime/monthlyCap.ts·weeklyCap.ts)
+    const capError = await precheckManualSave(supabase, [{ employee_id: employeeId, work_date: workDate, hours, replacing_id: initial?.id ?? null }])
+    if (capError) { setSaving(false); setError(capError); return }
     const payload = {
       employee_id: employeeId,
       project_id: projectId,
@@ -63,7 +70,7 @@ export default function WorkRecordForm({
       : await supabase.from('overtime_work_records').insert(payload)
     setSaving(false)
 
-    if (saveError) { setError(`저장 실패: ${saveError.message}`); return }
+    if (saveError) { setError(friendlyOvertimeError(saveError.message)); return }
     onSaved()
   }
 

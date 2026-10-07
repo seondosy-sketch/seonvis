@@ -39,3 +39,8 @@ export function useMenuPermission(key: string): 'read' | 'write' {
   const p = permissionFor(permissions, key)
   return p === 'write' ? 'write' : 'read'
 }
+
+/** 화면 표시용 관리자 여부(layout이 ADMIN_EMAILS로 판정). 실제 권한은 서버·DB가 다시 확인한다(확정 취소는 allowed_users.is_admin). */
+export function useIsAdmin(): boolean {
+  return useContext(PermissionsContext).isAdmin
+}
