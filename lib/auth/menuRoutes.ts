@@ -18,5 +18,5 @@ export const MENU_ROUTE_KEYS: Readonly<Record<string, string>> = {
   interviews: 'interview_db',
 }
 
-/** 메뉴 권한 대상이 아닌 대시보드 폴더 — 관리자 화면은 각 page.tsx가 ADMIN_EMAILS로 따로 막는다 */
+/** 메뉴 권한 대상이 아닌 대시보드 폴더 — 관리자 화면은 각 page.tsx가 requireAdminPage(DB allowed_users.is_admin)로 따로 막는다 */
 export const UNGUARDED_DASHBOARD_DIRS: readonly string[] = ['admin', 'widget', 'no-access']

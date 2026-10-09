@@ -45,9 +45,8 @@ const env = {
   NEXT_PUBLIC_SUPABASE_URL: dev.NEXT_PUBLIC_SUPABASE_URL,
   NEXT_PUBLIC_SUPABASE_ANON_KEY: dev.NEXT_PUBLIC_SUPABASE_ANON_KEY,
   SUPABASE_SERVICE_ROLE_KEY: dev.SUPABASE_SERVICE_ROLE_KEY,
-  // 관리자 = .env.dev.local에 ADMIN_EMAILS를 직접 넣었을 때만 (기본 없음 — 일반 사용자 권한으로 시험).
-  // 운영 관리자 목록(.env.local)은 쓰지 않는다.
-  ADMIN_EMAILS: dev.ADMIN_EMAILS ?? '',
+  // 관리자 = 개발 DB allowed_users.is_admin뿐이다. ADMIN_EMAILS는 앱이 읽지 않으므로 넘기지 않는다
+  // (.env 파일에 값이 남아 있어도 권한에 아무 효과가 없다 — lib/auth/adminEmailsUsage.test.ts).
   TEST_AUTH_ENABLED: dev.TEST_AUTH_EMAIL && dev.TEST_AUTH_PASSWORD ? 'true' : 'false',
   TEST_AUTH_EMAIL: dev.TEST_AUTH_EMAIL ?? '',
   TEST_AUTH_PASSWORD: dev.TEST_AUTH_PASSWORD ?? '',

@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createSupabaseAdminClient } from '@/lib/supabase-admin'
-import { createSupabaseServerClient } from '@/lib/supabase-server'
-import { permissionFor } from '@/lib/menuConfig'
+import { canUseMenu } from '@/lib/auth/menuAccess'
 import { kstTodayKey } from '@/lib/kstDate'
 import { isStrictIsoDate, type BidProjectSource } from '@/lib/overtime/eligibility'
 import { planBidProjectSync } from '@/lib/overtime/sync'
@@ -19,24 +18,9 @@ export const dynamic = 'force-dynamic'
 
 const SOURCE_COLUMNS = 'id, project_number, name, announce_date, submit_date, interview_date, interview_written, bid_date, status'
 
-function adminEmails(): string[] {
-  return (process.env.ADMIN_EMAILS ?? '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean)
-}
-
 async function canViewOvertime(): Promise<boolean> {
-  const supabase = await createSupabaseServerClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  const email = user?.email?.toLowerCase()
-  if (!email) return false
-  if (adminEmails().includes(email)) return true
-  const { data: row } = await createSupabaseAdminClient()
-    .from('allowed_users')
-    .select('is_admin, menu_permissions')
-    .eq('email', email)
-    .maybeSingle()
-  if (!row) return false
-  if (row.is_admin) return true
-  return permissionFor(row.menu_permissions, 'overtime') !== 'none'
+  // 연장근무 read 이상(관리자 = DB allowed_users.is_admin 전체 허용) — 화면 가드와 같은 판정(lib/auth/menuAccess.ts)
+  return canUseMenu('overtime', 'read')
 }
 
 export async function POST(request: Request) {

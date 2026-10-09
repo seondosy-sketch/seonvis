@@ -94,6 +94,55 @@ describe('공용 표 읽기 정책 ↔ 소비 코드', () => {
     expect(migration).toMatch(/grant execute on function private\.menu_any_readable\(text\[\]\) to authenticated;/)
   })
 
+  it('migration 안전장치 — 표마다 기존 정책의 명령(SELECT)·역할까지 확인하고 다르면 중단', () => {
+    const blocks = migration.split(/-- ── /).slice(1)
+    expect(blocks).toHaveLength(TABLES.length)
+    for (const t of TABLES) {
+      const block = blocks.find(b => b.startsWith(`${t} ──`))!
+      expect(block).toBeDefined()
+      // 조회에 polcmd·with_check 포함
+      expect(block).toMatch(/select p\.polname, p\.polcmd::text as polcmd, p\.polpermissive,/)
+      expect(block).toMatch(/pg_catalog\.pg_get_expr\(p\.polwithcheck, p\.polrelid\) as with_check/)
+      // 명령은 SELECT('r')만, 역할은 한 개 + 예상 목록 — 아니면 raise exception
+      const roleCheck = block.match(/if v_old\.polcmd is distinct from 'r' or pg_catalog\.array_length\(v_old\.roles, 1\) is distinct from 1\s+or not \(v_old\.roles\[1\] = any \(array\[([^\]]*)\]\)\) then\s+raise exception/)
+      expect(roleCheck, t).not.toBeNull()
+      const roles = [...roleCheck![1].matchAll(/'([a-z_]+)'/g)].map(m => m[1])
+      expect(roles).toEqual(t === 'projects' ? ['authenticated', 'public'] : ['public'])
+      // 확인이 drop policy보다 먼저
+      expect(block.indexOf('is distinct from \'r\'')).toBeLessThan(block.indexOf('drop policy'))
+      // 백업에 cmd·with_check까지 저장
+      expect(block).toMatch(/insert into private\.shared_rls_policy_backup \(table_name, policy_name, cmd, permissive, roles, qual, with_check\)\s+values \('[a-z_]+', v_old\.polname, v_old\.polcmd, v_old\.polpermissive, v_old\.roles, v_old\.qual, v_old\.with_check\)/)
+    }
+    // 이전 버전 백업표(개발 DB)에도 열을 추가한다
+    expect(migration).toMatch(/alter table private\.shared_rls_policy_backup add column if not exists cmd text;/)
+    expect(migration).toMatch(/alter table private\.shared_rls_policy_backup add column if not exists with_check text;/)
+  })
+
+  it('preflight는 polcmd·역할을 보여 주고 예상 역할과 비교한다', () => {
+    const preflight = readFileSync(path.join(root, 'supabase', 'verify', 'shared_project_tables_rls_preflight.sql'), 'utf8')
+    expect(preflight).toMatch(/p\.polcmd::text as polcmd/)
+    expect(preflight).toMatch(/pol\.polcmd = 'r'/)
+    expect(preflight).toMatch(/pol\.roles\[1\] = any \(e\.old_roles\)/)
+    expect(preflight).toMatch(/' polcmd=' \|\| pol\.polcmd/)
+    expect(preflight).toMatch(/\('projects', 'authenticated users can read projects', array\['true'\], array\['authenticated', 'public'\], 3\)/)
+  })
+
+  it('rollback은 백업의 명령·역할·permissive·USING·WITH CHECK로 원래 정책을 다시 만든다', () => {
+    const rollback = readFileSync(path.join(root, 'supabase', 'verify', 'shared_project_tables_rls_rollback.sql'), 'utf8').replace(/\r\n/g, '\n')
+    expect(rollback).toMatch(/select table_name, policy_name, cmd, permissive, roles, qual, with_check/)
+    // 명령 매핑(r/a/w/d/*) — 예전처럼 "for select" 고정이 아니다
+    expect(rollback).toMatch(/when 'r' then 'select' when 'a' then 'insert' when 'w' then 'update' when 'd' then 'delete' when '\*' then 'all'/)
+    expect(rollback).not.toMatch(/for select to %s using/)
+    expect(rollback).toMatch(/'create policy %I on public\.%I as %s for %s to %s%s%s'/)
+    expect(rollback).toMatch(/case when b\.permissive then 'permissive' else 'restrictive' end, v_cmd/)
+    expect(rollback).toMatch(/pg_catalog\.unnest\(b\.roles\)/)
+    expect(rollback).toMatch(/' using \(' \|\| b\.qual \|\| '\)'/)
+    expect(rollback).toMatch(/' with check \(' \|\| b\.with_check \|\| '\)'/)
+    // 이전 버전 백업(cmd null)은 SELECT로, 알 수 없는 명령은 중단
+    expect(rollback).toMatch(/coalesce\(b\.cmd, 'r'\)/)
+    expect(rollback).toMatch(/raise exception '중단: %\.% 백업의 명령 값이 알 수 없는 값이다/)
+  })
+
   it('미래봇은 서버에서 프로젝트 권한으로 먼저 막는다', () => {
     const chat = sources.find(f => f.rel === 'app/api/chat/route.ts')!.src
     expect(chat.indexOf("chatMode(await getMenuAccess()) === 'none'")).toBeGreaterThan(-1)

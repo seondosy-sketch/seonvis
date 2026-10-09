@@ -11,7 +11,7 @@
 ### 1.1 전체 아키텍처
 - Next.js 16 App Router + React 19, **전체 inline style**(Tailwind는 reset 전용) — `docs/conventions.md`.
 - Supabase(Postgres + Auth). 클라이언트는 용도별로 분리: `lib/supabase-browser.ts`(Client), `lib/supabase-server.ts`(Server/API), `lib/supabase-admin.ts`(RLS 우회, 서버 전용).
-- 인증: Google OAuth → `allowed_users` 테이블에 있어야 접근(`ADMIN_EMAILS`는 테이블 없이도 항상 전체 접근) — `docs/architecture.md`.
+- 인증: Google OAuth → `allowed_users` 테이블에 있어야 접근(`ADMIN_EMAILS`는 테이블 없이도 항상 전체 접근) — `docs/architecture.md`. *(과거 분석 당시 기준 — 2026-10부터 관리자는 `allowed_users.is_admin`, `ADMIN_EMAILS`는 인가에 쓰지 않음)*
 - 쿼리 레이어(`queries.ts` 등 공용 repository)는 **존재하지 않는다** — 각 페이지/모달 컴포넌트가 `createSupabaseBrowserClient()`로 직접 `supabase.from(...)` 호출 (`docs/overtime.md` 6단계 결정사항). 이 코드베이스에는 이 패턴 외의 레이어가 없다.
 - 라우트는 `app/(dashboard)/<feature>/`, 라우트 전용 컴포넌트는 `_components/`(Next.js private folder), 공용 도메인 타입/유틸은 `lib/<feature>/`.
 - 필드명은 DB 컬럼명과 1:1(camelCase 변환 레이어 없음), 날짜는 `YYYY-MM-DD` 텍스트/date, 화면 표시만 상황별 포맷.
@@ -122,7 +122,7 @@ Excel 출력을 실제로 구현하려면 **새 의존성 도입이 필요하다
 
 - `allowed_users.menu_permissions`(jsonb): 메뉴 키별 `'none'|'read'|'write'` 3단계. 키 목록은 `lib/menuConfig.ts`의 `RESTRICTABLE_MENU_ITEMS`(현재 9개 메뉴 — `projects`, `weekly`, `overtime`, `leave`, `engineers`, `sites`, `trip`, `web`, `proposal_db`).
 - `none`=사이드바 숨김, `read`=조회만(수정 UI 비활성화), `write`=전체. **UI 레벨 제어**이며 RLS(DB 단 권한)는 아니다.
-- `ADMIN_EMAILS`(환경변수) 목록의 관리자는 `allowed_users`에 없어도 항상 전체 쓰기 권한.
+- `ADMIN_EMAILS`(환경변수) 목록의 관리자는 `allowed_users`에 없어도 항상 전체 쓰기 권한. *(과거 분석 당시 기준 — 2026-10부터 관리자는 `allowed_users.is_admin`, `ADMIN_EMAILS`는 인가에 쓰지 않음)*
 - **"월 마감"처럼 쓰기 권한과 별개인 개별 액션 전용 권한 레벨은 현재 존재하지 않는다.** write 권한자는 곧 그 메뉴의 모든 CRUD가 가능하다는 뜻이라, "일반 쓰기 사용자는 되고 마감/마감취소는 관리자만" 같은 세분화된 권한 개념이 없다 (→ Open Question, `02-requirements.md`).
 - RLS는 모든 테이블에 "인증된 사용자 전체 접근"만 걸려 있다 — 접근 제어는 layout(Server Component)에서 처리.
 
@@ -196,7 +196,7 @@ Excel 출력을 실제로 구현하려면 **새 의존성 도입이 필요하다
 ## 9. Open Question (이 문서에서 발견된, 코드/파일로 확인 불가능한 사항)
 
 1. Project List에 재공고/변경공고/취소 여부 전용 필드가 없다 — 신규 컬럼을 `projects`에 추가할지, 출근부 쪽 신규 테이블에만 둘지 결정 필요.
-2. "월 마감" 전용 권한 레벨이 현재 권한 체계에 없다 — 어떻게 표현할지(신규 권한 키? ADMIN_EMAILS 재사용? menu_permissions 값 확장?) 결정 필요.
+2. "월 마감" 전용 권한 레벨이 현재 권한 체계에 없다 — 어떻게 표현할지(신규 권한 키? ADMIN_EMAILS 재사용? menu_permissions 값 확장?) 결정 필요. *(설계 당시 선택지 — 2026-10부터 관리자는 `allowed_users.is_admin`, `ADMIN_EMAILS`는 인가에 쓰지 않음)*
 3. 첨부 엑셀의 연간 날짜 범위가 실제로는 "당해 12/20 마감"이 아니라 "당해 12/31까지"로 그려져 있다 — 마스터 프롬프트의 "연간 마감 12/20" 규칙과 실물 엑셀 습관 중 무엇을 기준으로 삼을지 확인 필요.
 4. 엑셀 실무에서는 프로젝트 변경사항(교체/취소/재공고 등)을 비고칸보다 **날짜 셀에 직접** 적는 경우가 압도적으로 많았다(187건 vs 5건) — 이 관행을 그대로 "특정 날짜에 종속된 이벤트"로 모델링할지, 전부 프로젝트 비고/변경이력으로 흡수할지 확인 필요.
 

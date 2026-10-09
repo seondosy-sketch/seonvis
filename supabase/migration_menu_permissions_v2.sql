@@ -3,7 +3,7 @@
 --   none  = 사이드바에서 숨김 (기존 hidden_menu_items와 동일한 효과)
 --   read  = 페이지는 보이지만 추가/수정/삭제 UI 비활성화
 --   write = 전체 사용 (기본)
--- 관리자(ADMIN_EMAILS)는 이 컬럼과 무관하게 항상 전체 쓰기.
+-- 관리자(ADMIN_EMAILS)는 이 컬럼과 무관하게 항상 전체 쓰기. (2026-10부터 관리자는 allowed_users.is_admin, ADMIN_EMAILS는 인가에 쓰지 않는다)
 alter table allowed_users
   add column if not exists menu_permissions jsonb not null default '{}';
 

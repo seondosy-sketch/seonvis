@@ -46,8 +46,13 @@ select * from (
          (select count(*) from pol where pol.table_name = e.table_name and pol.polcmd in ('a', 'w', 'd'))::text || ' / 예상 ' || e.write_count
   from expected e
   union all
-  select e.table_name, '5 교체 전 정의 백업',
-         case when exists (select 1 from private.shared_rls_policy_backup b where b.table_name = e.table_name and b.policy_name = e.old_policy) then 'OK' else 'FAIL' end, ''
+  select e.table_name, '5 교체 전 정의 백업(명령·역할 포함)',
+         case when exists (select 1 from private.shared_rls_policy_backup b where b.table_name = e.table_name and b.policy_name = e.old_policy
+                             and pg_catalog.to_jsonb(b) ->> 'cmd' = 'r' and pg_catalog.array_length(b.roles, 1) >= 1) then 'OK'
+              when exists (select 1 from private.shared_rls_policy_backup b where b.table_name = e.table_name and b.policy_name = e.old_policy) then 'INFO(이전 버전 백업 — cmd 없음, 되돌리기는 SELECT로 복원)'
+              else 'FAIL' end,
+         coalesce((select 'cmd=' || coalesce(pg_catalog.to_jsonb(b) ->> 'cmd', '-') || ' roles=' || array_to_string(b.roles, ',')
+                   from private.shared_rls_policy_backup b where b.table_name = e.table_name and b.policy_name = e.old_policy), '')
   from expected e
   union all
   select '(함수)', 'SECURITY DEFINER·STABLE', case when (select prosecdef and provolatile = 's' from fn) then 'OK' else 'FAIL' end,

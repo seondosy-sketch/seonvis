@@ -141,7 +141,8 @@ result_score 또는 evaluation 비어있으면 → "진행중"
 
 ## 6. 관리자 (`/admin`)
 
-- 접근: `ADMIN_EMAILS` 환경 변수에 등록된 이메일만
+- 접근: DB `allowed_users.is_admin = true`인 계정만(`ADMIN_EMAILS` 환경 변수는 2026-10부터 쓰지 않음)
+- 관리자 계정은 메뉴별 권한 설정이 적용되지 않는다(전체 권한) — 화면에서 편집이 잠긴다
 - 기능: `allowed_users` 테이블 조회/추가/삭제
 
 ---

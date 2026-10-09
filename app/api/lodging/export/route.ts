@@ -1,13 +1,11 @@
 /**
  * 숙박관리 — 출력(Export) API. UI 권한만 신뢰하지 않고 서버에서 직접 세션과
- * menu_permissions.lodging을 검증한다(app/api/admin/users/route.ts의 assertAdmin() 패턴 재사용).
+ * menu_permissions.lodging을 검증한다(lib/auth/menuAccess.ts canUseMenu — 화면 가드와 같은 판정).
  * none → 403, read/write → 출력 진행(출력은 데이터를 변경하지 않으므로 read에도 허용).
  */
 import { NextResponse } from 'next/server'
 import { createSupabaseAdminClient } from '@/lib/supabase-admin'
-import { createSupabaseServerClient } from '@/lib/supabase-server'
-import { permissionFor } from '@/lib/menuConfig'
-import { adminEmailList } from '@/lib/auth/menuAccess'
+import { canUseMenu } from '@/lib/auth/menuAccess'
 import { buildDownloadResponse } from '@/lib/export/response'
 import { monthOverlapQuery } from '@/lib/lodging/monthRange'
 import { buildFinancialSummary, buildOccupancySummary } from '@/lib/lodging/summary'
@@ -28,23 +26,9 @@ interface ExportFilters {
 }
 
 async function assertLodgingExportAccess(): Promise<boolean> {
-  const supabase = await createSupabaseServerClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user?.email) return false
-  // ADMIN_EMAILS 관리자는 화면(대시보드 레이아웃)과 같게 모든 메뉴 허용 — 이전에는 allowed_users.is_admin만 봐서 403이 났다
-  if (adminEmailList().includes(user.email)) return true
-
-  const admin = createSupabaseAdminClient()
-  const { data: row } = await admin
-    .from('allowed_users')
-    .select('is_admin, menu_permissions')
-    .eq('email', user.email)
-    .single()
-  if (!row) return false
-  if (row.is_admin) return true
-
-  const perm = permissionFor(row.menu_permissions, 'lodging')
-  return perm !== 'none'
+  // 출력은 데이터를 바꾸지 않으므로 read 이상 허용(none만 403)
+  // 관리자(DB allowed_users.is_admin)는 전체 허용, 미승인·비로그인은 거부 — 화면(requireMenu)과 같은 판정(lib/auth/menuAccess.ts)
+  return canUseMenu('lodging', 'read')
 }
 
 async function fetchOverlappingRecords(year: number, month: number, filters?: ExportFilters): Promise<LodgingRecord[]> {

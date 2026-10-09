@@ -253,9 +253,9 @@ Project List에는 이런 이력 테이블이 없다(`01-current-analysis.md` §
 
 | 방안 | 구현 | 장점 | 단점 |
 |---|---|---|---|
-| A. `ADMIN_EMAILS`만 마감 가능 | 코드 조건문만 추가, DB 변경 없음 | 가장 단순, 즉시 구현 가능 | 관리자가 아닌 팀장급 담당자에게 위임 불가 |
+| A. `ADMIN_EMAILS`만 마감 가능 *(설계 당시 선택지 — 2026-10부터 관리자는 `allowed_users.is_admin`, `ADMIN_EMAILS`는 인가에 쓰지 않음)* | 코드 조건문만 추가, DB 변경 없음 | 가장 단순, 즉시 구현 가능 | 관리자가 아닌 팀장급 담당자에게 위임 불가 |
 | B. `menu_permissions`에 4번째 값 추가(예: `'close'`) | `lib/menuConfig.ts`의 `MenuPermission` 타입 확장 | 기존 체계 재사용 | `'close'`는 다른 8개 메뉴에는 의미가 없는 값이라 타입 전체가 이 기능 하나 때문에 지저분해짐 |
-| **C. `allowed_users.can_close_attendance boolean default false` 신설 — 채택** | 신규 컬럼 1개 + 관리자 화면에 체크박스 1개 | 기존 3단계 체계를 건드리지 않고 이 기능 전용 권한만 깔끔히 추가. `ADMIN_EMAILS`는 이 컬럼과 무관하게 항상 가능(기존 관례와 동일) | 이 기능에만 있는 특수 컬럼이 하나 생김(다만 향후 "마감 권한이 필요한 다른 기능"이 생기면 같은 패턴 재사용 가능) |
+| **C. `allowed_users.can_close_attendance boolean default false` 신설 — 채택** | 신규 컬럼 1개 + 관리자 화면에 체크박스 1개 | 기존 3단계 체계를 건드리지 않고 이 기능 전용 권한만 깔끔히 추가. 관리자는 이 컬럼과 무관하게 항상 가능(설계 당시 관리자 = `ADMIN_EMAILS`, 2026-10부터 `allowed_users.is_admin`) | 이 기능에만 있는 특수 컬럼이 하나 생김(다만 향후 "마감 권한이 필요한 다른 기능"이 생기면 같은 패턴 재사용 가능) |
 
 **사용자 확정**: C안 채택. `can_close_attendance`는 **월 마감과 마감취소 둘 다**를 통제한다("마감취소는 can_close_attendance 권한이 있는 사용자만 가능"). "출근기록 입력·수정"은 기존 `menu_permissions`의 `attendance` 키 write 권한으로 별도 통제되므로, 두 권한(입력·수정 vs 마감·마감취소)이 서로 분리된 축으로 존재한다 — write 권한자라고 자동으로 마감 권한을 갖지 않는다.
 

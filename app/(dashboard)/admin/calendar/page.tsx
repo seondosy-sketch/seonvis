@@ -1,21 +1,12 @@
-import { redirect } from 'next/navigation'
-import { createSupabaseServerClient } from '@/lib/supabase-server'
+import { requireAdminPage } from '@/lib/auth/menuAccess'
 import CalendarConnectionManager from './CalendarConnectionManager'
 
 /**
  * Google Calendar 연동 설정 — 관리자 전용.
- * 접근 판정은 기존 /admin 페이지와 같은 방식(ADMIN_EMAILS env)을 쓴다.
+ * 접근 판정은 /admin 페이지와 같다(requireAdminPage — DB allowed_users.is_admin).
  */
-function getAdminEmails(): string[] {
-  return (process.env.ADMIN_EMAILS ?? '').split(',').map(e => e.trim()).filter(Boolean)
-}
-
 export default async function CalendarAdminPage() {
-  const supabase = await createSupabaseServerClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user?.email) redirect('/login')
-  if (!getAdminEmails().includes(user.email)) redirect('/unauthorized')
+  await requireAdminPage()
 
   return (
     <div style={{ padding: '32px 40px', maxWidth: 820 }}>

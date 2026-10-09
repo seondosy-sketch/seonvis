@@ -49,30 +49,39 @@ describe('메뉴 경로 가드', () => {
     expect(read(path.join(dashboard, 'overtime', 'plan', 'page.tsx'))).toContain("useMenuPermission('overtime')")
   })
 
-  it('관리자 화면은 서버에서 ADMIN_EMAILS로 막는다', () => {
+  it('관리자 화면은 서버에서 DB allowed_users.is_admin(requireAdminPage)으로 막는다', () => {
     for (const p of ['admin/page.tsx', 'admin/calendar/page.tsx']) {
       const src = read(path.join(dashboard, p))
-      expect(src).toContain("redirect('/unauthorized')")
-      expect(src).toMatch(/ADMIN_EMAILS/)
+      expect(src).toContain("from '@/lib/auth/menuAccess'")
+      expect(src).toContain('await requireAdminPage()')
+      expect(src).not.toMatch(/^['"]use client['"]/m)
+      expect(src).not.toMatch(/process\.env\.ADMIN_EMAILS/)
     }
+    // requireAdminPage: 비로그인 → /login, is_admin 아님 → /unauthorized
+    const helper = read(path.join(root, 'lib', 'auth', 'menuAccess.ts'))
+    expect(helper).toMatch(/requireAdminPage[\s\S]*?redirect\('\/login'\)[\s\S]*?if \(!access\.isAdmin\) redirect\('\/unauthorized'\)/)
   })
 })
 
 describe('데이터 API의 서버 권한 확인 (RLS만 최종 방어선으로 두지 않는다)', () => {
   const api = (p: string) => read(path.join(root, 'app', 'api', p, 'route.ts'))
   it.each([
-    ['projects/export', "'projects'"],
-    ['attendance/export', "'attendance'"],
-    ['lodging/export', "'lodging'"],
-    ['interviews/import', "'interview_db'"],
-    ['overtime/sync-projects', "'overtime'"],
-  ])('%s — 메뉴 권한(%s)을 서버에서 확인', (p, key) => {
+    ['projects/export', "canUseMenu('projects', 'read')"],
+    ['attendance/export', "canUseMenu('attendance', 'read')"],
+    ['lodging/export', "canUseMenu('lodging', 'read')"],
+    ['interviews/import', "canUseMenu('interview_db', 'write')"],
+    ['overtime/sync-projects', "canUseMenu('overtime', 'read')"],
+  ])('%s — 메뉴 권한을 서버에서 확인(%s)', (p, call) => {
     const src = api(p)
-    expect(src).toMatch(/permissionFor\(/)
-    expect(src).toContain(key)
+    // 화면과 같은 판정 헬퍼(관리자 = DB is_admin, 무효값 none) — 라우트별 복제 판정을 두지 않는다
+    expect(src).toContain("from '@/lib/auth/menuAccess'")
+    expect(src).toContain(call)
     expect(src).toMatch(/status: 403/)
-    // ADMIN_EMAILS 관리자는 화면과 같게 허용(allowed_users.is_admin만 보던 불일치 수정)
-    if (p !== 'overtime/sync-projects') expect(src).toContain('adminEmailList().includes(user.email)')
+    expect(src).not.toMatch(/\.from\('allowed_users'\)/)
+    // 권한 확인이 데이터 처리보다 먼저(POST 첫 문장에서 확인 함수 호출)
+    const post = src.indexOf('export async function POST(')
+    expect(post).toBeGreaterThan(-1)
+    expect(src.slice(post, post + 160)).toMatch(/await (assert\w+|can\w+)\(\)/)
   })
   it('chat — 프로젝트 List none이면 403(대화에 프로젝트 전체가 들어간다)', () => {
     const src = api('chat')
@@ -86,11 +95,15 @@ describe('데이터 API의 서버 권한 확인 (RLS만 최종 방어선으로 �
     // 권한 확인이 DB 쓰기보다 먼저
     expect(src.indexOf('getMenuAccess()')).toBeLessThan(src.indexOf(".from('projects')"))
   })
-  it('관리자 API는 ADMIN_EMAILS로 403', () => {
+  it('관리자 API는 DB allowed_users.is_admin(getAdminAccess)이 아니면 403', () => {
     for (const p of ['admin/users', 'admin/access-requests']) {
       const src = api(p)
-      expect(src).toMatch(/ADMIN_EMAILS/)
-      expect(src).toMatch(/status: 403/)
+      expect(src).toContain('getAdminAccess()')
+      expect(src).not.toMatch(/process\.env\.ADMIN_EMAILS/)
+      // 모든 메서드가 먼저 assertAdmin → 403
+      const handlers = [...src.matchAll(/export async function (GET|POST|PATCH|DELETE)\([^)]*\) \{\s+const user = await assertAdmin\(\)\s+if \(!user\) return NextResponse\.json\(\{ error: 'Forbidden' \}, \{ status: 403 \}\)/g)]
+      const methods = [...src.matchAll(/export async function (GET|POST|PATCH|DELETE)\(/g)]
+      expect(handlers.length).toBe(methods.length)
     }
   })
 })
