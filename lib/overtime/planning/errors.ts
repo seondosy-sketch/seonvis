@@ -11,6 +11,10 @@ const RULES: Array<[string, string]> = [
   ['OVERTIME_MONTHLY_TARGET_EXCEEDED', '급여기간 월 목표시간을 넘어 저장하거나 확정할 수 없습니다.'],
   ['OVERTIME_MONTHLY_TARGET', '월 목표시간을 넘어 저장하거나 확정할 수 없습니다. 초안에서 시간을 줄이거나 칸을 빼세요.'],
   ['OVERTIME_HOLIDAYS_MISSING', '이 급여기간의 공휴일 데이터가 없어 자동배정을 할 수 없습니다. 휴가관리에서 공휴일을 먼저 등록하세요.'],
+  // 미리보기 뒤에 공휴일이 바뀌면 저장 함수가 초안의 is_holiday와 DB 공휴일을 비교해 거부한다
+  ['OVERTIME_HOLIDAY_CHANGED', '공휴일 정보가 바뀌었습니다. 새로고침 후 다시 미리보기하세요.'],
+  // 직원 동기화(sync_team_employees) — 주소록과 연결되지 않은 직원이 있어 명단을 맞출 수 없음
+  ['OVERTIME_EMPLOYEE_LINK_REQUIRED', '주소록과 연결되지 않은 직원이 있어 직원 명단을 맞출 수 없습니다. 관리자가 먼저 직원을 기술인 주소록과 연결해야 합니다.'],
   ['OVERTIME_AUTO_RECORD_LOCKED', '자동배정으로 확정된 기록은 직접 고치거나 지울 수 없습니다. 관리자에게 확정 취소를 요청하세요.'],
   ['OVERTIME_DRAFT_INVALID', '초안 중 조건에 맞지 않는 항목이 있어 저장하지 않았습니다. 다시 배정해 주세요.'],
   ['OVERTIME_CONFIRM_INVALID', '확정 전에 조건이 바뀐 초안이 있습니다(프로젝트 기간·참여·재직 등). 다시 배정해 주세요.'],

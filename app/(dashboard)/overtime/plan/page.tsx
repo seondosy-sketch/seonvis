@@ -10,9 +10,11 @@ import { requestProjectSync, type SyncAttention } from '@/lib/overtime/sync'
 import { koreaToday } from '@/lib/overtime/eligibility'
 import { runAssignment } from '@/lib/overtime/assign/engine'
 import type { AssignmentResult } from '@/lib/overtime/assign/types'
-import { buildAssignmentInput, lockedRange, toPeriodLabel, type PlanningRaw, type PlanningScope } from '@/lib/overtime/planning/input'
+import { buildAssignmentInput, lockedRange, supersededBy, toPeriodLabel, type PlanningRaw, type PlanningScope } from '@/lib/overtime/planning/input'
 import { friendlyOvertimeError } from '@/lib/overtime/planning/errors'
+import { canSavePreview, makePreview, type StoredPreview } from '@/lib/overtime/planning/fingerprint'
 import { splitPartialPlan, type PartialPlan } from '@/lib/overtime/planning/partial'
+import { canDiscardRun } from '@/lib/overtime/planning/runs'
 import type { AssignmentDraft, AssignmentRun, MemberTask } from '@/lib/overtime/planningTypes'
 import type { Employee, EmployeeTask, Project, ProjectMember, WorkRecord } from '@/lib/overtime/types'
 import AssignmentGrid, { projectColor, type GridCell, type GridRow } from './_components/AssignmentGrid'
@@ -28,6 +30,8 @@ import PlanSettings, { type CandidateProject } from './_components/PlanSettings'
 type Tab = 'settings' | 'run' | 'drafts'
 type RecordRow = Pick<WorkRecord, 'id' | 'employee_id' | 'project_id' | 'work_date' | 'hours' | 'task_description' | 'source'>
 type SourceRow = { id: string; name: string; project_number: string | null; submit_date: string | null }
+// 엔진 잠금 입력용 초안 — 실행·급여기간과 상관없이 잠금 범위(첫 주 월요일~마지막 주 일요일)의 status='draft' 전부
+type LockDraftRow = Pick<AssignmentDraft, 'id' | 'employee_id' | 'project_id' | 'work_date' | 'hours' | 'task_name' | 'status' | 'locked' | 'manually_edited'>
 
 const MONTH_NAMES = ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월']
 const RUN_STATUS: Record<string, string> = { draft: '초안', partially_confirmed: '일부 확정', confirmed: '확정', superseded: '대체됨', discarded: '폐기' }
@@ -59,11 +63,14 @@ export default function OvertimePlanPage() {
   const [records, setRecords] = useState<RecordRow[]>([])
   const [runs, setRuns] = useState<AssignmentRun[]>([])
   const [drafts, setDrafts] = useState<AssignmentDraft[]>([])
+  const [lockDrafts, setLockDrafts] = useState<LockDraftRow[]>([])
   const [attention, setAttention] = useState<SyncAttention>([])
+  const [syncFailed, setSyncFailed] = useState(false)
 
   const [scope, setScope] = useState<PlanningScope>({ kind: 'all' })
-  const [seed, setSeed] = useState(newSeed)
-  const [preview, setPreview] = useState<AssignmentResult | null>(null)
+  // 미리보기 = 결과 + 그 결과를 만든 입력·범위·지문(lib/overtime/planning/fingerprint.ts). 저장은 이 입력 기준
+  const [preview, setPreview] = useState<StoredPreview | null>(null)
+  const [previewCleared, setPreviewCleared] = useState(false)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
   const [editing, setEditing] = useState<AssignmentDraft | null>(null)
@@ -76,11 +83,13 @@ export default function OvertimePlanPage() {
     const { start, end } = payPeriodRange(y, m)
     const range = lockedRange(y, m)
     if (sync) {
+      // 실패해도 기존 목록으로 계속 진행하되, 화면에 안내한다(원문 오류는 보여주지 않는다)
       const res = await requestProjectSync(start, end)
       setAttention(res.attention)
+      setSyncFailed(!res.ok)
     }
     const periodLabel = toPeriodLabel(y, m)
-    const [empRes, taskRes, projRes, srcRes, memRes, mtRes, tgRes, holRes, recRes, runRes] = await Promise.all([
+    const [empRes, taskRes, projRes, srcRes, memRes, mtRes, tgRes, holRes, recRes, runRes, lockDraftRes] = await Promise.all([
       supabase.from('overtime_employees').select('*').eq('is_active', true).order('sort_order', { ascending: true }),
       supabase.from('overtime_employee_tasks').select('*').order('sort_order', { ascending: true }).order('created_at', { ascending: true }),
       supabase.from('overtime_projects').select('*'),
@@ -91,9 +100,13 @@ export default function OvertimePlanPage() {
       supabase.from('holidays').select('holiday_date, name').gte('holiday_date', `${range.from.slice(0, 4)}-01-01`).lte('holiday_date', `${range.to.slice(0, 4)}-12-31`),
       supabase.from('overtime_work_records').select('id, employee_id, project_id, work_date, hours, task_description, source').gte('work_date', range.from).lte('work_date', range.to),
       supabase.from('overtime_assignment_runs').select('*').eq('period_label', periodLabel).order('created_at', { ascending: false }),
+      // 주 12시간 잠금용 — 실행(run)·급여기간 라벨로 거르지 않는다. 앞·뒤 급여기간 실행의 같은 주 초안도 DB가 함께 센다
+      supabase.from('overtime_assignment_drafts')
+        .select('id, employee_id, project_id, work_date, hours, task_name, status, locked, manually_edited')
+        .eq('status', 'draft').gte('work_date', range.from).lte('work_date', range.to),
     ])
     setLoadError(null)
-    const failed = [empRes, taskRes, projRes, srcRes, memRes, mtRes, tgRes, holRes, recRes, runRes].find(r => r.error)
+    const failed = [empRes, taskRes, projRes, srcRes, memRes, mtRes, tgRes, holRes, recRes, runRes, lockDraftRes].find(r => r.error)
     if (failed) {
       setLoadError('자료를 불러오지 못했습니다. 자동배정용 DB 변경(migration)이 적용되었는지, 연장근무 권한이 있는지 확인하세요.')
       setLoading(false)
@@ -118,6 +131,7 @@ export default function OvertimePlanPage() {
     setRecords(recRes.data as RecordRow[])
     setRuns(runRows)
     setDrafts(draftRows)
+    setLockDrafts(lockDraftRes.data as LockDraftRow[])
     setLoading(false)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -165,24 +179,49 @@ export default function OvertimePlanPage() {
       overtimeProjects: projects,
       sourceProjects: sources,
       members, memberTasks, tasks, holidays, records,
-      drafts: drafts.map(d => ({ ...d })),
+      drafts: lockDrafts.map(d => ({ ...d })),
     }
   }
 
   function runEngine(s: number) {
     setMessage(null)
-    setSeed(s)
-    setPreview(runAssignment(buildAssignmentInput(buildRaw(s))))
+    setPreviewCleared(false)
+    const input = buildAssignmentInput(buildRaw(s))
+    setPreview(makePreview(input, scope, runAssignment(input)))
+  }
+
+  // 미리보기를 만든 뒤 설정·기존 기록·공휴일이 바뀌었는지 — 지금 상태로 같은 seed의 입력을 다시 만들어 지문을 비교한다.
+  // 탭 이동은 입력을 바꾸지 않으므로 미리보기가 그대로 남는다.
+  const previewFresh = useMemo(
+    () => preview !== null && canSavePreview(preview, buildAssignmentInput(buildRaw(preview.input.seed)), scope),
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+    [preview, scope, year, month0, employees, targets, projects, sources, members, memberTasks, tasks, holidays, records, lockDrafts])
+  // 서버에서 다시 읽은 값이 미리보기 입력과 다르면 미리보기를 지운다(렌더 중 이전 값 비교 — effect 없이)
+  if (preview && !previewFresh && !loading) {
+    setPreview(null)
+    setPreviewCleared(true)
+  }
+
+  // 설정(월 목표·참여 프로젝트·업무)을 바꾸면 미리보기를 지우고 다시 읽는다
+  const onSettingsChanged = () => {
+    if (preview) { setPreview(null); setPreviewCleared(true) }
+    void reload()
   }
 
   // 부분 자동배정 — 문제 있는 직원만 제외하고 정상 직원 초안은 저장한다(lib/overtime/planning/partial.ts)
-  const partial: PartialPlan | null = useMemo(() => (preview ? splitPartialPlan(preview) : null), [preview])
+  const partial: PartialPlan | null = useMemo(() => (preview ? splitPartialPlan(preview.result) : null), [preview])
 
   async function saveDraft() {
     if (!preview || !partial || !partial.canSave) return
+    // 저장 직전 다시 확인 — 미리보기 뒤 입력이 바뀌었으면 저장하지 않는다
+    if (!canSavePreview(preview, buildAssignmentInput(buildRaw(preview.input.seed)), scope)) {
+      setMessage({ kind: 'error', text: '미리보기 뒤에 설정이나 기존 기록이 바뀌었습니다. 자동배정을 다시 실행한 뒤 저장하세요.' })
+      return
+    }
     setBusy(true)
     setMessage(null)
-    const input = buildAssignmentInput(buildRaw(seed))
+    // 저장 기록·실행 정보는 미리보기를 만든 입력 그대로 쓴다(지금 상태로 다시 만들지 않는다)
+    const { input, scope: runScope, result } = preview
     // 실행 기록 — 내부 ID·기간·목표·프로젝트 날짜·업무 관계만 남긴다(이름 등 개인정보 없음)
     const inputSnapshot = {
       period: input.period, as_of: input.as_of, seed: input.seed, rule_version: input.rule_version,
@@ -191,9 +230,9 @@ export default function OvertimePlanPage() {
       locked_count: input.locked_records.length,
     }
     const resultSummary = {
-      assignment_count: preview.assignments.length,
-      employees: preview.employees.map(e => ({ employee_id: e.employee_id, target_hours: e.target_hours, locked_hours: e.locked_hours, assigned_hours: e.assigned_hours, unassigned_hours: e.unassigned_hours })),
-      issues: preview.issues.map(i => ({ code: i.code, severity: i.severity, employee_id: i.employee_id ?? null, project_id: i.project_id ?? null })),
+      assignment_count: result.assignments.length,
+      employees: result.employees.map(e => ({ employee_id: e.employee_id, target_hours: e.target_hours, locked_hours: e.locked_hours, assigned_hours: e.assigned_hours, unassigned_hours: e.unassigned_hours })),
+      issues: result.issues.map(i => ({ code: i.code, severity: i.severity, employee_id: i.employee_id ?? null, project_id: i.project_id ?? null })),
       // 부분 저장 결과 — 배정 직원 수와 제외 직원 수(사유 코드)
       included_employee_count: partial.included.length,
       assigned_employee_count: new Set(partial.drafts.map(a => a.employee_id)).size,
@@ -202,14 +241,16 @@ export default function OvertimePlanPage() {
     }
     const { error } = await supabase.rpc('overtime_save_assignment_run', {
       p_run: {
-        period_label: label, seed, scope: scope.kind,
-        scope_employee_id: scope.kind === 'employee' ? scope.employee_id : null,
-        scope_project_id: scope.kind === 'project' ? scope.project_id : null,
+        period_label: input.period.label, seed: input.seed, scope: runScope.kind,
+        scope_employee_id: runScope.kind === 'employee' ? runScope.employee_id : null,
+        scope_project_id: runScope.kind === 'project' ? runScope.project_id : null,
         rule_version: input.rule_version, input_snapshot: inputSnapshot, result_summary: resultSummary,
       },
+      // is_holiday — 엔진이 본 공휴일 여부. 저장 함수가 DB 공휴일과 다르면 OVERTIME_HOLIDAY_CHANGED로 거부한다
       p_drafts: partial.drafts.map(a => ({
         employee_id: a.employee_id, project_id: a.project_id, work_date: a.work_date,
         task_id: a.task_id, time_type: a.time_type, exception_reason: a.exception_reason,
+        is_holiday: a.is_holiday,
       })),
     })
     setBusy(false)
@@ -263,16 +304,19 @@ export default function OvertimePlanPage() {
 
   const previewRows: GridRow[] = useMemo(() => {
     if (!preview) return []
-    return preview.employees.map(s => {
+    const result = preview.result
+    const period = { start: preview.input.period.start, end: preview.input.period.end }
+    return result.employees.map(s => {
       const cells = existingCells(s.employee_id)
-      for (const d of drafts) {
-        if (d.employee_id === s.employee_id && d.status === 'draft' && !preview.assignments.some(a => a.employee_id === d.employee_id && a.work_date === d.work_date)) {
-          // 이번 실행이 대체하지 않는 초안(잠김·수동 수정·범위 밖)은 잠금으로 보인다 — 대체될 초안은 엔진 입력에서도 빠졌다
-          const kept = d.locked || d.manually_edited || (scope.kind === 'employee' && d.employee_id !== scope.employee_id) || (scope.kind === 'project' && d.project_id !== scope.project_id)
-          if (kept) cells.set(d.work_date, { projectId: d.project_id, hours: Number(d.hours), reason: null, status: 'locked', title: `기존 초안(유지) · ${projName(d.project_id)}` })
+      for (const d of lockDrafts) {
+        if (d.employee_id !== s.employee_id || !inPeriod(d.work_date)) continue
+        if (result.assignments.some(a => a.employee_id === d.employee_id && a.work_date === d.work_date)) continue
+        // 이번 실행이 대체하지 않는 초안(잠김·수동 수정·범위 밖)은 잠금으로 보인다 — 대체될 초안은 엔진 입력에서도 빠졌다
+        if (!supersededBy(preview.scope, period, d)) {
+          cells.set(d.work_date, { projectId: d.project_id, hours: Number(d.hours), reason: null, status: 'locked', title: `기존 초안(유지) · ${projName(d.project_id)}` })
         }
       }
-      for (const a of preview.assignments) {
+      for (const a of result.assignments) {
         if (a.employee_id !== s.employee_id) continue
         cells.set(a.work_date, { projectId: a.project_id, hours: a.hours, reason: a.exception_reason, status: 'draft', title: `${projName(a.project_id)} · ${a.task_name} · ${a.hours}시간${a.exception_reason ? ` · ${a.exception_reason}` : ''}` })
       }
@@ -280,7 +324,7 @@ export default function OvertimePlanPage() {
       return { id: s.employee_id, name: emp?.name ?? '-', sub: s.target_hours === null ? '목표 미입력' : `목표 ${s.target_hours}h`, cells }
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [preview, drafts, records, employees, scope])
+  }, [preview, lockDrafts, records, employees])
 
   const draftRows: GridRow[] = useMemo(() => {
     const ids = [...new Set(drafts.map(d => d.employee_id))]
@@ -309,6 +353,7 @@ export default function OvertimePlanPage() {
     const n = year * 12 + month0 + delta
     setLoading(true)
     setPreview(null)
+    setPreviewCleared(false)
     setMessage(null)
     setEditing(null)
     setScope({ kind: 'all' })
@@ -346,6 +391,9 @@ export default function OvertimePlanPage() {
         {!canWrite && <Notice kind="info" text="읽기 권한이라 보기만 할 수 있습니다." />}
         {loadError && <Notice kind="error" text={loadError} />}
         {message && <Notice kind={message.kind} text={message.text} />}
+        {syncFailed && !loadError && (
+          <Notice kind="error" text="프로젝트 List 동기화에 실패해 마지막으로 맞춘 프로젝트 목록으로 보여줍니다. 프로젝트 기간·상태가 최신이 아닐 수 있으니 잠시 후 새로고침하고, 계속되면 관리자에게 알려주세요." />
+        )}
 
         {!loadError && tab === 'settings' && (
           <>
@@ -371,7 +419,7 @@ export default function OvertimePlanPage() {
               memberTasks={memberTasks}
               tasks={tasks}
               canWrite={canWrite}
-              onChanged={reload}
+              onChanged={onSettingsChanged}
             />
           </>
         )}
@@ -384,6 +432,7 @@ export default function OvertimePlanPage() {
                 onChange={e => {
                   const v = e.target.value
                   setPreview(null)
+                  setPreviewCleared(false)
                   if (v === 'all') setScope({ kind: 'all' })
                   else if (v.startsWith('employee:')) setScope({ kind: 'employee', employee_id: v.slice(9) })
                   else setScope({ kind: 'project', project_id: v.slice(8) })
@@ -400,13 +449,20 @@ export default function OvertimePlanPage() {
               </select>
               <button onClick={() => runEngine(newSeed())} disabled={loading} style={primaryBtn}>{preview ? '다시 섞기' : '자동배정 실행'}</button>
               {preview && canWrite && (
-                <button data-testid="plan-save" onClick={saveDraft} disabled={busy || !partial?.canSave} style={{ ...darkBtn, opacity: busy || !partial?.canSave ? 0.5 : 1 }}>
+                <button data-testid="plan-save" onClick={saveDraft} disabled={busy || !partial?.canSave || !previewFresh} style={{ ...darkBtn, opacity: busy || !partial?.canSave || !previewFresh ? 0.5 : 1 }}>
                   {busy ? '저장 중...' : `초안 저장 (${partial?.drafts.length ?? 0}건)`}
                 </button>
               )}
-              {preview && <span data-testid="plan-seed" style={{ fontSize: 11, color: '#999' }}>배정번호(seed) {seed}</span>}
+              {preview && <span data-testid="plan-seed" style={{ fontSize: 11, color: '#999' }}>배정번호(seed) {preview.input.seed}</span>}
               <span style={{ fontSize: 11, color: '#999' }}>저장 전까지는 미리보기입니다. 기존 입력 기록은 바뀌지 않습니다.</span>
             </div>
+
+            {preview && !previewFresh && (
+              <Notice kind="error" text="미리보기 뒤에 설정이나 기존 기록이 바뀌어 이 결과는 저장할 수 없습니다. 자동배정을 다시 실행하세요." />
+            )}
+            {!preview && previewCleared && (
+              <Notice kind="info" text="설정이나 기존 기록·공휴일이 바뀌어 이전 미리보기를 지웠습니다. 자동배정을 다시 실행하세요." />
+            )}
 
             {!preview ? (
               <div style={{ padding: 40, textAlign: 'center', color: '#999', background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8, fontSize: 13 }}>
@@ -414,11 +470,11 @@ export default function OvertimePlanPage() {
               </div>
             ) : (
               <>
-                {partial && <PartialBox plan={partial} ok={preview.ok} empName={empName} />}
-                <IssueList result={preview} empName={empName} projName={projName} hideEmployees={partial?.excluded.map(x => x.employee_id) ?? []} />
+                {partial && <PartialBox plan={partial} ok={preview.result.ok} empName={empName} />}
+                <IssueList result={preview.result} empName={empName} projName={projName} hideEmployees={partial?.excluded.map(x => x.employee_id) ?? []} />
                 <AssignmentGrid days={days} holidays={holidayMap} rows={previewRows} projectOrder={projectOrder} />
                 <Legend projectOrder={projectOrder} projName={projName} />
-                <SummaryTable result={preview} empName={empName} />
+                <SummaryTable result={preview.result} empName={empName} />
               </>
             )}
           </>
@@ -448,8 +504,13 @@ export default function OvertimePlanPage() {
                       onConfirm={ids => callRpc('overtime_confirm_run', { p_run_id: run.id, p_employee_ids: ids }, '선택한 직원의 초안을 확정했습니다. 연장근무 기록에 반영되었습니다.')}
                     />
                     <button disabled={busy} onClick={() => { if (confirm('이 실행의 초안을 모두 확정할까요? 확정하면 연장근무 기록에 들어갑니다.')) callRpc('overtime_confirm_run', { p_run_id: run.id, p_employee_ids: null }, '초안을 모두 확정했습니다. 연장근무 기록에 반영되었습니다.') }} style={darkBtn}>전체 확정</button>
-                    <button disabled={busy} onClick={() => { if (confirm('남은 초안을 모두 버릴까요? (이미 확정된 기록은 그대로입니다)')) callRpc('overtime_discard_run', { p_run_id: run.id }, '남은 초안을 버렸습니다.') }} style={dangerBtn}>초안 버리기</button>
                   </>
+                )}
+                {/* 폐기는 남은 초안 수가 아니라 실행 상태로 보인다 — 칸을 모두 빼서 초안이 0건이어도 실행을 정리할 수 있게 */}
+                {canWrite && canDiscardRun(run) && (
+                  draftCountByRun(run.id, 'draft') > 0
+                    ? <button disabled={busy} onClick={() => { if (confirm('남은 초안을 모두 버릴까요? (이미 확정된 기록은 그대로입니다)')) callRpc('overtime_discard_run', { p_run_id: run.id }, '남은 초안을 버렸습니다.') }} style={dangerBtn}>초안 버리기</button>
+                    : <button disabled={busy} onClick={() => { if (confirm('남은 초안이 없는 실행입니다. 이 실행을 폐기할까요? (이미 확정된 기록은 그대로입니다)')) callRpc('overtime_discard_run', { p_run_id: run.id }, '실행을 정리했습니다.') }} style={dangerBtn}>실행 폐기</button>
                 )}
                 {/* 관리자 확정 취소 — 자동확정 기록을 지우고 초안(draft)으로 되돌린다. DB도 관리자만 허용 */}
                 {isAdmin && draftCountByRun(run.id, 'confirmed') > 0 && (

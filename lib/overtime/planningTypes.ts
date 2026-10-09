@@ -95,6 +95,8 @@ export interface AssignmentDraftInput {
   task_id: string
   time_type: AssignmentTimeType
   exception_reason?: string | null
+  /** 미리보기 당시 엔진이 본 공휴일 여부 — 저장 함수가 DB 공휴일과 다르면 OVERTIME_HOLIDAY_CHANGED로 거부 */
+  is_holiday?: boolean
 }
 
 /** overtime_save_assignment_run의 p_run */

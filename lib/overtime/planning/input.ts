@@ -12,8 +12,12 @@ import type { Employee, EmployeeTask, Project, ProjectMember, WorkRecord } from 
  * - 직원×프로젝트 업무: overtime_member_tasks 행이 0건이면 task_ids = null(그 직원 기본업무 전체)
  * - 프로젝트 대상기간 = overtime_projects.start_date~end_date(동기화가 eligibility 결과로 채움), 상태 '진행중'만 배정 가능
  * - 잠금 기록 = 기존 최종기록(수동·자동확정) 전부 + 이번 실행이 대체하지 않는 살아 있는 초안
- *   (잠기거나 수동 수정된 초안, 그리고 범위를 좁힌 재배정이면 범위 밖 초안) — 같은 날짜 중복을 엔진이 피하게
- * - 주 12시간은 급여기간 밖 같은 주 기록까지 봐야 하므로 records는 lockedRange() 범위로 읽어 넘긴다
+ *   (잠기거나 수동 수정된 초안, 범위를 좁힌 재배정이면 범위 밖 초안, 그리고 다른 급여기간 날짜의 초안)
+ *   — 같은 날짜 중복을 엔진이 피하게
+ * - 주 12시간은 급여기간 밖 같은 주 기록까지 봐야 하므로 records·drafts 모두 lockedRange() 범위로 읽어 넘긴다.
+ *   drafts는 실행(run)·급여기간 라벨과 상관없이 그 날짜 범위의 status='draft' 전부다 — DB 저장 함수가 주 12시간을
+ *   그렇게 세기 때문이다(앞 급여기간 실행의 10/19·10/20 초안도 10/21부터인 급여기간 첫 주에 들어간다).
+ *   월 목표는 엔진이 급여기간 안 날짜의 잠금만 더한다.
  */
 
 export type PlanningScope =
@@ -55,9 +59,18 @@ export function toPeriodLabel(year: number, month0: number): string {
   return `${year}-${String(month0 + 1).padStart(2, '0')}`
 }
 
-/** 이번 실행이 이 초안을 대체(superseded)하는가 — DB의 overtime_save_assignment_run과 같은 조건 */
-function supersededBy(scope: PlanningScope, d: PlanningRaw['drafts'][number]): boolean {
+/**
+ * 이번 실행을 저장하면 이 초안이 대체(superseded)되는가 — DB의 overtime_save_assignment_run과 같은 조건:
+ * status='draft' && 잠기지 않음 && 수동 수정 아님 && 날짜가 **이번** 급여기간 안 && 실행 범위 안
+ * (전체 = 모든 직원, 직원 = 그 직원, 프로젝트 = 그 프로젝트). 다른 급여기간 날짜의 초안은 절대 대체되지 않는다.
+ */
+export function supersededBy(
+  scope: PlanningScope,
+  period: { start: string; end: string },
+  d: Pick<PlanningRaw['drafts'][number], 'employee_id' | 'project_id' | 'work_date' | 'status' | 'locked' | 'manually_edited'>,
+): boolean {
   if (d.status !== 'draft' || d.locked || d.manually_edited) return false
+  if (d.work_date < period.start || d.work_date > period.end) return false
   if (scope.kind === 'all') return true
   if (scope.kind === 'employee') return d.employee_id === scope.employee_id
   return d.project_id === scope.project_id
@@ -111,7 +124,7 @@ export function buildAssignmentInput(raw: PlanningRaw): AssignmentInput {
         task_name: r.task_description, source: (r.source === 'auto' ? 'auto' : 'manual') as LockedRecordInput['source'],
       })),
     ...raw.drafts
-      .filter(d => empIds.has(d.employee_id) && d.status === 'draft' && !supersededBy(scope, d))
+      .filter(d => empIds.has(d.employee_id) && d.status === 'draft' && !supersededBy(scope, { start, end }, d))
       .map(d => ({
         employee_id: d.employee_id, project_id: d.project_id, work_date: d.work_date, hours: Number(d.hours),
         task_name: d.task_name, source: 'locked_draft' as const,

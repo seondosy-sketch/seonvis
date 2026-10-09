@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { runAssignment } from '../assign/engine'
 import { checkWeeklyCap, weekQueryRange, weeklyCapMessage } from '../weeklyCap'
 import { friendlyOvertimeError } from './errors'
-import { buildAssignmentInput, lockedRange, toPeriodLabel, type PlanningRaw } from './input'
+import { buildAssignmentInput, lockedRange, supersededBy, toPeriodLabel, type PlanningRaw } from './input'
 
 describe('weeklyCap — DB 트리거와 같은 규칙', () => {
   const recs = [
@@ -44,7 +44,14 @@ describe('friendlyOvertimeError — DB 원문을 그대로 보여주지 않는�
     ['OVERTIME_AUTO_RECORD_LOCKED', '확정 취소'],
     ['permission denied (admin only)', '관리자만'],
     ['new row violates row-level security policy', '권한이 없습니다'],
+    ['OVERTIME_HOLIDAY_CHANGED: 2026-11-03 공휴일 여부가 다름', '공휴일 정보가 바뀌었습니다'],
+    ['OVERTIME_HOLIDAYS_MISSING: 2027년 공휴일 데이터 없음', '공휴일 데이터가 없어'],
+    ['OVERTIME_EMPLOYEE_LINK_REQUIRED: 연결 안 된 주소록 2명 / 직원 1명', '관리자가 먼저 직원을 기술인 주소록과 연결'],
   ])('%s', (raw, part) => { expect(friendlyOvertimeError(raw)).toContain(part) })
+  it('새 코드도 DB 원문(날짜·숫자·직원 정보)을 내보내지 않는다', () => {
+    expect(friendlyOvertimeError('OVERTIME_HOLIDAY_CHANGED: 2026-11-03 공휴일 여부가 다름')).not.toContain('2026-11-03')
+    expect(friendlyOvertimeError('OVERTIME_EMPLOYEE_LINK_REQUIRED: 연결 안 된 주소록 2명 / 직원 1명')).not.toContain('2명')
+  })
   it('모르는 오류는 일반 문구(원문 노출 없음)', () => {
     const msg = friendlyOvertimeError('syntax error at or near "select"')
     expect(msg).not.toContain('syntax')
@@ -119,6 +126,57 @@ describe('buildAssignmentInput — DB 행 → 엔진 입력', () => {
     expect(r.issues.some(x => x.code === 'OVERTIME_MONTHLY_TARGET_MISSING' && x.employee_id === 'e2')).toBe(true)
     // 목표 12 − 급여기간 안 잠금 2(잠긴 초안). 10/19 기록 3h는 급여기간(10/21~) 밖이라 주 12시간에만 들어간다
     expect(r.assignments.filter(a => a.employee_id === 'e1').reduce((s, a) => s + a.hours, 0)).toBe(12 - 2)
+  })
+
+  it('같은 날짜 조건: 이번 급여기간 밖 초안은 범위·잠금과 상관없이 대체되지 않는다', () => {
+    const period = { start: '2026-10-21', end: '2026-11-20' }
+    const d = { employee_id: 'e1', project_id: 'p1', status: 'draft' as const, locked: false, manually_edited: false }
+    expect(supersededBy({ kind: 'all' }, period, { ...d, work_date: '2026-10-21' })).toBe(true)
+    expect(supersededBy({ kind: 'all' }, period, { ...d, work_date: '2026-11-20' })).toBe(true)
+    expect(supersededBy({ kind: 'all' }, period, { ...d, work_date: '2026-10-20' })).toBe(false)
+    expect(supersededBy({ kind: 'all' }, period, { ...d, work_date: '2026-11-21' })).toBe(false)
+    expect(supersededBy({ kind: 'employee', employee_id: 'e1' }, period, { ...d, work_date: '2026-10-19' })).toBe(false)
+    expect(supersededBy({ kind: 'employee', employee_id: 'e2' }, period, { ...d, work_date: '2026-10-22' })).toBe(false)
+    expect(supersededBy({ kind: 'project', project_id: 'p1' }, period, { ...d, work_date: '2026-10-22' })).toBe(true)
+    expect(supersededBy({ kind: 'project', project_id: 'p2' }, period, { ...d, work_date: '2026-10-22' })).toBe(false)
+    expect(supersededBy({ kind: 'all' }, period, { ...d, work_date: '2026-10-22', locked: true })).toBe(false)
+    expect(supersededBy({ kind: 'all' }, period, { ...d, work_date: '2026-10-22', manually_edited: true })).toBe(false)
+    expect(supersededBy({ kind: 'all' }, period, { ...d, work_date: '2026-10-22', status: 'confirmed' })).toBe(false)
+  })
+
+  it('회귀: 앞 급여기간(2026-10) 실행의 10/19·10/20 초안은 2026-11 실행의 잠금 입력이고, 주 합계가 12시간을 넘지 않는다', () => {
+    const raw = base({
+      employees: [{ id: 'e1', name: '갑', position: '', is_active: true, sort_order: 1 }],
+      targets: [{ employee_id: 'e1', target_hours: 40 }],
+      members: [{ id: 'm1', project_id: 'p1', employee_id: 'e1' }],
+      memberTasks: [],
+      tasks: [{ id: 't1', employee_id: 'e1', task_name: '검토', sort_order: 10 }],
+      records: [],
+      drafts: [
+        // 2026-10 급여기간(9/21~10/20) 실행의 초안 — 10/19(월)~10/25(일) 주에 걸친다
+        { employee_id: 'e1', project_id: 'p1', work_date: '2026-10-19', hours: 3, task_name: '검토', status: 'draft', locked: false, manually_edited: false },
+        { employee_id: 'e1', project_id: 'p1', work_date: '2026-10-20', hours: 3, task_name: '검토', status: 'draft', locked: false, manually_edited: false },
+        // 이번 급여기간 안의 잠기지 않은 초안 — 저장하면 대체되므로 잠금에 넣지 않는다
+        { employee_id: 'e1', project_id: 'p1', work_date: '2026-10-22', hours: 3, task_name: '검토', status: 'draft', locked: false, manually_edited: false },
+      ],
+    })
+    const input = buildAssignmentInput(raw)
+    expect(input.locked_records.map(l => [l.work_date, l.hours, l.source])).toEqual([
+      ['2026-10-19', 3, 'locked_draft'],
+      ['2026-10-20', 3, 'locked_draft'],
+    ])
+
+    const r = runAssignment(input)
+    expect(r.violations).toEqual([])
+    const weekNew = r.assignments
+      .filter(a => a.employee_id === 'e1' && a.work_date >= '2026-10-19' && a.work_date <= '2026-10-25')
+      .reduce((s, a) => s + a.hours, 0)
+    expect(6 + weekNew).toBeLessThanOrEqual(12)
+    const week = r.employees[0].weekly.find(w => w.week_start === '2026-10-19')
+    expect(week?.locked_hours).toBe(6)
+    expect(week?.total_hours).toBeLessThanOrEqual(12)
+    // 앞 급여기간 날짜의 잠금은 이번 급여기간 월 목표 잠금시간에 들어가지 않는다
+    expect(r.employees[0].locked_hours).toBe(0)
   })
 
   it('잠금 범위·라벨 헬퍼', () => {

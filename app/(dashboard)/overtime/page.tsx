@@ -8,6 +8,7 @@ import { DailySummary, Employee, EmployeeTask, Project, ProjectMember, WorkRecor
 import { currentPayPeriod, payPeriodDays, payPeriodRange, summarizeByEmployeeAndDate, summaryKey } from '@/lib/overtime/summary'
 import { requestProjectSync } from '@/lib/overtime/sync'
 import { syncTeamEmployees } from '@/lib/overtime/teamSync'
+import { friendlyOvertimeError } from '@/lib/overtime/planning/errors'
 import { loadProjectNumbers, sortOvertimeProjects } from '@/lib/overtime/projectOrder'
 import { useMenuPermission } from '@/app/components/PermissionsProvider'
 import MonthGrid from './_components/MonthGrid'
@@ -33,6 +34,8 @@ export default function OvertimePage() {
   const [employees, setEmployees] = useState<Employee[]>([])
   const [employeesLoading, setEmployeesLoading] = useState(true)
   const [employeesError, setEmployeesError] = useState<string | null>(null)
+  // 직원 명단 동기화가 연결 확인 필요로 멈췄을 때의 안내(명단은 기존 그대로 보인다)
+  const [teamSyncNotice, setTeamSyncNotice] = useState<string | null>(null)
 
   const [summaries, setSummaries] = useState<Map<string, DailySummary>>(new Map())
   const [records, setRecords] = useState<WorkRecord[]>([])
@@ -56,7 +59,8 @@ export default function OvertimePage() {
   const loadEmployees = useCallback(async () => {
     setEmployeesLoading(true)
     // 직원 명단의 원본은 기술인 주소록(소속 '미래사업팀') — 읽기 전에 맞춰 넣는다
-    await syncTeamEmployees(supabase)
+    const sync = await syncTeamEmployees(supabase)
+    setTeamSyncNotice(sync.ok ? null : sync.linkRequired ? friendlyOvertimeError('OVERTIME_EMPLOYEE_LINK_REQUIRED') : null)
     // 기본업무내용(employeeTasks)은 팝오버 입력창의 업무내용 드롭다운 선택지 — 직원과 함께 불러온다
     const [empRes, taskRes] = await Promise.all([
       supabase.from('overtime_employees').select('*').eq('is_active', true).order('sort_order', { ascending: true }),
@@ -170,6 +174,12 @@ export default function OvertimePage() {
             <button onClick={() => setView('employee')} style={view === 'employee' ? viewBtnActive : viewBtn}>직원별</button>
           </div>
         </div>
+
+        {teamSyncNotice && (
+          <div style={{ marginBottom: 12, padding: '10px 14px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, fontSize: 12, color: '#92400e' }}>
+            {teamSyncNotice}
+          </div>
+        )}
 
         {(employeesError || recordsError) && (
           <div style={{ marginBottom: 12, padding: '10px 14px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, fontSize: 12, color: '#b91c1c' }}>
