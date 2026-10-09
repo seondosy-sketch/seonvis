@@ -405,7 +405,7 @@ describe('무작위 시나리오 — 어떤 입력에서도 강제조건 위반�
       expect(issueKeys).toEqual(singleKeys)
       for (const x of r.issues.filter(y => y.code === 'SINGLE_DAY_PROJECT_BLOCK')) {
         expect(x.severity).toBe('info')
-        expect(['PERIOD_TOO_SHORT', 'TARGET_TOO_SMALL', 'NOT_ENOUGH_DAYS', 'CAPACITY_OR_CONFLICT']).toContain(x.detail?.reason)
+        expect(['PERIOD_TOO_SHORT', 'LOCKED_OR_WEEKLY_CAP', 'TARGET_TOO_SMALL', 'NOT_ENOUGH_DAYS', 'OTHER_PROJECTS']).toContain(x.detail?.reason)
       }
       for (const s of r.employees) {
         const e = employees.find(x => x.employee_id === s.employee_id)!
@@ -601,12 +601,12 @@ describe('프로젝트별 최소 2일 (마지막 보정)', () => {
     }
   })
 
-  it('일수가 모자라면 우선순위 높은 프로젝트가 2일, 나머지는 1일 블록 + 정확한 정보성 issue', () => {
-    // 10h → 2+2+3+3 = 4일, 프로젝트 3개 → pA 2일, pB·pC 1일
+  it('일수가 모자라면 1일 블록을 가장 적게 — 우선순위 높은 프로젝트부터 2일, 남는 프로젝트만 1일 + 정확한 정보성 issue', () => {
+    // 10h, 프로젝트 3개(모두 1일 이상 — 기존 규칙). 4일(2+2+3+3)이면 1일 블록 2개, 5일(2h×5)이면 1개.
+    // 1일 블록 최소가 2·3시간 혼합보다 먼저다(독립 검토 MAJOR 2) → pA·pB 2일, pC 1일(목표로 3개 모두 2일은 불가)
     const r = runAssignment(input({ employees: [emp('e1', 10, ['pA', 'pB', 'pC'])], projects: [pA, pB, pC] }))
-    expect([daysOf(r, 'pA'), daysOf(r, 'pB'), daysOf(r, 'pC')]).toEqual([2, 1, 1])
+    expect([daysOf(r, 'pA'), daysOf(r, 'pB'), daysOf(r, 'pC')]).toEqual([2, 2, 1])
     expect(singles(r)).toEqual([
-      { code: 'SINGLE_DAY_PROJECT_BLOCK', severity: 'info', message: expect.stringContaining('1일만'), employee_id: 'e1', project_id: 'pB', detail: { assigned_days: 1, reason: 'NOT_ENOUGH_DAYS' } },
       { code: 'SINGLE_DAY_PROJECT_BLOCK', severity: 'info', message: expect.stringContaining('1일만'), employee_id: 'e1', project_id: 'pC', detail: { assigned_days: 1, reason: 'NOT_ENOUGH_DAYS' } },
     ])
     expect(r.ok).toBe(true)
@@ -621,7 +621,8 @@ describe('프로젝트별 최소 2일 (마지막 보정)', () => {
       locked_records: [lock('e1', '2026-10-05', 10, 'pOther')],
     }))
     expect(daysOf(r, 'pB')).toBe(1)
-    expect(singles(r).find(i => i.project_id === 'pB')?.detail).toEqual({ assigned_days: 1, reason: 'CAPACITY_OR_CONFLICT' })
+    // 사유 코드 세분화: 이전 CAPACITY_OR_CONFLICT(주 한도·잠금·앞선 블록을 한데 묶음) → 실제 원인인 잠금·주 한도
+    expect(singles(r).find(i => i.project_id === 'pB')?.detail).toEqual({ assigned_days: 1, reason: 'LOCKED_OR_WEEKLY_CAP' })
     expect(sum(of(r))).toBe(22 - 10) // 목표 22 − 급여기간 잠금 10 = 12, 정확히
     expect(r.employees[0].weekly.find(w => w.week_start === '2026-10-05')!.total_hours).toBeLessThanOrEqual(12)
     expect(of(r).every(a => a.project_id !== 'pB' || (a.work_date >= '2026-10-05' && a.work_date <= '2026-10-09'))).toBe(true)

@@ -1,6 +1,7 @@
 import { TIME_TYPE_PRESETS } from '../time'
-import { eachDate, isWeekend, missingHolidayYears, weekStartOf } from './calendar'
+import { addDays, eachDate, isWeekend, missingHolidayYears, weekStartOf } from './calendar'
 import {
+  WEEKEND_REASONS,
   WEEKLY_CAP_HOURS,
   type AssignmentEmployeeInput,
   type AssignmentInput,
@@ -124,26 +125,133 @@ export function validateSchedule(input: AssignmentInput, assignments: readonly G
     }
   }
 
-  // ── 평일 우선: 같은 프로젝트 기간 안에 옮길 수 있는 평일이 있었는데 주말·공휴일을 썼는가 ──
-  // 다른 프로젝트의 평일은 대안으로 보지 않는다(프로젝트별 시간 배분을 바꾸지 않는다).
-  const assignedDates = new Set(assignments.map(a => `${a.employee_id}|${a.work_date}`))
-  for (const a of assignments) {
-    if (!isWeekend(a.work_date) && !holidayNames.has(a.work_date)) continue
-    const project = projects.get(a.project_id)
-    if (!employees.has(a.employee_id) || !assignable(project)) continue
-    for (const c of eachDate(period.start, period.end)) {
-      if (isWeekend(c) || holidayNames.has(c)) continue
-      const key = `${a.employee_id}|${c}`
-      if (lockedDates.has(key) || assignedDates.has(key)) continue
-      if (c < project.period_start! || c > project.period_end!) continue
-      const sameWeek = weekStartOf(c) === weekStartOf(a.work_date)
-      const total = (weekTotal.get(`${a.employee_id}|${weekStartOf(c)}`) ?? 0) - (sameWeek ? a.hours : 0)
-      if (total + a.hours <= WEEKLY_CAP_HOURS + 1e-9) {
-        out.push({
-          code: 'UNNECESSARY_WEEKEND', message: '옮길 수 있는 평일이 있는데 주말·공휴일에 배정',
-          employee_id: a.employee_id, project_id: a.project_id, date: a.work_date, actual: c,
+  // ── 직원별 배치 품질 — 최종 결과와 입력만으로 다시 계산한다(엔진의 탐색 상태를 쓰지 않음) ──
+  // 왕복은 그 자체로 위반. 나머지는 "그 자리에서 바꾸면 엔진의 비교 기준상 확실히 더 좋은 배치가 나온다"일 때만
+  // 위반으로 본다 — 정상 결과를 위반으로 잘못 잡지 않기 위해서다.
+  const isOff = (d: string) => isWeekend(d) || holidayNames.has(d)
+  const byEmployee = new Map<string, GeneratedAssignment[]>()
+  for (const a of assignments) byEmployee.set(a.employee_id, [...(byEmployee.get(a.employee_id) ?? []), a])
+  for (const [employee_id, mineRaw] of byEmployee) {
+    if (!employees.has(employee_id)) continue
+    const mine = [...mineRaw].sort((x, y) => (x.work_date < y.work_date ? -1 : x.work_date > y.work_date ? 1 : 0))
+    const lockedOf = (d: string) => lockedDates.has(`${employee_id}|${d}`)
+    const weekHours = (w: string) => weekTotal.get(`${employee_id}|${w}`) ?? 0
+    const ownerOf = new Map(mine.map(a => [a.work_date, a]))
+    const taken = (d: string) => ownerOf.has(d)
+    const windowOf = (pid: string) => {
+      const p = projects.get(pid)
+      if (!assignable(p)) return null
+      return { start: p.period_start! > period.start ? p.period_start! : period.start, end: p.period_end! < period.end ? p.period_end! : period.end }
+    }
+    const workdaysIn = (start: string, end: string) => (start > end ? [] : eachDate(start, end).filter(d => !isOff(d)))
+    const datesOf = (pid: string) => mine.filter(a => a.project_id === pid).map(a => a.work_date).sort()
+    /** lo < d < hi 인 다른 프로젝트 배정이 있는가(skip 날짜는 빼고) */
+    const othersBetween = (pid: string, lo: string, hi: string, skip: string | null = null) =>
+      mine.some(o => o.project_id !== pid && o.work_date !== skip && o.work_date > lo && o.work_date < hi)
+    /** 블록 끊김 수 — 같은 프로젝트의 이웃한 두 날짜 사이에 쓰지 않은(잠금 아닌) 평일이 있으면 1 */
+    const gapsOf = (dates: readonly string[], isTaken: (d: string) => boolean) => {
+      const ds = [...dates].sort()
+      let g = 0
+      for (let i = 1; i < ds.length; i++) {
+        if (workdaysIn(addDays(ds[i - 1], 1), addDays(ds[i], -1)).some(c => !lockedOf(c) && !isTaken(c))) g++
+      }
+      return g
+    }
+    const pids = [...new Set(mine.map(a => a.project_id))]
+
+    // 왕복(A→B→A): 날짜순으로 이미 끝난 프로젝트가 다시 나오면 위반
+    {
+      const started = new Set<string>()
+      let prev: string | null = null
+      for (const a of mine) {
+        if (a.project_id !== prev && started.has(a.project_id)) {
+          out.push({ code: 'PROJECT_REVISIT', message: '끝난 프로젝트 블록이 다른 프로젝트 뒤에 다시 시작됨(A→B→A)', employee_id, project_id: a.project_id, date: a.work_date })
+        }
+        started.add(a.project_id)
+        prev = a.project_id
+      }
+    }
+
+    for (const a of mine) {
+      const win = windowOf(a.project_id)
+      if (!win || !isOff(a.work_date)) continue
+      const rest = datesOf(a.project_id).filter(d => d !== a.work_date)
+      // 평일 우선: 같은 프로젝트 기간의 빈 평일로 옮길 수 있는데(주 12시간 유지, 왕복 없음) 주말·공휴일을 씀.
+      // 다른 프로젝트의 평일은 대안으로 보지 않는다(프로젝트별 시간 배분을 바꾸지 않는다).
+      let other = false
+      let cap = false
+      let movable: string | null = null
+      for (const c of workdaysIn(win.start, win.end)) {
+        if (lockedOf(c)) continue
+        const owner = ownerOf.get(c)
+        if (owner) {
+          if (owner.project_id !== a.project_id) other = true
+          continue
+        }
+        const same = weekStartOf(c) === weekStartOf(a.work_date)
+        if (weekHours(weekStartOf(c)) - (same ? a.hours : 0) + a.hours > WEEKLY_CAP_HOURS + 1e-9) { cap = true; continue }
+        const after = [...rest, c].sort()
+        if (othersBetween(a.project_id, after[0], after[after.length - 1], a.work_date)) { other = true; continue }
+        movable ??= c
+      }
+      if (movable) {
+        out.push({ code: 'UNNECESSARY_WEEKEND', message: '옮길 수 있는 평일이 있는데 주말·공휴일에 배정', employee_id, project_id: a.project_id, date: a.work_date, actual: movable })
+        continue
+      }
+      // 예외사유 = 실제 원인: 다른 프로젝트 배정·왕복 → 주 12시간 → 평일 소진(종료일 = 제출일이면 제출일까지)
+      const p = projects.get(a.project_id)!
+      const expected = other
+        ? WEEKEND_REASONS.otherProject
+        : cap
+          ? WEEKEND_REASONS.weeklyCap
+          : p.period_end === p.submit_date ? WEEKEND_REASONS.untilSubmit : WEEKEND_REASONS.periodShort
+      if (a.exception_reason && a.exception_reason !== expected) {
+        out.push({ code: 'EXCEPTION_REASON_MISMATCH', message: '주말·공휴일 사유가 실제 원인과 다름', employee_id, project_id: a.project_id, date: a.work_date, actual: a.exception_reason, limit: expected })
+      }
+    }
+
+    for (const pid of pids) {
+      const win = windowOf(pid)
+      if (!win) continue
+      const ds = datesOf(pid)
+      // 블록 끊김: 양 끝 날짜 하나를 블록 안 빈 평일로 옮기면(주 12시간 유지) 끊김이 줄어드는데 그대로 둠
+      if (ds.length >= 2 && !othersBetween(pid, ds[0], ds[ds.length - 1])) {
+        const before = gapsOf(ds, taken)
+        if (before > 0) {
+          const holes = workdaysIn(addDays(ds[0], 1), addDays(ds[ds.length - 1], -1)).filter(c => !lockedOf(c) && !taken(c))
+          const better = [ds[0], ds[ds.length - 1]].some(edge => holes.some(h => {
+            const hours = ownerOf.get(edge)!.hours
+            const same = weekStartOf(h) === weekStartOf(edge)
+            if (weekHours(weekStartOf(h)) - (same ? hours : 0) + hours > WEEKLY_CAP_HOURS + 1e-9) return false
+            const takenAfter = (d: string) => (d === edge ? false : d === h ? true : taken(d))
+            return gapsOf([...ds.filter(d => d !== edge), h], takenAfter) < before
+          }))
+          if (better) out.push({ code: 'PROJECT_BLOCK_SPLIT', message: '블록 안 빈 평일로 옮기면 덜 끊기는데 프로젝트 블록이 끊겨 있음', employee_id, project_id: pid, date: ds[0], actual: before })
+        }
+      }
+      // 피할 수 있었던 1일 블록: 1일만 받은 프로젝트 옆(사이에 다른 배정 없음) 빈 평일 c에 하루를 더 줄 수 있었다 —
+      //   (a) 3시간 배정 2건을 2시간으로 줄여 생긴 2시간으로, 또는 (b) 3일 이상 받은 다른 프로젝트의 양 끝 하루를 옮겨서.
+      //   총 시간·주말 수·받은 프로젝트·다른 프로젝트의 2일 이상은 그대로 두고 1일 블록만 하나 준다.
+      if (ds.length === 1) {
+        const d0 = ds[0]
+        const near = workdaysIn(win.start, win.end).filter(c => !lockedOf(c) && !taken(c) &&
+          !othersBetween(pid, c < d0 ? c : d0, c < d0 ? d0 : c))
+        const threes = mine.filter(o => o.hours === 3)
+        const donors = pids.filter(q => q !== pid && datesOf(q).length >= 3).flatMap(q => {
+          const qd = datesOf(q)
+          return [ownerOf.get(qd[0])!, ownerOf.get(qd[qd.length - 1])!]
         })
-        break
+        const possible = near.some(c => {
+          const w = weekStartOf(c)
+          if (threes.length >= 2) {
+            // 줄일 3시간 2건은 c와 같은 주부터 고른다(그 주 여유가 생김)
+            const freed = [...threes].sort((x, y) => Number(weekStartOf(y.work_date) === w) - Number(weekStartOf(x.work_date) === w))
+              .slice(0, 2).filter(o => weekStartOf(o.work_date) === w).length
+            if (weekHours(w) - freed + 2 <= WEEKLY_CAP_HOURS + 1e-9) return true
+          }
+          return donors.some(o => weekHours(w) - (weekStartOf(o.work_date) === w ? o.hours : 0) + o.hours <= WEEKLY_CAP_HOURS + 1e-9)
+        })
+        if (possible) out.push({ code: 'AVOIDABLE_SINGLE_DAY', message: '총 시간·주말 수를 바꾸지 않고 2일을 줄 수 있었는데 1일 블록', employee_id, project_id: pid, date: d0 })
       }
     }
   }

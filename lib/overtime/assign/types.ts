@@ -7,10 +7,35 @@
  * 설계: docs/overtime-planning-db.md, 규칙: docs/overtime-assign-engine.md
  */
 
-export const ASSIGNMENT_RULE_VERSION = 'overtime-assign/1'
+/** 배정 규칙 버전 — 실행 기록에 seed와 함께 남겨 재현 근거로 쓴다. 2: 왕복 금지·평일 우선·최소 2일을 정확 탐색(search.ts)으로 */
+export const ASSIGNMENT_RULE_VERSION = 'overtime-assign/2'
 
 /** 직원 1명의 주간(월~일) 연장근무 한도 — 잠금 기록 포함, 모든 프로젝트 합산 */
 export const WEEKLY_CAP_HOURS = 12
+
+/**
+ * 주말·공휴일 배정 사유 — 최종 배치에서 그 프로젝트 기간의 다른 평일이 왜 안 됐는지로 정한다(엔진·검증 공통 문구).
+ *   otherProject: 다른 프로젝트가 쓰고 있거나, 비어 있어도 옮기면 다른 프로젝트 블록과 순서가 섞인다(왕복)
+ *   weeklyCap:    비어 있지만 그 주 합계가 12시간을 넘는다
+ *   untilSubmit / periodShort: 그 프로젝트 기간 평일이 모두 이 프로젝트 배정·잠금일이다(종료일 = 제출일이면 untilSubmit)
+ */
+export const WEEKEND_REASONS = {
+  otherProject: '같은 기간 다른 프로젝트 배정으로 평일 배정 불가',
+  weeklyCap: '주간 12시간 제한으로 평일 배정 불가',
+  untilSubmit: '제출일까지 평일 배정 가능시간 부족',
+  periodShort: '프로젝트 유효기간 내 평일 부족',
+} as const
+
+/**
+ * 1일 블록(SINGLE_DAY_PROJECT_BLOCK) 사유 — 확인 순서대로:
+ *   PERIOD_TOO_SHORT      프로젝트 기간(급여기간 안) 평일이 1일 이하
+ *   LOCKED_OR_WEEKLY_CAP  평일은 2일 이상이지만 잠금일·주 일수 한도를 빼면 1일 이하
+ *   TARGET_TOO_SMALL      직원 전체 신규 배정이 하루뿐(남은 목표 2·3시간)
+ *   NOT_ENOUGH_DAYS       배정 일수 < 2 × 배정받은 프로젝트 수 — 목표시간으로는 모든 프로젝트에 2일씩 줄 수 없다
+ *                         (여력이 있으면 참여 프로젝트마다 최소 1일이 먼저라 우선순위가 낮은 프로젝트가 1일)
+ *   OTHER_PROJECTS        그 밖 — 다른 프로젝트와 날짜·주 한도를 나눠 쓰느라 2일을 줄 수 없었다
+ */
+export type SingleDayReason = 'PERIOD_TOO_SHORT' | 'LOCKED_OR_WEEKLY_CAP' | 'TARGET_TOO_SMALL' | 'NOT_ENOUGH_DAYS' | 'OTHER_PROJECTS'
 
 export interface AssignmentPeriod {
   label: string   // 'YYYY-MM' = 전월 21일 ~ 당월 20일
@@ -173,6 +198,7 @@ export type AssignmentIssueCode =
   | 'WEEKEND_OR_HOLIDAY_USED'
   | 'TASKS_PARTIALLY_USED'
   | 'SINGLE_DAY_PROJECT_BLOCK'
+  | 'TOO_MANY_PROJECTS'
   | 'VALIDATION_FAILED'
 
 export type IssueSeverity = 'error' | 'warning' | 'info'
@@ -208,6 +234,10 @@ export type ViolationCode =
   | 'EXCEPTION_REASON_MISSING'
   | 'EXCEPTION_REASON_UNEXPECTED'
   | 'UNNECESSARY_WEEKEND'
+  | 'EXCEPTION_REASON_MISMATCH'
+  | 'PROJECT_REVISIT'
+  | 'PROJECT_BLOCK_SPLIT'
+  | 'AVOIDABLE_SINGLE_DAY'
 
 /** validateSchedule 결과 1건 — 어떤 규칙을 누가 어디서 얼마나 어겼는지 */
 export interface ScheduleViolation {

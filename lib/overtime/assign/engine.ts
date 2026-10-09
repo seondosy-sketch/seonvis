@@ -4,10 +4,12 @@ import { TIME_TYPE_PRESETS } from '../time'
 import { buildCalendar, eachDate, missingHolidayYears, toEpochDay, weekStartOf } from './calendar'
 import { evaluateContinuity } from './continuity'
 import { weeklyLoadSpread } from './distribution'
-import { distributeWeekHours, maxRepresentable, preferredCompositions } from './hours'
-import { createRng, deriveSeed, type Rng } from './rng'
+import { distributeWeekHours, maxRepresentable } from './hours'
+import { createRng, deriveSeed } from './rng'
+import { searchSchedule, type SearchContext } from './search'
 import { validateSchedule } from './validate'
 import {
+  WEEKEND_REASONS,
   WEEKLY_CAP_HOURS,
   type AssignmentEmployeeInput,
   type AssignmentInput,
@@ -20,6 +22,7 @@ import {
   type EmployeeSummary,
   type GeneratedAssignment,
   type ProjectSummary,
+  type SingleDayReason,
 } from './types'
 
 /**
@@ -29,22 +32,24 @@ import {
  *   1. 차단 검사: 비활성, 월 목표 미입력, 목표 < 잠금 → 신규 0건
  *   2. 배정 목표 T = 2·3시간으로 만들 수 있는 최대값(목표 − 급여기간 잠금, 가용 날짜·주 한도로 상한)
  *   3. 배정 가능한 프로젝트를 제출일 우선순위로 정렬
- *   4. T의 2·3시간 조합 후보(혼합 → 개수 차이 최소 → 일수 적음)마다 일수를 프로젝트에 나누고 날짜를 놓아 본다:
- *      - 일수 배분: 각 프로젝트 최소 1일 → 가능하면 최소 2일(평일 2일 이상 있는 프로젝트, 우선순위 순)
- *        → 남는 일수는 우선순위 순으로 각 프로젝트의 평일까지 → 그래도 남으면 주말·공휴일
- *      - 평일 블록: 우선순위(=시간) 순서로 프로젝트마다 연속 블록 1개, 남는 공간을 블록 사이에 고르게 나눠 위치를 분산
- *      - 모자라는 일수만 그 프로젝트 안의 평일 → 주말·공휴일에서 블록 가까운 날로 채움
- *      주말·공휴일을 가장 적게 쓰는 후보를, 같으면 조합 선호 순서가 앞선 후보를 고른다. 안 되면 T를 1씩 낮춘다.
+ *   4. 날짜·프로젝트 배치(search.ts): 날짜를 시간순으로 훑는 정확 탐색. 한 번 끝난 프로젝트는 다시 시작하지 않아
+ *      A→B→A 왕복이 구조적으로 없다. 비교 순서: 주말·공휴일 최소 → 피할 수 있었던 1일 블록 최소 → 2일 이상 받은
+ *      프로젝트 최대 → 받은 프로젝트 최대(제출일 우선) → 블록 끊김 최소 → 2·3시간 혼합 → 개수 차이 → 일수 적음
+ *      → 남는 일수는 제출일 빠른 프로젝트 → 제출일 순서대로 블록 → 고른 간격·주간 분산 → seed.
+ *      T를 만들 수 없으면 T를 1씩 낮춘다.
  *   5. 주별 2·3시간 배분: 2시간을 깔고 남는 1시간씩을 (잠금+배정) 합계가 가장 작은 주부터 → 합계 정확, 주간 분산
- *   6. 주말·공휴일 배정을 같은 프로젝트 기간의 평일로 옮길 수 있으면 옮김(프로젝트는 바꾸지 않음)
+ *   6. 주말·공휴일 배정을 같은 프로젝트 기간의 평일로 옮길 수 있으면 옮김(프로젝트는 바꾸지 않음, 왕복 금지 — 안전장치)
+ *      주말·공휴일 사유는 최종 배치의 사실(다른 프로젝트·주 한도·평일 소진)로 정한다
  *   7. 프로젝트 블록 안에서 업무를 연속 하위 블록으로 나눔(일수 < 업무 수면 우선순위 높은 업무만)
- *      1일 블록이 생기면 SINGLE_DAY_PROJECT_BLOCK(정보)으로 사유를 알린다
+ *      1일 블록이 남으면 SINGLE_DAY_PROJECT_BLOCK(정보)으로 실제 사유를 알린다
  *   8. validateSchedule로 모든 강제조건을 독립 재검사
- * 난수(seed)는 분산 점수까지 같은 블록 위치 고르기, 주 안의 3시간 날짜에만 쓴다. 업무는 sort_order → 입력 배열
+ * 난수(seed)는 위 비교가 모두 같은 배치 고르기, 주 안의 3시간 날짜에만 쓴다. 업무는 sort_order → 입력 배열
  * 순서로 완전히 정해지므로 seed가 업무 선택·순서를 바꾸지 않는다.
  */
 
 const EPS = 1e-9
+/** 직원 1명당 정확 탐색에 넣는 프로젝트 수 상한(제출일 우선순위 순). 넘는 프로젝트는 TOO_MANY_PROJECTS로 알린다. */
+export const MAX_SEARCH_PROJECTS = 8
 
 interface EligibleProject {
   project: AssignmentProjectInput
@@ -80,7 +85,8 @@ const isWorkday = (d: CalendarDay) => !d.is_weekend && !d.is_holiday
 
 /**
  * 주말·공휴일 배정을 **같은 프로젝트** 기간 안의 평일로 옮길 수 있으면 옮긴다(평일 우선).
- * 옮길 평일 조건: 잠금·기존 배정이 없고, 그 주 합계(잠금 포함) + 시간 ≤ 12. 블록에 가까운 날을 고른다.
+ * 옮길 평일 조건: 잠금·기존 배정이 없고, 그 주 합계(잠금 포함) + 시간 ≤ 12, 옮긴 뒤 왕복(A→B→A)이 생기지 않음.
+ * 블록에 가까운 날을 고른다. (엔진은 search.ts가 이미 주말을 최소로 쓰므로 여기서 옮길 것이 없어야 한다 — 안전장치)
  * 다른 프로젝트의 평일로는 옮기지 않는다 — 프로젝트별 시간 배분을 바꾸지 않기 위해.
  */
 export function relocateWeekendsWithinProject(params: {
@@ -110,6 +116,11 @@ export function relocateWeekendsWithinProject(params: {
       for (const d of params.days) {
         if (!isWorkday(d) || params.lockedDates.has(d.date) || plan.has(d.date)) continue
         if (d.date < win.start || d.date > win.end) continue
+        // 옮긴 뒤 이 프로젝트 날짜들 사이에 다른 프로젝트 배정이 끼면(A→B→A) 옮기지 않는다
+        const span = [...others.map(x => x), toEpochDay(d.date)]
+        const lo = Math.min(...span)
+        const hi = Math.max(...span)
+        if ([...plan].some(([od, op]) => od !== date && op.projectId !== projectId && toEpochDay(od) > lo && toEpochDay(od) < hi)) continue
         const weekHours = (weekTotal.get(d.week_start) ?? 0) - (d.week_start === src.week_start ? hours : 0)
         if (weekHours + hours > WEEKLY_CAP_HOURS + EPS) continue
         const dist = others.length > 0 ? Math.min(...others.map(x => Math.abs(x - toEpochDay(d.date)))) : 0
@@ -388,19 +399,19 @@ function planEmployee(
 
   // 이 직원이 쓸 수 있는 날짜: 급여기간 안, 잠금 아님, 어떤 배정 가능 프로젝트의 기간 안
   const available = days.filter(d => !lockedDates.has(d.date) && eligible.some(ep => inWindow(ep, d.date)))
-  const weekdayList = available.filter(isWorkday).map(d => d.date)          // 연속성은 이 목록의 인덱스로 판단
+  const weekdayList = available.filter(isWorkday).map(d => d.date)          // 고른 간격 목표 위치는 이 목록의 인덱스
   const weekendList = available.filter(d => !isWorkday(d)).map(d => d.date)
   const capWd = new Map(eligible.map(ep => [pidOf(ep), weekdayList.filter(d => inWindow(ep, d)).length]))
   const capWe = new Map(eligible.map(ep => [pidOf(ep), weekendList.filter(d => inWindow(ep, d)).length]))
-
-  /** 고른 날짜들로 만들 수 있는 최대 시간 = Σ주 min(3 × 일수, 주 한도) */
-  const capacityOf = (dates: Iterable<string>) => {
-    const n = new Map<string, number>()
-    for (const d of dates) n.set(weekOfDate(d), (n.get(weekOfDate(d)) ?? 0) + 1)
-    let u = 0
-    for (const [w, k] of n) u += Math.min(3 * k, capH(w))
-    return u
+  /** 다른 프로젝트는 무시하고 잠금일·주 일수 한도만 봤을 때 그 프로젝트 기간에 쓸 수 있는 평일 수 */
+  const usableWeekdays = (ep: EligibleProject) => {
+    const perWeek = new Map<string, number>()
+    for (const d of weekdayList) if (inWindow(ep, d)) perWeek.set(weekOfDate(d), (perWeek.get(weekOfDate(d)) ?? 0) + 1)
+    let n = 0
+    for (const [w, k] of perWeek) n += Math.min(k, dayLimit(w))
+    return n
   }
+
   // 상한: 주마다 ⌊한도/2⌋일까지 쓴다고 했을 때 만들 수 있는 최대 시간
   const upperBound = (() => {
     const n = new Map<string, number>()
@@ -410,210 +421,24 @@ function planEmployee(
     return u
   })()
 
-  /**
-   * 일수 D를 프로젝트에 배분 (우선순위 순):
-   *   1) 각 프로젝트 최소 1일 — 일수가 프로젝트 수보다 적으면 제출일 빠른 프로젝트부터
-   *   2) 가능하면 최소 2일 — 프로젝트 기간에 평일이 2일 이상 있을 때만(2일째를 위해 주말·공휴일을 쓰지 않는다)
-   *   3) 남는 일수는 평일 여유까지, 4) 그래도 남으면 주말·공휴일 여유까지
-   * 일수 D 자체는 목표시간의 2·3시간 조합으로 정해지므로, 최소 2일을 위해 목표·주 한도를 넘기는 일은 없다.
-   */
-  const allocate = (total: number): Map<string, number> | null => {
-    const alloc = new Map<string, number>()
-    let left = total
-    for (const ep of eligible) {
-      const pid = pidOf(ep)
-      if (left > 0 && capWd.get(pid)! + capWe.get(pid)! > 0) { alloc.set(pid, 1); left-- }
-    }
-    for (const ep of eligible) {
-      const pid = pidOf(ep)
-      if (left > 0 && alloc.get(pid) === 1 && capWd.get(pid)! >= 2) { alloc.set(pid, 2); left-- }
-    }
-    for (const ep of eligible) {
-      const pid = pidOf(ep)
-      const add = Math.min(left, Math.max(0, capWd.get(pid)! - (alloc.get(pid) ?? 0)))
-      if (add > 0) { alloc.set(pid, (alloc.get(pid) ?? 0) + add); left -= add }
-    }
-    for (const ep of eligible) {
-      const pid = pidOf(ep)
-      const add = Math.min(left, capWd.get(pid)! + capWe.get(pid)! - (alloc.get(pid) ?? 0))
-      if (add > 0) { alloc.set(pid, (alloc.get(pid) ?? 0) + add); left -= add }
-    }
-    return left === 0 ? alloc : null
+  // ── 4. 날짜·프로젝트 배치 (search.ts — 왕복 없음·평일 우선·최소 2일을 정확히 비교) ──
+  // 날짜가 하나라도 있는 프로젝트만, 제출일 우선순위 순으로 최대 MAX_SEARCH_PROJECTS개
+  const withDates = eligible.filter(ep => capWd.get(pidOf(ep))! + capWe.get(pidOf(ep))! > 0)
+  const searched = withDates.slice(0, MAX_SEARCH_PROJECTS)
+  const overLimit = new Set(withDates.slice(MAX_SEARCH_PROJECTS).map(pidOf))
+  const jitterRng = createRng(deriveSeed(input.seed, eid, 'place'))
+  const ctx: SearchContext = {
+    days,
+    locked: lockedDates,
+    capH,
+    projects: searched.map(ep => ({ id: pidOf(ep), start: ep.windowStart, end: ep.windowEnd, capable: usableWeekdays(ep) >= 2 })),
+    jitter: days.map(() => searched.map(() => jitterRng.next())),
+    weekdayList,
   }
-
-  /**
-   * 배분된 일수대로 날짜를 놓는다. 실패하면 null.
-   *  1) 평일 블록: 우선순위 순으로 프로젝트마다 연속 블록 1개를 시간순으로. 각 블록이 설 수 있는 가장 이른 위치(E)와
-   *     뒤 블록이 들어갈 자리를 남기는 가장 늦은 위치(R) 사이에서, 남는 공간을 (남은 블록 수 + 1)등분한 만큼 띄운다
-   *     → 블록 1개면 가운데, 여러 개면 기간 전체에 고르게. 그 목표 ±2일 안에서 주간 분산이 가장 작은 시작점을
-   *     고른다(같으면 목표에 가까운 쪽, 그래도 같으면 seed).
-   *  2) 모자라는 일수: 그 프로젝트 기간의 평일 → 주말·공휴일 순으로 블록에 가까운 날
-   *  3) 그래도 남으면 다른 프로젝트에서(우선순위 순) — 겹치는 기간 때문에 자리가 없을 때만
-   */
-  // 분산 평가에 쓰는 주: 이 직원이 평일에 배정받을 수 있는 주
-  const availableWeeks = [...new Set(available.filter(isWorkday).map(d => d.week_start))]
-
-  const placeDays = (alloc: Map<string, number>, avgHours: number, rng: Rng): Map<string, string> | null => {
-    const chosen = new Map<string, string>()
-    const weekCount = new Map<string, number>()
-    const canUse = (d: string) => !chosen.has(d) && (weekCount.get(weekOfDate(d)) ?? 0) < dayLimit(weekOfDate(d))
-    const assignDay = (d: string, pid: string) => {
-      chosen.set(d, pid)
-      weekCount.set(weekOfDate(d), (weekCount.get(weekOfDate(d)) ?? 0) + 1)
-    }
-
-    // 1) 평일 블록
-    const blocks = eligible
-      .map(ep => {
-        const a = weekdayList.findIndex(d => d >= ep.windowStart)
-        let b = -1
-        for (let i = weekdayList.length - 1; i >= 0; i--) if (weekdayList[i] <= ep.windowEnd) { b = i; break }
-        const span = a >= 0 && b >= a ? b - a + 1 : 0
-        return { ep, a, b, n: Math.min(alloc.get(pidOf(ep)) ?? 0, capWd.get(pidOf(ep))!, span) }
-      })
-      .filter(x => x.n > 0)
-    const k = blocks.length
-    const E: number[] = []
-    const R: number[] = []
-    let ordered = true
-    let cursor = -1
-    for (const bl of blocks) {
-      const e = Math.max(bl.a, cursor + 1)
-      if (e + bl.n - 1 > bl.b) { ordered = false; break }
-      E.push(e)
-      cursor = e + bl.n - 1
-    }
-    if (ordered) {
-      let limit = weekdayList.length
-      for (let i = k - 1; i >= 0; i--) {
-        const r = Math.min(blocks[i].b, limit - 1) - blocks[i].n + 1
-        if (r < blocks[i].a || r < E[i]) { ordered = false; break }
-        R[i] = r
-        limit = r
-      }
-    }
-    if (ordered) {
-      let prevEnd = -1
-      for (let i = 0; i < k; i++) {
-        const { ep, n } = blocks[i]
-        const lo = Math.max(E[i], prevEnd + 1)
-        const hi = R[i]
-        const target = Math.min(hi, Math.max(lo, lo + Math.round((hi - lo) / (k - i + 1))))
-        // 블록 안의 같은 주 날짜들도 세면서 주당 일수 한도를 확인한다
-        const fits = (s: number) => {
-          const extra = new Map<string, number>()
-          for (let x = s; x < s + n; x++) {
-            const d = weekdayList[x]
-            const w = weekOfDate(d)
-            if (chosen.has(d) || (weekCount.get(w) ?? 0) + (extra.get(w) ?? 0) + 1 > dayLimit(w)) return false
-            extra.set(w, (extra.get(w) ?? 0) + 1)
-          }
-          return true
-        }
-        // 고른 간격 위치 ±2일 안에서 주간 분산(주별 예상 시간의 표준편차)이 가장 작은 시작점 → 같으면 목표에 가까운 쪽 → seed
-        const spreadIf = (st: number) => {
-          const add = new Map<string, number>()
-          for (let x = st; x < st + n; x++) add.set(weekOfDate(weekdayList[x]), (add.get(weekOfDate(weekdayList[x])) ?? 0) + 1)
-          return weeklyLoadSpread(availableWeeks.map(w => ((weekCount.get(w) ?? 0) + (add.get(w) ?? 0)) * avgHours)).stdev
-        }
-        const near: number[] = []
-        for (let x = Math.max(lo, target - 2); x <= Math.min(hi, target + 2); x++) if (fits(x)) near.push(x)
-        let s = -1
-        if (near.length > 0) {
-          const scored = near.map(x => ({ x, spread: spreadIf(x), dist: Math.abs(x - target) }))
-          const bestSpread = Math.min(...scored.map(c => c.spread))
-          const tied = scored.filter(c => c.spread <= bestSpread + 1e-6)
-          const bestDist = Math.min(...tied.map(c => c.dist))
-          const finalists = tied.filter(c => c.dist === bestDist)
-          s = finalists[rng.int(finalists.length)].x
-        } else {
-          for (let dist = 0; dist <= hi - lo && s < 0; dist++) {
-            if (target - dist >= lo && fits(target - dist)) s = target - dist
-            else if (target + dist <= hi && fits(target + dist)) s = target + dist
-          }
-        }
-        if (s < 0) continue // 주 한도로 연속 블록을 못 놓으면 2)에서 날짜 단위로 채운다
-        for (let x = s; x < s + n; x++) assignDay(weekdayList[x], pidOf(ep))
-        prevEnd = s + n - 1
-      }
-    } else {
-      // 기간이 겹쳐 시간순으로 줄 세울 수 없으면: 우선순위 순으로 각 프로젝트 기간의 가장 긴 빈 구간에 연속으로
-      for (const { ep, n } of blocks) {
-        let need = n
-        while (need > 0) {
-          const runs: Array<[number, number]> = []
-          for (let i = 0; i < weekdayList.length; i++) {
-            if (!inWindow(ep, weekdayList[i]) || !canUse(weekdayList[i])) continue
-            const last = runs[runs.length - 1]
-            if (last && last[1] === i - 1) last[1] = i
-            else runs.push([i, i])
-          }
-          if (runs.length === 0) break
-          const best = runs.sort((x, y) => (y[1] - y[0]) - (x[1] - x[0]) || x[0] - y[0])[0]
-          const take = Math.min(need, best[1] - best[0] + 1)
-          const s = best[0] + Math.floor((best[1] - best[0] + 1 - take) / 2)
-          let added = 0
-          for (let x = s; x < s + take; x++) {
-            if (!canUse(weekdayList[x])) break // 같은 주 일수 한도에 걸리면 멈추고 다음 구간에서
-            assignDay(weekdayList[x], pidOf(ep))
-            added++
-          }
-          if (added === 0) break
-          need -= added
-        }
-      }
-    }
-
-    // 2) 모자라는 일수 — 같은 프로젝트 안에서 평일 → 주말·공휴일, 블록에 가까운 날
-    const nearest = (ep: EligibleProject, pool: readonly string[]): string | null => {
-      const mine = [...chosen].filter(([, p]) => p === pidOf(ep)).map(([d]) => toEpochDay(d))
-      let best: { d: string; dist: number } | null = null
-      for (const d of pool) {
-        if (!inWindow(ep, d) || !canUse(d)) continue
-        const dist = mine.length > 0 ? Math.min(...mine.map(x => Math.abs(x - toEpochDay(d)))) : 0
-        if (!best || dist < best.dist) best = { d, dist }
-      }
-      return best?.d ?? null
-    }
-    let shortfall = 0
-    for (const ep of eligible) {
-      const pid = pidOf(ep)
-      let need = (alloc.get(pid) ?? 0) - [...chosen.values()].filter(p => p === pid).length
-      while (need > 0) {
-        const d = nearest(ep, weekdayList) ?? nearest(ep, weekendList)
-        if (!d) break
-        assignDay(d, pid)
-        need--
-      }
-      shortfall += need
-    }
-    // 3) 그래도 남으면 다른 프로젝트에서(우선순위 순)
-    while (shortfall > 0) {
-      let placed = false
-      for (const ep of eligible) {
-        const d = nearest(ep, weekdayList) ?? nearest(ep, weekendList)
-        if (d) { assignDay(d, pidOf(ep)); placed = true; break }
-      }
-      if (!placed) return null
-      shortfall--
-    }
-    return chosen
-  }
-
-  // ── 4. 조합 후보 → 날짜 배치 ──
   let best: { chosen: Map<string, string>; total: number } | null = null
   for (let total = maxRepresentable(Math.min(usable, upperBound)); total >= 2 && !best; total = total - 1 === 1 ? 0 : total - 1) {
-    // 주말·공휴일을 가장 적게 쓰는 후보, 같으면 조합 선호 순서(혼합 → 개수 차이 → 일수)가 앞선 후보
-    let pick: { chosen: Map<string, string>; weekend: number } | null = null
-    for (const comp of preferredCompositions(total)) {
-      const alloc = allocate(comp.days)
-      if (!alloc) continue
-      const placed = placeDays(alloc, total / comp.days, createRng(deriveSeed(input.seed, eid, 'place', String(comp.days))))
-      if (!placed || capacityOf(placed.keys()) < total) continue
-      const weekend = [...placed.keys()].filter(d => !isWorkday(dayByDate.get(d)!)).length
-      if (!pick || weekend < pick.weekend) pick = { chosen: placed, weekend }
-    }
-    if (pick) best = { chosen: pick.chosen, total }
+    const found = searchSchedule(ctx, total)
+    if (found) best = { chosen: found.chosen, total }
   }
   const chosen = best?.chosen ?? new Map<string, string>()
   const total = best?.total ?? 0
@@ -634,7 +459,7 @@ function planEmployee(
     }
   }
 
-  // ── 6. 주말·공휴일 → 같은 프로젝트 평일 ──
+  // ── 6. 주말·공휴일 → 같은 프로젝트 평일 (탐색이 이미 주말을 최소로 쓰므로 안전장치) ──
   plan = relocateWeekendsWithinProject({
     plan,
     days,
@@ -642,14 +467,31 @@ function planEmployee(
     lockedDates,
     lockedWeek,
   })
+  // 주말·공휴일 사유 = 실제 원인. 그 프로젝트 기간의 다른 평일이 각각 왜 안 됐는지를 최종 배치에서 다시 본다.
   const reasons = new Map<string, string>()
-  for (const [date, p] of plan) {
-    if (isWorkday(dayByDate.get(date)!)) continue
-    const ep = eligible.find(e => pidOf(e) === p.projectId)!
-    const weekdayLeft = weekdayList.some(d => !plan.has(d) && inWindow(ep, d))
-    reasons.set(date, weekdayLeft
-      ? '주간 12시간 제한으로 평일 배정 불가'
-      : ep.project.period_end === ep.project.submit_date ? '제출일까지 평일 배정 가능시간 부족' : '프로젝트 유효기간 내 평일 부족')
+  {
+    const weekTotal = new Map<string, number>(lockedWeek)
+    for (const [d, p] of plan) weekTotal.set(weekOfDate(d), (weekTotal.get(weekOfDate(d)) ?? 0) + p.hours)
+    for (const [date, p] of plan) {
+      const src = dayByDate.get(date)!
+      if (isWorkday(src)) continue
+      const ep = eligible.find(e => pidOf(e) === p.projectId)!
+      let other = false
+      let cap = false
+      for (const c of days) {
+        if (!isWorkday(c) || c.date === date || !inWindow(ep, c.date) || lockedDates.has(c.date)) continue
+        const owner = plan.get(c.date)
+        if (owner) { if (owner.projectId !== p.projectId) other = true; continue }
+        const after = (weekTotal.get(c.week_start) ?? 0) - (c.week_start === src.week_start ? p.hours : 0) + p.hours
+        if (after > WEEKLY_CAP_HOURS + EPS) cap = true
+        else other = true   // 비어 있고 주 한도도 되지만, 옮기면 다른 프로젝트 블록과 순서가 섞인다(왕복)
+      }
+      reasons.set(date, other
+        ? WEEKEND_REASONS.otherProject
+        : cap
+          ? WEEKEND_REASONS.weeklyCap
+          : ep.project.period_end === ep.project.submit_date ? WEEKEND_REASONS.untilSubmit : WEEKEND_REASONS.periodShort)
+    }
   }
 
   // ── 7. 업무: 프로젝트 블록 안에서 연속 하위 블록 ──
@@ -678,22 +520,24 @@ function planEmployee(
     }
   }
 
-  // ── 1일 블록 (허용 결과 — 정보로 사유만 알린다) ──
+  // ── 1일 블록 — 탐색이 1일 블록을 가장 적게 고른 결과다. 남은 1일 블록마다 실제 원인을 사실로 판정해 알린다 ──
   {
     const daysByProject = new Map<string, number>()
     for (const p of plan.values()) daysByProject.set(p.projectId, (daysByProject.get(p.projectId) ?? 0) + 1)
-    const projectsWithDays = daysByProject.size
     for (const ep of eligible) {
       const pid = pidOf(ep)
       if (daysByProject.get(pid) !== 1) continue
-      const [reason, why]: [string, string] =
-        capWd.get(pid)! < 2
-          ? ['PERIOD_TOO_SHORT', '프로젝트 기간 안에 연속 2일(평일)을 확보할 수 없어']
-          : total <= 3
-            ? ['TARGET_TOO_SMALL', '남은 월 목표시간이 하루(2·3시간)로 충분해']
-            : plan.size < 2 * projectsWithDays
-              ? ['NOT_ENOUGH_DAYS', '참여 프로젝트 수에 비해 배정할 일수가 부족해']
-              : ['CAPACITY_OR_CONFLICT', '주 12시간 제한·잠금일·앞선 프로젝트 블록 때문에']
+      const rawWeekdays = days.filter(d => isWorkday(d) && inWindow(ep, d.date)).length
+      const [reason, why]: [SingleDayReason, string] =
+        rawWeekdays < 2
+          ? ['PERIOD_TOO_SHORT', '프로젝트 기간 안 평일이 하루뿐이라']
+          : usableWeekdays(ep) < 2
+            ? ['LOCKED_OR_WEEKLY_CAP', '기존 기록(잠금일)·주 12시간 제한으로 이 프로젝트 기간에 평일 2일을 쓸 수 없어']
+            : plan.size === 1
+              ? ['TARGET_TOO_SMALL', '남은 월 목표시간이 하루(2·3시간)뿐이라']
+              : plan.size < 2 * daysByProject.size
+                ? ['NOT_ENOUGH_DAYS', '목표시간으로 만들 수 있는 일수가 참여 프로젝트마다 2일씩 주기에 부족해']
+                : ['OTHER_PROJECTS', '같은 기간 다른 프로젝트 배정·주 12시간 한도를 나눠 써야 해서']
       issues.push(issue('SINGLE_DAY_PROJECT_BLOCK', 'info', `${why} 이 프로젝트에는 1일만 배정했습니다`, {
         employee_id: eid, project_id: pid, detail: { assigned_days: 1, reason },
       }))
@@ -714,9 +558,11 @@ function planEmployee(
     const hasDate = capWd.get(pid)! + capWe.get(pid)! > 0
     const [code, message]: [AssignmentIssueCode, string] = !hasDate
       ? ['NO_VALID_DATE', '프로젝트 기간 안에 배정할 수 있는 날짜가 없습니다']
-      : assignedHours >= usable
-        ? ['TARGET_EXHAUSTED', '월 목표시간을 앞선(제출일이 빠른) 프로젝트에 모두 배정했습니다']
-        : ['WEEKLY_CAPACITY_EXHAUSTED', '주간 12시간 제한으로 배정하지 못했습니다']
+      : overLimit.has(pid)
+        ? ['TOO_MANY_PROJECTS', `참여 프로젝트가 많아 제출일이 빠른 ${MAX_SEARCH_PROJECTS}개까지만 배정했습니다`]
+        : assignedHours >= usable
+          ? ['TARGET_EXHAUSTED', '월 목표시간을 다른 프로젝트(제출일이 빠르거나 1일 블록 없이 배정할 수 있는 프로젝트)에 모두 배정했습니다']
+          : ['WEEKLY_CAPACITY_EXHAUSTED', '주간 12시간 제한으로 배정하지 못했습니다']
     unassignedProjects.push({ project_id: pid, code, message })
     issues.push(issue('PROJECT_UNASSIGNED', 'info', message, { employee_id: eid, project_id: pid, detail: { reason: code } }))
   }
