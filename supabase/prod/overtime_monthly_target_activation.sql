@@ -8,10 +8,17 @@
 -- 생성: scratchpad build_activation.py — 원본 본문을 그대로 복사(수정 없음). 원본이 바뀌면 다시 생성한다.
 --
 -- 적용 전 필수: 해당 급여기간의 재직 직원 월 목표 입력 완료(supabase/prod/overtime_monthly_targets_1_list.sql → _2_apply.sql),
+--              그 다음 supabase/verify/overtime_monthly_target_precheck.sql이 전부 OK(FAIL 0)일 때만 이 파일을 실행한다.
 --              supabase/prod/overtime_prod_checklist.md의 "0. 적용 전 baseline"(기록 수 재확인)·3단계(월 목표 선입력) 항목.
+-- 트랜잭션 안 재확인(맨 앞 DO 블록): 오늘(Asia/Seoul) 급여기간 라벨의 목표가 없는 재직 직원이 한 명이라도 있으면 중단한다.
+--   급여기간 경계(21일) 7일 전부터(14~20일)는 다음 급여기간 목표까지 요구한다 — 경계 직전에 켜면 다음 날부터 목표 없는
+--   전 직원의 수동 입력이 막히기 때문이다. 이 때문에 14~20일 적용은 다음 기간 목표를 먼저 넣어야 한다(의도된 차단).
+--   라벨은 private.overtime_pay_period_label(이 파일 1)에서 만든다)과 같은 식으로 직접 계산한다 — 이 시점에는 함수가 아직 없을 수 있다.
 -- 적용 후: supabase/verify/overtime_monthly_target_postflight.sql (isolation_guard 포함 전부 OK)
--- 되돌리기: supabase/verify/overtime_monthly_target_rollback.sql → supabase/verify/overtime_cap_isolation_guard_rollback.sql
---          (월 목표 트리거·함수 제거 후, 주 12시간 함수를 B 원본 본문으로 되돌림)
+-- 되돌리기: supabase/verify/overtime_cap_isolation_guard_rollback.sql → supabase/verify/overtime_monthly_target_rollback.sql
+--          (격리수준 방어를 먼저 B·월 목표 원본 본문으로 되돌린 뒤, 월 목표 트리거·함수 제거. 반대 순서면 격리수준 되돌리기가
+--           월 목표 함수를 되살릴 수 있어 A 되돌리기가 멈췄다 — 지금은 되돌리기 파일이 방어하지만 순서는 이대로 지킨다)
+-- 되돌리기 순서: overtime_planning_c_rollback → overtime_cap_isolation_guard_rollback → overtime_monthly_target_rollback → overtime_planning_rollback_b → overtime_project_sync_rpc_rollback → overtime_planning_rollback_a
 
 begin;
 
@@ -22,6 +29,38 @@ begin
      or to_regprocedure('private.overtime_work_records_weekly_cap()') is null
      or to_regprocedure('private.overtime_assert_weekly_cap(uuid, date, numeric, uuid, numeric)') is null then
     raise exception 'Migration A·B가 적용되지 않았다';
+  end if;
+end $$;
+
+-- 월 목표 선입력 재확인 — 목표 없는 재직 직원이 있으면 켜지 않는다(켜는 순간 그 직원의 수동 입력이 막힌다)
+do $$
+declare
+  v_today date := (pg_catalog.now() at time zone 'Asia/Seoul')::date;
+  v_label text;
+  v_labels text[];
+  v_bad text;
+begin
+  -- private.overtime_pay_period_label과 같은 규칙: 21일부터는 다음 달 라벨
+  v_label := pg_catalog.to_char(
+    case when extract(day from v_today) >= 21 then (pg_catalog.date_trunc('month', v_today::timestamp) + interval '1 month')
+         else pg_catalog.date_trunc('month', v_today::timestamp) end,
+    'YYYY-MM');
+  v_labels := array[v_label];
+  -- 경계 7일 전(14~20일)이면 다음 급여기간(라벨 +1개월)까지 요구
+  if extract(day from v_today) between 14 and 20 then
+    v_labels := v_labels || pg_catalog.to_char(pg_catalog.to_date(v_label || '-01', 'YYYY-MM-DD') + interval '1 month', 'YYYY-MM');
+  end if;
+  select string_agg(x.label || ' ' || x.missing || '명', ', ' order by x.label) into v_bad
+  from (
+    select l.label, count(*) as missing
+    from unnest(v_labels) as l(label)
+    cross join public.overtime_employees e
+    where e.is_active
+      and not exists (select 1 from public.overtime_monthly_targets t where t.employee_id = e.id and t.period_label = l.label)
+    group by l.label
+  ) x;
+  if v_bad is not null then
+    raise exception 'activation 중단: 월 목표 미입력 재직 직원 — % (supabase/verify/overtime_monthly_target_precheck.sql로 확인 후 _2_apply.sql)', v_bad;
   end if;
 end $$;
 

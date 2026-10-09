@@ -17,6 +17,9 @@
 --   → 모든 신규·교체 함수는 만든 직후 권한을 전부 회수하고 필요한 역할에만 다시 준다.
 --
 -- 원칙: 기존 행 UPDATE/DELETE 없음, hours 재계산 없음, 이름 backfill 없음, 새 컬럼은 nullable·기본값 없음.
+-- 직원 분리 방지(2026-10-07 추가): 미연결 '미래사업팀' 주소록과 주소록 미연결 재직 직원이 둘 다 있으면 0단계에서
+--   OVERTIME_EMPLOYEE_LINK_REQUIRED로 중단한다(preflight p10·p11 = STOP). 확인: supabase/verify/overtime_employee_link_check.sql.
+--   이미 A가 적용된 DB는 같은 sync_team_employees 본문을 supabase/migration_overtime_planning_c_corrections.sql로 받는다.
 -- 한 트랜잭션 — 하나라도 실패하면 전부 롤백된다. 재실행해도 같은 결과(if not exists / drop if exists).
 
 begin;
@@ -37,6 +40,18 @@ begin
   if exists (select 1 from public.engineer_contacts where employee_id is not null
              group by employee_id having count(*) > 1) then
     raise exception 'preflight: engineer_contacts.employee_id 중복 연결이 있음';
+  end if;
+  -- 직원 분리 방지 (sync_team_employees 0단계와 같은 조건): 미연결 '미래사업팀' 주소록과 주소록 미연결 재직 직원이
+  -- 동시에 있으면, 첫 동기화가 같은 사람을 새 직원 행(새 UUID)으로 만들고 기존 행은 비활성으로 돌려 기록이 둘로 갈라질 수 있다.
+  -- 이름으로 자동 연결하지 않는다 — supabase/verify/overtime_employee_link_check.sql로 확인 후 사람이 연결한다.
+  if exists (select 1 from public.engineer_contacts c where c.company = '미래사업팀' and c.employee_id is null)
+     and exists (select 1 from public.overtime_employees e
+                 where e.is_active and not exists (select 1 from public.engineer_contacts c where c.employee_id = e.id)) then
+    raise exception 'OVERTIME_EMPLOYEE_LINK_REQUIRED: 연결 안 된 주소록 %명 / 직원 %명',
+      (select count(*) from public.engineer_contacts c where c.company = '미래사업팀' and c.employee_id is null),
+      (select count(*) from public.overtime_employees e
+        where e.is_active and not exists (select 1 from public.engineer_contacts c where c.employee_id = e.id))
+      using errcode = '55000';
   end if;
 end $$;
 
@@ -92,6 +107,9 @@ create unique index if not exists engineer_contacts_employee_id_key
 alter table public.overtime_employees drop constraint if exists overtime_employees_name_key;
 
 -- 이름으로 기존 직원을 찾는 단계를 없앤 버전. 주소록(engineer_contacts)이 원본이다.
+--   0) 미연결 '미래사업팀' 기술인(p11)과 주소록 미연결 재직 직원(p10)이 둘 다 있으면 아무것도 바꾸지 않고
+--      OVERTIME_EMPLOYEE_LINK_REQUIRED(errcode 55000) — 같은 사람이 새 UUID로 갈라지는 것을 막는다. 자동 이름 매칭은 하지 않는다.
+--      한쪽만 있으면 아래 규칙 그대로(미연결 기술인만 → 1) 생성 / 미연결 재직 직원만 → 3) 비활성).
 --   1) 미연결 '미래사업팀' 기술인 → 새 직원 행을 만들어 연결 (동명이인이어도 별개 직원)
 --   2) 연결된 직원 → 이름·직급·재직(= 소속 미래사업팀 AND 재직상태 '재직')을 주소록 값으로
 --   3) 주소록 연결이 완전히 끊긴 직원 → 비활성 (행·기록·참여·업무는 그대로)
@@ -108,9 +126,22 @@ as $$
 declare
   rec record;
   eid uuid;
+  v_unlinked_contacts int;
+  v_unlinked_employees int;
 begin
   if private.menu_permission('overtime') = 'none' and private.menu_permission('field_overtime') = 'none' then
     raise exception 'permission denied' using errcode = '42501';
+  end if;
+
+  -- 0) 직원 분리 방지 — 데이터를 바꾸기 전에 확인한다
+  select count(*) into v_unlinked_contacts
+  from public.engineer_contacts c where c.company = '미래사업팀' and c.employee_id is null;
+  select count(*) into v_unlinked_employees
+  from public.overtime_employees e
+  where e.is_active and not exists (select 1 from public.engineer_contacts c where c.employee_id = e.id);
+  if v_unlinked_contacts > 0 and v_unlinked_employees > 0 then
+    raise exception 'OVERTIME_EMPLOYEE_LINK_REQUIRED: 연결 안 된 주소록 %명 / 직원 %명', v_unlinked_contacts, v_unlinked_employees
+      using errcode = '55000', hint = 'supabase/verify/overtime_employee_link_check.sql로 확인 후 주소록에서 직원을 연결한다';
   end if;
 
   -- 1) for update: 동시 실행 시 두 번째 호출은 이미 연결된 행을 다시 평가해 건너뛴다

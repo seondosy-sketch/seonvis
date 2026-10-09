@@ -3,6 +3,7 @@
 -- migration_overtime_planning_a_base.sql 적용 직후 SQL Editor에서 실행한다. 데이터·스키마를 바꾸지 않는다.
 -- verdict가 전부 OK여야 한다. fp_* 행의 detail은 직전 preflight의 같은 이름 행과 같아야 한다(기존 데이터·스키마 불변).
 -- 결과는 Export → Copy as CSV로 전달한다. 개인정보 값은 나오지 않는다.
+-- a16~a21: 직원 UUID 보존 확인 — 수동 연결 후·첫 동기화 후에도 다시 실행해 전부 OK인지 본다.
 
 with
 fn_expect(sig, want_definer, want_acl) as (
@@ -120,6 +121,54 @@ checks(check_name, verdict, detail) as (
   where (e.name, e.position, e.is_active) is distinct from (t.name, t.rank, t.active)
   union all
   select 'a15_linked_employees', case when count(*) = 9 then 'OK' else 'INFO' end, count(*) || '명 연결' from team
+  union all
+  -- ── 직원 UUID 보존: 과거 기록·월 목표·업무·참여가 모두 존재하는 직원 UUID를 가리켜야 한다(고아·새 UUID 분리 없음) ──
+  -- 첫 동기화(화면 진입 시 sync_team_employees) 뒤에도 한 번 더 실행한다.
+  select 'a16_records_employee_exists',
+         case when count(*) = 0 then 'OK' else 'FAIL' end,
+         count(*) || '건 (없는 직원 UUID를 가리키는 overtime_work_records)'
+  from public.overtime_work_records r where not exists (select 1 from public.overtime_employees e where e.id = r.employee_id)
+  union all
+  select 'a17_targets_employee_exists',
+         case when count(*) = 0 then 'OK' else 'FAIL' end,
+         count(*) || '건 (없는 직원 UUID를 가리키는 overtime_monthly_targets)'
+  from public.overtime_monthly_targets t where not exists (select 1 from public.overtime_employees e where e.id = t.employee_id)
+  union all
+  select 'a18_tasks_employee_exists',
+         case when count(*) = 0 then 'OK' else 'FAIL' end,
+         count(*) || '건 (없는 직원 UUID를 가리키는 overtime_employee_tasks)'
+  from public.overtime_employee_tasks t where not exists (select 1 from public.overtime_employees e where e.id = t.employee_id)
+  union all
+  select 'a19_members_employee_exists',
+         case when count(*) = 0 then 'OK' else 'FAIL' end,
+         count(*) || '건 (없는 직원 UUID를 가리키는 overtime_project_members)'
+  from public.overtime_project_members m where not exists (select 1 from public.overtime_employees e where e.id = m.employee_id)
+  union all
+  -- 분리 의심: 과거 데이터(기록·업무·참여·목표)가 있는 직원이 주소록 연결 없이 비활성인데, 주소록에 연결된 다른 직원에게는
+  -- 과거 데이터가 하나도 없는 경우(새 UUID로 갈라진 모양). 건수만 낸다 — 자동 연결하지 않는다.
+  select 'a20_split_suspects',
+         case when count(*) = 0 then 'OK' else 'FAIL' end,
+         count(*) || '명 (주소록 미연결·비활성인데 과거 데이터가 있는 직원 — overtime_employee_link_check.sql로 확인)'
+  from public.overtime_employees e
+  where not e.is_active
+    and not exists (select 1 from public.engineer_contacts c where c.employee_id = e.id)
+    and (exists (select 1 from public.overtime_work_records r where r.employee_id = e.id)
+         or exists (select 1 from public.overtime_employee_tasks t where t.employee_id = e.id)
+         or exists (select 1 from public.overtime_project_members m where m.employee_id = e.id)
+         or exists (select 1 from public.overtime_monthly_targets t where t.employee_id = e.id))
+    and exists (select 1 from public.overtime_employees n
+                join public.engineer_contacts c on c.employee_id = n.id
+                where n.id <> e.id
+                  and not exists (select 1 from public.overtime_work_records r where r.employee_id = n.id)
+                  and not exists (select 1 from public.overtime_employee_tasks t where t.employee_id = n.id)
+                  and not exists (select 1 from public.overtime_project_members m where m.employee_id = n.id))
+  union all
+  select 'a21_employee_link_required',
+         case when (select count(*) from public.overtime_employees e
+                     where e.is_active and not exists (select 1 from public.engineer_contacts c where c.employee_id = e.id)) > 0
+               and (select count(*) from public.engineer_contacts c where c.company = '미래사업팀' and c.employee_id is null) > 0
+              then 'FAIL' else 'OK' end,
+         '미연결 재직 직원과 미연결 미래사업팀 주소록이 동시에 있으면 FAIL (sync가 OVERTIME_EMPLOYEE_LINK_REQUIRED로 멈춤)'
   union all
   -- ── 지문 (preflight와 같아야 함) ──
   select 'fp_records', 'INFO',

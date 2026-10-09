@@ -1,7 +1,18 @@
 -- 격리수준 방어(migration_overtime_cap_isolation_guard.sql) 되돌리기 — 두 검사 함수를 원래 본문으로 교체한다. 데이터는 건드리지 않는다.
+--
+-- 되돌리기 순서: overtime_planning_c_rollback → overtime_cap_isolation_guard_rollback → overtime_monthly_target_rollback → overtime_planning_rollback_b → overtime_project_sync_rpc_rollback → overtime_planning_rollback_a
+--   이 파일은 월 목표 되돌리기(overtime_monthly_target_rollback.sql)보다 먼저 실행한다.
+-- 방어: 각 함수는 "지금 DB에 있을 때만" 원래 본문으로 바꾼다(to_regprocedure 확인 후 EXECUTE).
+--   순서를 바꿔 월 목표 되돌리기 뒤에 실행해도 private.overtime_assert_monthly_target을 되살리지 않고,
+--   B 되돌리기 뒤에 실행해도 private.overtime_assert_weekly_cap을 되살리지 않는다
+--   (되살아나면 overtime_planning_rollback_a.sql의 월 목표 잔존 검사에서 A 되돌리기가 멈춘다).
 begin;
 
--- 원본: migration_overtime_planning_b_activate.sql
+do $do$
+begin
+  -- 원본: migration_overtime_planning_b_activate.sql
+  if to_regprocedure('private.overtime_assert_weekly_cap(uuid, date, numeric, uuid, numeric)') is not null then
+    execute $fn$
 create or replace function private.overtime_assert_weekly_cap(
   p_employee uuid, p_date date, p_new_hours numeric, p_exclude_id uuid, p_previous_same_week numeric
 )
@@ -22,9 +33,14 @@ begin
   if v_new > 12 and v_new > v_others + coalesce(p_previous_same_week, 0) then
     raise exception 'OVERTIME_WEEKLY_CAP: % 주 합계 %시간 (한도 12시간)', v_week, v_new using errcode = '23514';
   end if;
-end $$;
+end $$
+$fn$;
+    revoke all on function private.overtime_assert_weekly_cap(uuid, date, numeric, uuid, numeric) from public, anon, authenticated, service_role;
+  end if;
 
--- 원본: migration_overtime_monthly_target_guard.sql
+  -- 원본: migration_overtime_monthly_target_guard.sql
+  if to_regprocedure('private.overtime_assert_monthly_target(uuid, date, numeric, uuid, numeric)') is not null then
+    execute $fn$
 create or replace function private.overtime_assert_monthly_target(
   p_employee uuid, p_date date, p_new_hours numeric, p_exclude_id uuid, p_previous_same_period numeric
 )
@@ -70,8 +86,26 @@ begin
       v_label, v_target, v_before, v_after, v_after - v_target
       using errcode = '23514';
   end if;
-end $$;
+end $$
+$fn$;
+    revoke all on function private.overtime_assert_monthly_target(uuid, date, numeric, uuid, numeric) from public, anon, authenticated, service_role;
+  end if;
+end $do$;
 
-revoke all on function private.overtime_assert_weekly_cap(uuid, date, numeric, uuid, numeric) from public, anon, authenticated, service_role;
-revoke all on function private.overtime_assert_monthly_target(uuid, date, numeric, uuid, numeric) from public, anon, authenticated, service_role;
 commit;
+
+select 'isolation_rollback_' || x.name as check_name,
+       case when not x.present then 'INFO' when x.has_guard then 'FAIL' else 'OK' end as status,
+       case when not x.present then '함수 없음 (되살리지 않음)' when x.has_guard then '격리수준 방어가 남아 있다' else '원래 본문' end as detail
+from (
+  select 'weekly_cap' as name,
+         to_regprocedure('private.overtime_assert_weekly_cap(uuid,date,numeric,uuid,numeric)') is not null as present,
+         coalesce(pg_catalog.pg_get_functiondef(to_regprocedure('private.overtime_assert_weekly_cap(uuid,date,numeric,uuid,numeric)'))
+                  like '%OVERTIME_ISOLATION_UNSUPPORTED%', false) as has_guard
+  union all
+  select 'monthly_target',
+         to_regprocedure('private.overtime_assert_monthly_target(uuid,date,numeric,uuid,numeric)') is not null,
+         coalesce(pg_catalog.pg_get_functiondef(to_regprocedure('private.overtime_assert_monthly_target(uuid,date,numeric,uuid,numeric)'))
+                  like '%OVERTIME_ISOLATION_UNSUPPORTED%', false)
+) x
+order by 1;

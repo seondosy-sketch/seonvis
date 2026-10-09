@@ -17,6 +17,10 @@
 --
 -- 모든 함수는 만든 직후 PUBLIC·anon·authenticated·service_role 권한을 전부 회수하고, 사용자가 직접 부르는
 -- RPC 4개만 authenticated에 다시 준다. 트리거 함수는 트리거로만 실행된다(트리거 발동 시 EXECUTE 검사 없음).
+--
+-- 2026-10-07 수정(신규 설치용 정의): 초안 트리거는 상태 전이에서 달력 값을 다시 계산하지 않고, 확정 RPC가 확정 직전에
+--   한 번 다시 계산한 값을 최종기록에 넣으며, 저장 RPC는 초안의 is_holiday 키를 공휴일 표와 대조한다.
+--   이미 B가 적용된 DB는 같은 본문을 supabase/migration_overtime_planning_c_corrections.sql로 받는다(본문 동일 — 정적 시험이 확인).
 
 begin;
 
@@ -211,7 +215,11 @@ create trigger overtime_work_records_b_weekly_cap
   for each row execute function private.overtime_work_records_weekly_cap();
 
 -- 2-3. 초안 보호 (INVOKER). 생성·삭제·상태전이는 소유자 맥락(RPC)만. 담당자 수정은 잠금 처리.
---   시간 칸은 항상 프리셋 값으로 채우고(클라이언트 값 무시), 주말·공휴일 여부는 DB가 계산한다.
+--   편집 가능한 상태(INSERT, 또는 변경 전·후 모두 draft인 UPDATE)에서만 시간 칸을 프리셋 값으로 채우고
+--   (클라이언트 값 무시) 주말·공휴일 여부·사유를 현재 공휴일 표로 다시 계산한다.
+--   상태 전이(확정·확정취소·대체·폐기)와 draft가 아닌 행의 변경은 저장된 값(스냅샷)을 그대로 둔다 —
+--   확정 RPC가 확정 직전에 한 번 다시 계산한 값을 최종기록과 초안이 똑같이 갖게 하기 위해서다
+--   (상태만 바꾸는 UPDATE에서 다시 계산하면 그 사이 공휴일이 바뀐 경우 초안 사유만 달라져 확정취소가 영구히 막힌다).
 create or replace function private.overtime_drafts_guard()
 returns trigger
 language plpgsql
@@ -260,6 +268,13 @@ begin
     end if;
   end if;
 
+  -- 상태 전이 또는 draft가 아닌 행: 달력 플래그·사유·시간 칸을 다시 계산하지 않는다(저장된 스냅샷 유지)
+  if tg_op = 'UPDATE' and (old.status <> 'draft' or new.status <> 'draft') then
+    new.updated_at := pg_catalog.now();
+    return new;
+  end if;
+
+  -- 이하 편집 가능한 상태(INSERT, draft → draft UPDATE)만
   -- 2h/3h 프리셋 (lib/overtime/time.ts TIME_TYPE_PRESETS, 초안 CHECK와 같은 값)
   if new.time_type = '2h' then
     new.start_time := '18:00'; new.end_time := '21:00'; new.break_hours := 1; new.hours := 2;
@@ -315,8 +330,11 @@ create trigger overtime_assignment_runs_guard
 
 -- 3-1. 초안 저장 — 실행 기록 + 초안을 한 트랜잭션으로. 범위 안의 잠기지 않은 이전 draft는 superseded.
 -- p_run:    { period_label, seed, scope, scope_employee_id?, scope_project_id?, rule_version, input_snapshot, result_summary }
--- p_drafts: [{ employee_id, project_id, work_date, task_id, time_type, exception_reason? }]
+-- p_drafts: [{ employee_id, project_id, work_date, task_id, time_type, exception_reason?, is_holiday? }]
 --           시간 칸·업무명·주말/공휴일 여부는 DB가 채운다. JSON 키는 정해진 이름으로만 읽는다(식별자로 쓰지 않음).
+--           is_holiday(선택, boolean): 미리보기 당시 화면이 본 공휴일 여부. 있으면 지금 holidays 표와 비교해 다르면
+--           OVERTIME_HOLIDAY_CHANGED(errcode 55000)로 전체 거부 — 공휴일이 바뀐 뒤의 낡은 미리보기(사유)를 저장하지 않는다.
+--           키가 없으면 비교하지 않는다(이전 화면과 호환).
 create or replace function public.overtime_save_assignment_run(p_run jsonb, p_drafts jsonb)
 returns uuid
 language plpgsql
@@ -335,6 +353,7 @@ declare
   v_bad record;
   v_week record;
   v_target record;
+  v_changed date;
 begin
   perform private.overtime_require_write();
   select pp.period_start, pp.period_end into v_start, v_end from private.overtime_pay_period(v_label) pp;
@@ -345,6 +364,17 @@ begin
       raise exception 'OVERTIME_HOLIDAYS_MISSING: %년 공휴일 데이터 없음', v_year using errcode = '55000';
     end if;
   end loop;
+
+  -- 미리보기 뒤 공휴일 변경: 초안의 is_holiday(보낸 경우만)가 지금 공휴일 표와 다르면 아무것도 쓰기 전에 거부
+  select x.work_date into v_changed
+  from jsonb_to_recordset(coalesce(p_drafts, '[]'::jsonb)) as x(work_date date, is_holiday boolean)
+  where x.is_holiday is not null
+    and x.is_holiday is distinct from (exists (select 1 from public.holidays h where h.holiday_date = x.work_date))
+  order by x.work_date
+  limit 1;
+  if v_changed is not null then
+    raise exception 'OVERTIME_HOLIDAY_CHANGED: % 공휴일 여부가 다름', v_changed using errcode = '55000';
+  end if;
 
   -- 같은 급여기간의 저장·확정 직렬화
   perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('overtime_period:' || v_label, 0));
@@ -449,6 +479,10 @@ begin
 end $$;
 
 -- 3-2. 확정 — 초안 → 최종기록. p_employee_ids가 null이면 전체.
+--   확정 직전에 초안마다 주말·공휴일·사유를 현재 공휴일 표로 한 번 다시 계산(draft 상태 그대로의 UPDATE → 초안 트리거)하고,
+--   다시 읽은 그 값을 최종기록에 그대로 넣는다. 이어지는 상태만 바꾸는 UPDATE는 트리거가 다시 계산하지 않으므로
+--   최종기록과 초안의 사유가 끝까지 같다(확정취소 비교가 일관됨).
+--   그 사이 공휴일이 된 날인데 사유가 없으면 고정 문구 '확정 시 공휴일 변경 반영'을 넣고, 더 이상 주말·공휴일이 아니면 NULL.
 create or replace function public.overtime_confirm_run(p_run_id uuid, p_employee_ids uuid[] default null)
 returns jsonb
 language plpgsql
@@ -460,6 +494,7 @@ declare
   v_start date;
   v_end date;
   d public.overtime_assignment_drafts;
+  v_fresh public.overtime_assignment_drafts;
   v_now timestamptz := now();
   v_count int := 0;
   v_target record;
@@ -501,18 +536,32 @@ begin
       raise exception 'OVERTIME_CONFIRM_INVALID: 같은 날 자동배정 기록이 이미 있음 (직원 %, %)', d.employee_id, d.work_date using errcode = '23505';
     end if;
 
+    -- 확정 직전 달력 재계산 1회: draft → draft UPDATE라 초안 트리거가 주말·공휴일·사유를 현재 공휴일 표로 다시 계산한다.
+    -- 사유는 여기서 먼저 정한다(주말·공휴일이면 기존 사유, 없으면 고정 문구 / 아니면 NULL) — 트리거의 '수동 수정' 기본값을 쓰지 않는다.
+    update public.overtime_assignment_drafts x
+    set exception_reason = case
+          when extract(isodow from x.work_date) in (6, 7)
+               or exists (select 1 from public.holidays h where h.holiday_date = x.work_date)
+          then coalesce(x.exception_reason, '확정 시 공휴일 변경 반영')
+          else null
+        end
+    where x.id = d.id;
+    select * into v_fresh from public.overtime_assignment_drafts x where x.id = d.id;
+
     -- 주 12시간은 overtime_work_records_b_weekly_cap 트리거가 같은 규칙 함수로 검사한다.
-    -- note(수동 메모)는 비우고, 주말·공휴일 사유는 전용 컬럼으로 옮긴다.
+    -- note(수동 메모)는 비우고, 주말·공휴일 사유는 전용 컬럼으로 옮긴다. 값은 방금 다시 읽은 초안(v_fresh) 그대로.
     insert into public.overtime_work_records
       (employee_id, project_id, work_date, task_description, start_time, end_time, hours, break_hours, note,
        source, assignment_run_id, assignment_draft_id,
        employee_name_snapshot, project_name_snapshot, task_name_snapshot, assignment_exception_reason, confirmed_at)
-    select d.employee_id, d.project_id, d.work_date, d.task_name, d.start_time, d.end_time, d.hours, d.break_hours, '',
-           'auto', d.run_id, d.id,
-           e.name, op.name, d.task_name, d.exception_reason, v_now
+    select v_fresh.employee_id, v_fresh.project_id, v_fresh.work_date, v_fresh.task_name, v_fresh.start_time, v_fresh.end_time,
+           v_fresh.hours, v_fresh.break_hours, '',
+           'auto', v_fresh.run_id, v_fresh.id,
+           e.name, op.name, v_fresh.task_name, v_fresh.exception_reason, v_now
     from public.overtime_employees e, public.overtime_projects op
-    where e.id = d.employee_id and op.id = d.project_id;
+    where e.id = v_fresh.employee_id and op.id = v_fresh.project_id;
 
+    -- 상태만 바꾼다 — 초안 트리거는 상태 전이에서 달력 값을 다시 계산하지 않으므로 v_fresh 값이 유지된다
     update public.overtime_assignment_drafts set status = 'confirmed', confirmed_at = v_now where id = d.id;
     v_count := v_count + 1;
   end loop;

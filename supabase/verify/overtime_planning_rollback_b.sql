@@ -4,6 +4,10 @@
 -- 생기기 전이면 안전하다. 자동배정 실행·초안·auto 기록이 이미 있으면 중단한다 — 그 상태에서 보호 트리거를
 -- 지우면 auto 기록이 직접 수정 가능해지므로 먼저 보존 방안을 정한다.
 -- migration 자체는 한 트랜잭션이라 실행 도중 실패하면 Postgres가 자동으로 전부 되돌린다.
+--
+-- 되돌리기 순서: overtime_planning_c_rollback → overtime_cap_isolation_guard_rollback → overtime_monthly_target_rollback → overtime_planning_rollback_b → overtime_project_sync_rpc_rollback → overtime_planning_rollback_a
+--   C 되돌리기·격리수준 되돌리기·월 목표 되돌리기가 먼저다. 월 목표 트리거가 남아 있으면 스스로 중단한다
+--   (월 목표 migration은 B를 전제로 적용됐다 — 순서를 강제한다).
 
 begin;
 
@@ -12,6 +16,10 @@ begin
   if exists (select 1 from public.overtime_assignment_runs) or exists (select 1 from public.overtime_assignment_drafts)
      or exists (select 1 from public.overtime_work_records where source = 'auto') then
     raise exception 'rollback B 중단: 자동배정 데이터가 있다';
+  end if;
+  if exists (select 1 from pg_catalog.pg_trigger where tgname = 'overtime_work_records_ab_monthly_target')
+     or to_regprocedure('private.overtime_assert_monthly_target(uuid,date,numeric,uuid,numeric)') is not null then
+    raise exception 'rollback B 중단: 월 목표 강제조건이 남아 있다 — overtime_cap_isolation_guard_rollback.sql → overtime_monthly_target_rollback.sql 먼저';
   end if;
 end $$;
 

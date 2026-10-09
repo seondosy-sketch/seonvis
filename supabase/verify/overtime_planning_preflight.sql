@@ -4,6 +4,8 @@
 -- 결과: check_name / verdict(OK·STOP·INFO) / detail. STOP이 하나라도 있으면 migration을 실행하지 않는다.
 -- 개인정보 값은 나오지 않는다(건수·해시·역할명만). fp_* 행의 detail은 postflight의 같은 이름 행과 같아야 한다.
 -- 결과는 Export → Copy as CSV로 전달한다.
+-- p10(미연결 재직 직원)과 p11(미연결 '미래사업팀' 주소록)이 둘 다 0보다 크면 둘 다 STOP — 이름으로 자동 연결하지 않는다.
+--   supabase/verify/overtime_employee_link_check.sql로 대상 UUID를 보고 주소록에서 사람이 연결한 뒤 이 파일을 다시 실행한다.
 
 with
 a_objects(kind, name, present) as (
@@ -29,6 +31,13 @@ b_objects(kind, name, present) as (
 team as (
   select c.employee_id, c.name, c.rank, (c.company = '미래사업팀' and c.employment_status = '재직') as active
   from public.engineer_contacts c where c.employee_id is not null
+),
+-- 직원 분리 위험: 미연결 재직 직원(p10)과 미연결 '미래사업팀' 주소록(p11)이 둘 다 있으면 첫 동기화가 같은 사람을
+-- 새 UUID로 만들고 기존 행을 비활성으로 돌릴 수 있다 → 둘 다 STOP. migration A·C와 sync_team_employees도 같은 조건에서 중단한다.
+link as (
+  select (select count(*) from public.overtime_employees e
+           where e.is_active and not exists (select 1 from public.engineer_contacts c where c.employee_id = e.id)) as unlinked_employees,
+         (select count(*) from public.engineer_contacts c where c.company = '미래사업팀' and c.employee_id is null) as unlinked_contacts
 ),
 checks(check_name, verdict, detail) as (
   -- 적용 상태: A·B 객체가 전부 없거나 전부 있어야 한다(일부만 있으면 이전 적용이 중간에 끊긴 것)
@@ -79,15 +88,16 @@ checks(check_name, verdict, detail) as (
   where (e.name, e.position, e.is_active) is distinct from (t.name, t.rank, t.active)
   union all
   select 'p10_unlinked_active_employees',
-         case when count(*) = 0 then 'OK' else 'INFO' end,
-         count(*)::text || '명 (새 sync가 비활성 처리할 대상)'
-  from public.overtime_employees e
-  where e.is_active and not exists (select 1 from public.engineer_contacts c where c.employee_id = e.id)
+         case when l.unlinked_employees = 0 then 'OK' when l.unlinked_contacts > 0 then 'STOP' else 'INFO' end,
+         l.unlinked_employees::text || '명 (새 sync가 비활성 처리할 대상'
+         || case when l.unlinked_contacts > 0 then ' — p11과 동시: 직원 분리 위험, overtime_employee_link_check.sql로 수동 연결 후 다시 preflight)' else ')' end
+  from link l
   union all
   select 'p11_unlinked_team_contacts',
-         case when count(*) = 0 then 'OK' else 'INFO' end,
-         count(*)::text || '명 (새 sync가 새 직원 행을 만들 대상)'
-  from public.engineer_contacts c where c.company = '미래사업팀' and c.employee_id is null
+         case when l.unlinked_contacts = 0 then 'OK' when l.unlinked_employees > 0 then 'STOP' else 'INFO' end,
+         l.unlinked_contacts::text || '명 (새 sync가 새 직원 행을 만들 대상'
+         || case when l.unlinked_employees > 0 then ' — p10과 동시: 직원 분리 위험, overtime_employee_link_check.sql로 수동 연결 후 다시 preflight)' else ')' end
+  from link l
   union all
   select 'p12_sync_team_employees_acl',
          'INFO',

@@ -12,10 +12,16 @@
 | **Migration A — 기반 스키마** | `supabase/migration_overtime_planning_a_base.sql` | Phase 4 이전 언제든 (A만으로 기존 수동입력·출력 정상) |
 | **Migration B — 강제조건·RPC 활성화** | `supabase/migration_overtime_planning_b_activate.sql` | **Phase 4 화면 배포와 같은 배포** (A 필수) |
 | **프로젝트 동기화 RPC** | `supabase/migration_overtime_project_sync_rpc.sql` | Phase 4 API route와 같은 배포 (A·B와 독립, 별도 승인) |
+| **Migration C — 보정 (forward)** | `supabase/migration_overtime_planning_c_corrections.sql` | A·B(+월 목표·격리수준)가 이미 있는 DB(개발). 운영은 A·B 파일에 같은 수정이 있어 no-op — 순서상 월 목표 activation 뒤 |
 | 점검 (읽기 전용) | `supabase/verify/overtime_planning_catalog.sql` | 카탈로그 확인 (완료, 2026-10-03) |
 | | `supabase/verify/overtime_planning_preflight.sql` | A 직전, B 직전 각각 |
-| | `supabase/verify/overtime_planning_postflight_a.sql` / `_b.sql` | A 직후 / B 직후 |
-| 복구 초안 | `supabase/verify/overtime_planning_rollback_b.sql` → `_rollback_a.sql` | 문제 시 (자동배정 데이터가 있으면 스스로 중단) |
+| | `supabase/verify/overtime_planning_postflight_a.sql` / `_b.sql` | A 직후 / B 직후 (결과 열 `verdict`) |
+| | `supabase/verify/overtime_planning_current_postflight.sql` | A·동기화 RPC·B·월 목표·격리수준·C가 모두 적용된 **현재 상태** 전체 확인(`check_name, status, detail`). 정상이면 OK·INFO만 — A 직후용 a04·a10·a13처럼 정상 상태에서 FAIL이 나는 항목이 없다. 함수는 스키마.이름 + 인자 타입 단위로 catalog 속성(언어·변동성·DEFINER·search_path)과 본문 지문을 저장소 migration 체인의 최종 정의와 비교하고, 같은 이름의 다른 인자 함수는 따로 FAIL. 본문 지문의 MD5는 보안 인증이 아니라 일치 확인용이며, 작은따옴표 밖 공백 차이만 무시한다(리터럴 안 공백은 비교) |
+| | `supabase/verify/overtime_planning_c_preflight.sql` / `_c_postflight.sql` | C 직전 / C 직후 (결과 컬럼 check_name / status / detail) |
+| | `supabase/verify/overtime_employee_link_check.sql` | preflight p10·p11이 STOP일 때 — 미연결 직원·주소록 UUID 목록(이름은 화면 확인용) |
+| | `supabase/verify/overtime_monthly_target_precheck.sql` | 월 목표 activation 직전 — 재직 직원 전원 목표 행 확인 |
+| 복구 초안 | `supabase/verify/overtime_planning_c_rollback.sql` → `overtime_cap_isolation_guard_rollback.sql` → `overtime_monthly_target_rollback.sql` → `overtime_planning_rollback_b.sql` → `overtime_project_sync_rpc_rollback.sql` → `overtime_planning_rollback_a.sql` | 문제 시 (앞 단계가 남아 있거나 자동배정 데이터가 있으면 스스로 중단) |
+| 개발 DB 시험 | `supabase/dev/overtime_confirm_holiday_test.sql`, `overtime_employee_link_test.sql`, `overtime_rollback_rehearsal_*.sql` | 아래 "Migration C" 절의 개발 DB 실행 순서 |
 | 타입 | `lib/overtime/planningTypes.ts` | Phase 4부터 사용 |
 
 점검 SQL은 전부 **SELECT 한 문장**이다(Supabase SQL Editor는 마지막 문장의 결과만 보여준다). 결과 컬럼은
@@ -136,7 +142,7 @@ manually_edited, locked, status, confirmed_at.
 |---|---|
 | 2h/3h 프리셋만 | CHECK + B 트리거가 프리셋 값으로 덮어씀 |
 | 하루 한 프로젝트 | partial UNIQUE (employee_id, work_date) WHERE status IN ('draft','confirmed') |
-| 주말·공휴일 ⇒ 사유 필수, 평일 ⇒ NULL | CHECK + B 트리거(INSERT에 사유 없으면 거부, 평일은 NULL로) |
+| 주말·공휴일 ⇒ 사유 필수, 평일 ⇒ NULL | CHECK + B 트리거(INSERT에 사유 없으면 거부, 평일은 NULL로). 트리거는 편집 가능한 상태(INSERT, draft→draft)에서만 달력 값을 다시 계산하고, 상태 전이·draft 아닌 행은 저장된 값을 유지 |
 | 생성·삭제·상태전이는 RPC만 | insert/delete 정책 없음 + B 트리거(소유자 맥락) |
 | 수동 수정 ⇒ 잠금 | B 트리거가 manually_edited·locked = true |
 | 재확정·취소초안 확정 방지 | 확정 RPC가 status='draft'만 + 최종기록 assignment_draft_id UNIQUE |
@@ -176,17 +182,23 @@ Phase 4 화면은 저장 전에 같은 기준으로 사전검증하고 `현재 �
 
 **저장** `overtime_save_assignment_run(p_run, p_drafts) → run id` (write)
 급여기간 연도의 공휴일 데이터 존재(없으면 `OVERTIME_HOLIDAYS_MISSING`) → 급여기간 advisory lock → 실행 기록 생성 →
+초안의 선택 키 `is_holiday`가 지금 공휴일 표와 다르면 `OVERTIME_HOLIDAY_CHANGED`(errcode 55000, 아무것도 쓰기 전) →
 범위 안 잠기지 않은 draft를 superseded → 초안 삽입(시간·업무명·주말/공휴일은 DB가 채움) → 재검증(급여기간·범위·재직·참여·
 프로젝트 진행중이고 기간 안·허용업무) → 주 12시간(기록+초안) → 월 목표 행 있음 & 합계 ≤ 목표 → 이전 실행 상태 갱신.
 
 **확정** `overtime_confirm_run(p_run_id, p_employee_ids = null) → {confirmed, run_status}` (write)
 실행 행 FOR UPDATE + advisory lock → status='draft' 초안만 FOR UPDATE → 재검증(급여기간·재직·참여·기간·같은 날 auto 없음) →
-최종기록 생성(source=auto, 스냅샷, 예외사유는 전용 컬럼, note 빈 값; 주 12시간은 트리거) → 초안 confirmed → 월 목표 확인 → 실행 상태.
+초안마다 확정 직전 달력 재계산 1회(draft→draft UPDATE — 트리거가 지금 공휴일 표로 주말·공휴일·사유 계산, 새로 공휴일이 된 날에
+사유가 없으면 고정 문구 **`확정 시 공휴일 변경 반영`**, 더 이상 주말·공휴일이 아니면 NULL) → 다시 읽은 그 값으로 최종기록 생성
+(source=auto, 스냅샷, 예외사유는 전용 컬럼, note 빈 값; 주 12시간은 트리거) → 초안 confirmed(상태만 바꾸는 UPDATE라 트리거가
+달력 값을 다시 계산하지 않음 → 기록과 초안의 사유가 같게 남는다) → 월 목표 확인 → 실행 상태.
 하나라도 실패하면 전체 롤백. 동시 호출은 행 잠금 + UNIQUE로 같은 초안이 두 번 확정되지 않는다.
 
 **확정취소** `overtime_unconfirm_drafts(p_draft_ids) → {unconfirmed}` (**관리자만**, `allowed_users.is_admin`)
 초안 confirmed + 연결된 최종기록 존재 + 최종기록의 (source, run_id, 직원, 프로젝트, 날짜, 시간, 시작/종료/휴게, 업무명,
 업무명 스냅샷, 예외사유, 확정시각)이 초안과 모두 같을 때만 최종기록 삭제·초안 draft 복귀. 하나라도 다르면 `OVERTIME_CONFIRMED_RECORD_CHANGED`.
+확정 뒤 공휴일이 바뀌어도 초안 스냅샷은 바뀌지 않으므로(위 확정 절차) 취소할 수 있다. 외부 경로로 auto 기록이 바뀌면 계속 거부.
+(Migration C 이전에는 확정 시 상태만 바꾸는 UPDATE에서 트리거가 공휴일을 다시 계산해 초안 사유만 달라졌고, 그 날은 영구히 취소 불가였다.)
 
 **폐기** `overtime_discard_run(p_run_id) → {discarded}` (write) — 남은 draft만 discarded, 확정분 유지.
 
@@ -196,7 +208,8 @@ Phase 4 화면은 저장 전에 같은 기준으로 사전검증하고 `현재 �
 **프로젝트 기간 기준**: 저장·확정 RPC는 `overtime_projects`(동기화 사본)의 status·기간을 본다 → 동기화 C안으로 사본을 신뢰할 수 있게 한다.
 
 **오류 접두어** (`planningTypes.ts OVERTIME_DB_ERRORS`): `OVERTIME_WEEKLY_CAP`, `OVERTIME_MONTHLY_TARGET_MISSING`, `OVERTIME_MONTHLY_TARGET`,
-`OVERTIME_HOLIDAYS_MISSING`, `OVERTIME_DRAFT_INVALID`, `OVERTIME_CONFIRM_INVALID`, `OVERTIME_AUTO_RECORD_LOCKED`, `OVERTIME_RUN_NOT_CONFIRMABLE`.
+`OVERTIME_HOLIDAYS_MISSING`, `OVERTIME_DRAFT_INVALID`, `OVERTIME_CONFIRM_INVALID`, `OVERTIME_AUTO_RECORD_LOCKED`, `OVERTIME_RUN_NOT_CONFIRMABLE`,
+`OVERTIME_HOLIDAY_CHANGED`(55000, 저장), `OVERTIME_EMPLOYEE_LINK_REQUIRED`(55000, 직원 동기화).
 
 ## 직원 식별자 (A)
 
@@ -204,7 +217,12 @@ Phase 4 화면은 저장 전에 같은 기준으로 사전검증하고 `현재 �
   (기술인 → 직원은 컬럼 하나라 원래 최대 1명).
 - `overtime_employees_name_key` 제거 → 동명이인 허용. 이름은 연결 판단에 쓰지 않는다.
 - `sync_team_employees()` 최종안:
-  1. 미연결 미래사업팀 기술인 → 항상 새 직원 행 생성·연결 (이름 매칭 없음). FOR UPDATE + UNIQUE로 동시 호출 이중 생성 방지
+  0. **직원 분리 방지**: 미연결 '미래사업팀' 주소록(preflight p11)과 주소록 미연결 재직 직원(p10)이 **둘 다** 있으면 아무것도 바꾸지 않고
+     `OVERTIME_EMPLOYEE_LINK_REQUIRED`(55000). 그대로 두면 첫 동기화가 같은 사람을 새 UUID로 만들고 기존 행을 비활성으로 돌려
+     과거 기록·목표·업무·참여가 옛 UUID에 남는다. 자동 이름 매칭은 하지 않는다 — `supabase/verify/overtime_employee_link_check.sql`로
+     UUID를 보고 사람이 주소록 행의 `employee_id`를 지정한 뒤 preflight를 다시 실행한다(p10·p11 둘 다 STOP).
+     같은 조건을 migration A 0단계와 Migration C 0단계도 확인한다. 한쪽만 있으면 아래 1·3 규칙 그대로.
+  1. 미연결 미래사업팀 기술인 → 항상 새 직원 행 생성·연결 (이름 매칭 없음, 재직 상태면 활성). FOR UPDATE + UNIQUE로 동시 호출 이중 생성 방지
   2. 연결된 직원 → 이름·직급·재직(= 미래사업팀 AND 재직)을 주소록 값으로. 바뀐 행만 UPDATE
   3. 연결이 끊긴 직원 → 비활성. 주소록에 미래사업팀 재직자가 0명이면 데이터 사고로 보고 건너뜀
   - DB 안에서 주소록 전체를 소유자 권한으로 읽으므로 RLS·네트워크로 "일부만 읽히는" 일이 없고, 실패하면 전체 롤백 →
@@ -240,7 +258,42 @@ insert(on conflict do nothing)/update만 · 같은 값이면 쓰지 않음 · me
 3. postflight_b → 전부 OK, fp_* 일치
 4. 회귀: 수동 입력의 12시간 안내, 자동배정 저장·확정·취소, 동기화
 
-문제 시 rollback_b → (필요하면) rollback_a. 둘 다 자동배정 데이터가 있으면 스스로 중단한다.
+문제 시 아래 "되돌리기 순서" 그대로. B·A 되돌리기는 자동배정 데이터나 앞 단계 객체(월 목표 강제조건)가 있으면 스스로 중단한다.
+
+**Migration C (A·B가 이미 적용된 DB — 개발 DB)**
+1. `overtime_planning_c_preflight.sql` → STOP 없음(A·B 적용, 직원 연결 c_pre06), fp_* 기록
+2. `migration_overtime_planning_c_corrections.sql` (한 트랜잭션, 함수 4개 create or replace + 같은 revoke/grant, 데이터 변경 없음)
+3. `overtime_planning_c_postflight.sql` → 전부 OK·INFO, fp_other_functions·fp_triggers·fp_planning_rows가 1과 같음
+   이어서 `overtime_planning_current_postflight.sql` → FAIL 0(전부 OK·INFO). A 직후용 `overtime_planning_postflight_a.sql`은 B 적용 뒤에는 쓰지 않는다
+   개발 DB에 실제 관리자(`allowed_users.is_admin = true`)가 0명이면 관리자 검사를 완화하지 않고 시험 계정만 잠시 승격한다:
+   `supabase/verify/admin_flag_preflight.sql`(관리자 수) → 0명일 때만 `supabase/dev/overtime_test_admin_enable.sql`
+   (개발 DB 가드 → 고정 시험 계정 1행의 is_admin false→true만, 다른 열·행 불변 확인, 다른 관리자가 있으면 중단) →
+   시험 → 성공·실패와 관계없이 마지막에 `supabase/dev/overtime_test_admin_restore.sql`(true→false) → `admin_flag_preflight.sql`로 시험 전 관리자 수로 돌아왔는지 확인.
+   안전장치 자체는 `supabase/dev/overtime_test_admin_toggle_test.sql`(하위 트랜잭션 안에서 두 번 실행·0행·운영 흔적·다른 관리자 시나리오, 변경 남기지 않음)로 먼저 확인한다.
+   공휴일 확정·취소 시험은 이 승격과 무관하게 자기 시험 관리자 행(`ot-holiday-admin@example.invalid`, is_admin = true)을 만들고
+   그 JWT + `authenticated` 역할로 `overtime_unconfirm_drafts`를 불러 실제 `private.overtime_is_admin()` 경로를 시험한 뒤 모두 되돌린다.
+4. 개발 시험: `supabase/dev/overtime_confirm_holiday_test.sql`(공휴일 추가→확정→공휴일 변경→관리자 확정취소),
+   `supabase/dev/overtime_employee_link_test.sql`(p10·p11 네 경우) — 둘 다 하위 트랜잭션을 되돌려 데이터가 남지 않는다
+5. (선택) 전체 되돌리기 리허설 `supabase/dev/overtime_rollback_rehearsal_1_state.sql` → `_2_c` → `_3_isolation` → `_4_monthly`
+   → `_5_purge` → `_6_b` → `_7_sync_rpc` → `_8_a` (각 단계 뒤 `overtime_rollback_rehearsal_check.sql`) → `_9_forward`의 목록대로
+   A → 동기화 RPC → B → 월 목표 → 격리수준 → C 재적용 → `_10_compare`. **개발 DB의 자동배정 데이터를 지운다**(파일 맨 위 경고,
+   `set local overtime.rehearsal_ack = 'yes'` 주석을 풀어야 실행됨). strict 메뉴 권한·공용 표 RLS는 리허설이 건드리지 않으므로
+   다시 적용하지 않는다. 리허설 전과 `overtime_ui_seed.sql` 복원 뒤에 `supabase/dev/overtime_rollback_rehearsal_baseline.sql`
+   (읽기 전용 58행, 건수·참거짓·md5만)을 실행해 비교한다 — `d03`(메뉴 권한 함수)·`d07`(공용 표 정책)과 seed 고정 행 밖 데이터
+   지문(`e01`~`e12`)은 같아야 한다. seed 복원 뒤 기대: 시험 직원 4명·업무 12건·수동 기록 3건·월 목표 4건(2026-10 3명, 2026-09 1명)·
+   참여 0건·실행 0건·초안 0건·시험 입찰 프로젝트 5건·시험 계정 `is_admin=false`.
+
+C와 기존 migration의 관계: 신규 설치(운영)는 수정된 A·B만으로 같은 결과가 나오고 C는 no-op 재적용이다. 이미 A·B가 있는 DB는
+C가 forward 보정이다. 함수 본문은 A·B와 글자 그대로 같다(`lib/overtime/sql/overtimeSql.test.ts`).
+
+### 되돌리기 순서 (전체)
+
+되돌리기 순서: overtime_planning_c_rollback → overtime_cap_isolation_guard_rollback → overtime_monthly_target_rollback → overtime_planning_rollback_b → overtime_project_sync_rpc_rollback → overtime_planning_rollback_a
+
+- 격리수준 되돌리기가 월 목표 되돌리기보다 **먼저**다. 격리수준 되돌리기는 월 목표·주 12시간 검사 함수를 "지금 있을 때만" 원래 본문으로
+  바꾼다(반대 순서로 실행해도 월 목표 함수를 되살리지 않음 — 되살아나면 A 되돌리기가 월 목표 잔존 검사에서 멈췄다).
+- 동기화 RPC는 A·B와 독립이라 위치는 편의상 B 뒤·A 앞(화면을 구버전으로 되돌린 뒤에만).
+- 월 목표 선입력 되돌리기(`supabase/prod/overtime_monthly_targets_3_rollback.sql`)는 데이터용이며 activation 전에만 쓴다(이 순서와 별개).
 
 ## 기존 데이터 영향
 
@@ -262,13 +315,13 @@ insert(on conflict do nothing)/update만 · 같은 값이면 쓰지 않음 · me
 
 - 자동확정 기록(`source = 'auto'`)은 기존 입력 화면에서 "자동" 표시와 함께 보기만 된다(수정·삭제 버튼 없음).
 - 실행 기록 `input_snapshot`·`result_summary`에는 내부 ID·기간·목표·시간·이슈 코드만 넣는다(이름 없음).
-- 관리자 버튼(확정 취소) 표시는 레이아웃의 ADMIN_EMAILS 판정, 실제 허용은 DB의 `allowed_users.is_admin`.
+- 관리자 버튼(확정 취소) 표시와 실제 허용 모두 DB의 `allowed_users.is_admin`(화면은 서버가 매 요청 조회). `ADMIN_EMAILS`는 쓰지 않는다.
 
 ### 개발용 DB로 화면 확인
 
 - `supabase/dev/run-dev-server.mjs` (`node supabase/dev/run-dev-server.mjs`, 포트 3100): `.env.dev.local` 값으로 next dev 실행.
   개발 ref ≠ 운영 ref, service role key 다름을 확인한 뒤에만 시작한다. 외부 연동(Google 캘린더·Gemini) 키는 비운다.
-- `supabase/dev/overtime_ui_seed.sql` / `overtime_ui_seed_cleanup.sql`: 시험직원 4명·입찰 5건 등 가짜 데이터와 정리.
+- `supabase/dev/overtime_ui_seed.sql` / `overtime_ui_seed_cleanup.sql`: 시험직원 4명·업무 12건·입찰 5건·수동 기록 3건·월 목표 4건(2026-10 3명, 2026-09 1명) 등 가짜 데이터와 정리. 참여·실행·초안은 넣지 않는다.
 - 시험 로그인 계정(`ot-ui-test@example.com`)은 개발용 Supabase Authentication에서 사람이 직접 만든다.
 
 ## 월 목표시간 = 급여기간 총 한도 (수동 입력 포함)
@@ -290,7 +343,8 @@ insert(on conflict do nothing)/update만 · 같은 값이면 쓰지 않음 · me
   검사 순서: 필수 입력·시간 산출 → 자동확정 잠금 → 월 목표 존재 → 월 목표 초과 → 주 12시간 → 저장.
 - DB: `supabase/migration_overtime_monthly_target_guard.sql` — 트리거 `overtime_work_records_ab_monthly_target`
   (순서: `a_protect` → `ab_monthly_target` → `b_weekly_cap`). 누가 실행하든(authenticated·service_role·RPC) 적용,
-  같은 직원·급여기간 advisory lock으로 직렬화. 되돌리기: `supabase/verify/overtime_monthly_target_rollback.sql`.
+  같은 직원·급여기간 advisory lock으로 직렬화. 되돌리기: `supabase/verify/overtime_cap_isolation_guard_rollback.sql` →
+  `supabase/verify/overtime_monthly_target_rollback.sql` (격리수준 먼저).
 - 오류 문구: `friendlyOvertimeError`가 트리거 메시지에서 급여기간·목표·현재·입력 후·초과시간만 뽑아 보여준다.
 
 ### 부분 자동배정 (`lib/overtime/planning/partial.ts`)
@@ -305,5 +359,9 @@ insert(on conflict do nothing)/update만 · 같은 값이면 쓰지 않음 · me
 - 월 목표 강제조건은 운영에서 `supabase/prod/overtime_monthly_target_activation.sql` 한 트랜잭션으로 켠다
   (원본 `migration_overtime_monthly_target_guard.sql` + `migration_overtime_cap_isolation_guard.sql` 본문을 그대로 묶은 생성물).
 - 월 목표 선입력: `supabase/prod/overtime_monthly_targets_1_list.sql`(ID 목록) → `_2_apply.sql`(미리보기·적용) → `_3_rollback.sql`
+- 선입력 확인: `supabase/verify/overtime_monthly_target_precheck.sql`(재직 직원 전원 목표 행, 라벨은 파일 맨 위 [설정]) — FAIL 0일 때만 activation.
+  activation 맨 앞 DO 블록도 오늘(Asia/Seoul) 급여기간 라벨로 다시 확인하고, 21일 경계 7일 전(14~20일)이면 다음 급여기간 목표까지 요구한다
+  (경계 직전에 켜면 다음 날부터 목표 없는 전원의 수동 입력이 막히므로 일부러 막는다 — 그 기간에는 다음 기간 목표를 먼저 넣는다).
 - 되돌리기 추가: `supabase/verify/overtime_project_sync_rpc_rollback.sql`, A 되돌리기는 월 목표 강제조건이 남아 있으면 중단
+- Migration C는 activation 뒤(체크리스트 7단계). 운영 A·B는 수정본이라 C는 no-op 확인용.
 - 별건: `allowed_users` RLS 재귀 수정 `supabase/migration_allowed_users_rls_recursion_fix.sql`(+ rollback, dev 확인 `supabase/dev/allowed_users_rls_check.sql`)

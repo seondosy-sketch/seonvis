@@ -3,6 +3,9 @@
 -- 안전장치: B가 적용돼 있거나, 새 테이블에 데이터가 있거나, 동명이인이 생겼으면 중단한다.
 -- 기존 overtime_work_records의 기존 컬럼 값과 hours는 건드리지 않는다. 새 컬럼만 지운다
 -- (A 단독 상태에서는 새 컬럼에 값이 들어갈 경로가 없다 — postflight a04로 확인).
+--
+-- 되돌리기 순서: overtime_planning_c_rollback → overtime_cap_isolation_guard_rollback → overtime_monthly_target_rollback → overtime_planning_rollback_b → overtime_project_sync_rpc_rollback → overtime_planning_rollback_a
+--   마지막 단계. sync_team_employees는 migration_team_roster_sync.sql 원래 정의(이름 매칭)로 돌아간다.
 
 begin;
 
@@ -16,7 +19,7 @@ begin
   -- 이후 수동 입력이 실행 시점에 깨진다) → overtime_monthly_target_rollback.sql을 먼저
   if exists (select 1 from pg_trigger where tgname = 'overtime_work_records_ab_monthly_target')
      or to_regprocedure('private.overtime_assert_monthly_target(uuid,date,numeric,uuid,numeric)') is not null then
-    raise exception 'rollback A 중단: 월 목표 강제조건이 남아 있다 — overtime_monthly_target_rollback.sql 먼저';
+    raise exception 'rollback A 중단: 월 목표 강제조건이 남아 있다 — overtime_cap_isolation_guard_rollback.sql → overtime_monthly_target_rollback.sql 먼저';
   end if;
   if exists (select 1 from public.overtime_assignment_runs) or exists (select 1 from public.overtime_assignment_drafts)
      or exists (select 1 from public.overtime_monthly_targets) or exists (select 1 from public.overtime_member_tasks) then
