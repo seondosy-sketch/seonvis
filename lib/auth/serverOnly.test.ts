@@ -18,7 +18,8 @@ function walk(dir: string, out: string[] = []): string[] {
 
 describe('service role 클라이언트는 서버 전용', () => {
   it("lib/supabase-admin.ts는 import 'server-only'로 시작한다", () => {
-    const src = readFileSync(path.join(root, 'lib', 'supabase-admin.ts'), 'utf8')
+    // core.autocrlf=true로 체크아웃하면 CRLF가 된다 — 줄바꿈만 LF로 맞추고 선두 import 검사는 그대로 둔다
+    const src = readFileSync(path.join(root, 'lib', 'supabase-admin.ts'), 'utf8').replace(/\r\n?/g, '\n')
     expect(src).toMatch(/^(\/\/.*\n)*import 'server-only'\n/)
   })
 
