@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import { useIsMobile } from '@/lib/useIsMobile'
@@ -11,6 +11,7 @@ import { koreaToday } from '@/lib/overtime/eligibility'
 import { runAssignment } from '@/lib/overtime/assign/engine'
 import type { AssignmentResult } from '@/lib/overtime/assign/types'
 import { buildAssignmentInput, lockedRange, supersededBy, toPeriodLabel, type PlanningRaw, type PlanningScope } from '@/lib/overtime/planning/input'
+import { createLoadGate, type LoadGate } from '@/lib/overtime/planning/loadGate'
 import { friendlyOvertimeError } from '@/lib/overtime/planning/errors'
 import { canSavePreview, makePreview, type StoredPreview } from '@/lib/overtime/planning/fingerprint'
 import { splitPartialPlan, type PartialPlan } from '@/lib/overtime/planning/partial'
@@ -52,6 +53,8 @@ export default function OvertimePlanPage() {
 
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
+  // 화면에 반영된 자료의 급여기간 라벨 — 지금 보는 기간(label)과 다르면 아직 불러오는 중으로 본다
+  const [dataLabel, setDataLabel] = useState<string | null>(null)
   const [employees, setEmployees] = useState<Employee[]>([])
   const [tasks, setTasks] = useState<EmployeeTask[]>([])
   const [projects, setProjects] = useState<Project[]>([])
@@ -78,17 +81,27 @@ export default function OvertimePlanPage() {
   const label = toPeriodLabel(year, month0)
   const days = useMemo(() => payPeriodDays(year, month0), [year, month0])
 
+  // 응답 세대 판정 — 가장 최근 요청의 응답·오류만 반영한다(늦게 온 이전 기간 응답, 화면이 사라진 뒤의 응답은 버림)
+  const gateRef = useRef<LoadGate | null>(null)
+  if (gateRef.current === null) gateRef.current = createLoadGate()
+  useEffect(() => {
+    const gate = gateRef.current!
+    gate.activate()
+    return () => gate.dispose()
+  }, [])
+
   // 첫 setState가 await 뒤에 오도록 둔다 — 화면 상태 초기화(loading 등)는 호출하는 쪽(changePeriod·reload)이 한다
-  const load = useCallback(async (y: number, m: number, sync: boolean) => {
+  // 한 기간 불러오기. await마다 isCurrent()를 확인하고, 아니면 아무 상태도 바꾸지 않고 끝낸다
+  async function loadPeriod(y: number, m: number, sync: boolean, periodLabel: string, isCurrent: () => boolean) {
     const { start, end } = payPeriodRange(y, m)
     const range = lockedRange(y, m)
     if (sync) {
       // 실패해도 기존 목록으로 계속 진행하되, 화면에 안내한다(원문 오류는 보여주지 않는다)
       const res = await requestProjectSync(start, end)
+      if (!isCurrent()) return
       setAttention(res.attention)
       setSyncFailed(!res.ok)
     }
-    const periodLabel = toPeriodLabel(y, m)
     const [empRes, taskRes, projRes, srcRes, memRes, mtRes, tgRes, holRes, recRes, runRes, lockDraftRes] = await Promise.all([
       supabase.from('overtime_employees').select('*').eq('is_active', true).order('sort_order', { ascending: true }),
       supabase.from('overtime_employee_tasks').select('*').order('sort_order', { ascending: true }).order('created_at', { ascending: true }),
@@ -105,6 +118,7 @@ export default function OvertimePlanPage() {
         .select('id, employee_id, project_id, work_date, hours, task_name, status, locked, manually_edited')
         .eq('status', 'draft').gte('work_date', range.from).lte('work_date', range.to),
     ])
+    if (!isCurrent()) return
     setLoadError(null)
     const failed = [empRes, taskRes, projRes, srcRes, memRes, mtRes, tgRes, holRes, recRes, runRes, lockDraftRes].find(r => r.error)
     if (failed) {
@@ -117,6 +131,7 @@ export default function OvertimePlanPage() {
     let draftRows: AssignmentDraft[] = []
     if (activeRunIds.length > 0) {
       const dRes = await supabase.from('overtime_assignment_drafts').select('*').in('run_id', activeRunIds).in('status', ['draft', 'confirmed'])
+      if (!isCurrent()) return
       if (dRes.error) { setLoadError('초안을 불러오지 못했습니다.'); setLoading(false); return }
       draftRows = dRes.data as AssignmentDraft[]
     }
@@ -132,7 +147,21 @@ export default function OvertimePlanPage() {
     setRuns(runRows)
     setDrafts(draftRows)
     setLockDrafts(lockDraftRes.data as LockDraftRow[])
+    setDataLabel(periodLabel)
     setLoading(false)
+  }
+
+  const load = useCallback(async (y: number, m: number, sync: boolean) => {
+    const periodLabel = toPeriodLabel(y, m)
+    const ticket = gateRef.current!.begin(periodLabel)
+    try {
+      await loadPeriod(y, m, sync, periodLabel, ticket.isCurrent)
+    } catch {
+      // 네트워크 오류 등 예외 — 최신 요청일 때만 안내한다(원문 오류는 보여주지 않는다)
+      if (!ticket.isCurrent()) return
+      setLoadError('자료를 불러오지 못했습니다. 잠시 뒤 다시 시도하세요.')
+      setLoading(false)
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -183,7 +212,11 @@ export default function OvertimePlanPage() {
     }
   }
 
+  // 불러오기가 끝났고, 화면에 반영된 자료가 지금 보는 급여기간의 것일 때만 실행·저장한다
+  const dataReady = !loading && dataLabel === label
+
   function runEngine(s: number) {
+    if (!dataReady) return
     setMessage(null)
     setPreviewCleared(false)
     const input = buildAssignmentInput(buildRaw(s))
@@ -197,7 +230,7 @@ export default function OvertimePlanPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
     [preview, scope, year, month0, employees, targets, projects, sources, members, memberTasks, tasks, holidays, records, lockDrafts])
   // 서버에서 다시 읽은 값이 미리보기 입력과 다르면 미리보기를 지운다(렌더 중 이전 값 비교 — effect 없이)
-  if (preview && !previewFresh && !loading) {
+  if (preview && !previewFresh && dataReady) {
     setPreview(null)
     setPreviewCleared(true)
   }
@@ -212,7 +245,7 @@ export default function OvertimePlanPage() {
   const partial: PartialPlan | null = useMemo(() => (preview ? splitPartialPlan(preview.result) : null), [preview])
 
   async function saveDraft() {
-    if (!preview || !partial || !partial.canSave) return
+    if (!preview || !partial || !partial.canSave || !dataReady) return
     // 저장 직전 다시 확인 — 미리보기 뒤 입력이 바뀌었으면 저장하지 않는다
     if (!canSavePreview(preview, buildAssignmentInput(buildRaw(preview.input.seed)), scope)) {
       setMessage({ kind: 'error', text: '미리보기 뒤에 설정이나 기존 기록이 바뀌었습니다. 자동배정을 다시 실행한 뒤 저장하세요.' })
@@ -351,6 +384,8 @@ export default function OvertimePlanPage() {
 
   const changePeriod = (delta: number) => {
     const n = year * 12 + month0 + delta
+    // 새 기간 요청이 시작되기 전이라도 지금까지의 요청 응답은 모두 버린다
+    gateRef.current!.invalidate()
     setLoading(true)
     setPreview(null)
     setPreviewCleared(false)
@@ -385,7 +420,7 @@ export default function OvertimePlanPage() {
           <span style={{ fontSize: 14, fontWeight: 600, minWidth: 100, textAlign: 'center', color: '#111' }}>{year}년 {MONTH_NAMES[month0]}</span>
           <button onClick={() => changePeriod(1)} style={navBtn}>›</button>
           <span style={{ fontSize: 12, color: '#999' }}>({md(periodStart)} ~ {md(periodEnd)})</span>
-          {loading && <span style={{ fontSize: 11, color: '#bbb', marginLeft: 8 }}>불러오는 중...</span>}
+          {!dataReady && !loadError && <span style={{ fontSize: 11, color: '#bbb', marginLeft: 8 }}>불러오는 중...</span>}
         </div>
 
         {!canWrite && <Notice kind="info" text="읽기 권한이라 보기만 할 수 있습니다." />}
@@ -447,7 +482,7 @@ export default function OvertimePlanPage() {
                   {candidates.map(c => <option key={c.project.id} value={`project:${c.project.id}`}>{c.project.name}</option>)}
                 </optgroup>
               </select>
-              <button onClick={() => runEngine(newSeed())} disabled={loading} style={primaryBtn}>{preview ? '다시 섞기' : '자동배정 실행'}</button>
+              <button onClick={() => runEngine(newSeed())} disabled={!dataReady} style={primaryBtn}>{preview ? '다시 섞기' : '자동배정 실행'}</button>
               {preview && canWrite && (
                 <button data-testid="plan-save" onClick={saveDraft} disabled={busy || !partial?.canSave || !previewFresh} style={{ ...darkBtn, opacity: busy || !partial?.canSave || !previewFresh ? 0.5 : 1 }}>
                   {busy ? '저장 중...' : `초안 저장 (${partial?.drafts.length ?? 0}건)`}
