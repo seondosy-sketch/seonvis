@@ -16,8 +16,34 @@
 --   변경 칼럼은 name·start_date·end_date·status·(NULL인) source_project_id뿐. 삭제 없음.
 --   참여 인원·업무·근무기록 테이블은 참조조차 하지 않는다. 같은 값이면 쓰지 않는다(멱등).
 --   실행 권한은 service_role만(브라우저에서 직접 호출 불가).
+-- 의존 인덱스: INSERT의 on conflict (source_project_id) where source_project_id is not null 은
+--   public.overtime_projects_source_project_id_key(부분 UNIQUE, migration_overtime_source_project.sql)를 추론해 쓴다.
+--   없거나 모양이 다르면 첫 동기화가 실행 시점에 실패하므로, 함수를 만들기 전에 확인하고 다르면 아무것도 바꾸지 않고 중단한다.
 
 begin;
+
+do $
+declare
+  v record;
+begin
+  if to_regclass('public.overtime_projects_source_project_id_key') is null then
+    raise exception 'OVERTIME_SYNC_INDEX_MISSING: public.overtime_projects_source_project_id_key 없음 — migration_overtime_source_project.sql을 먼저 적용한다';
+  end if;
+  select i.indrelid = to_regclass('public.overtime_projects') as on_table,
+         i.indisunique as is_unique,
+         (i.indnatts = 1 and i.indexprs is null and a.attname = 'source_project_id') as on_column,
+         coalesce(pg_catalog.pg_get_expr(i.indpred, i.indrelid) = '(source_project_id IS NOT NULL)', false) as partial_ok,
+         (i.indisvalid and i.indisready) as valid_ready
+    into v
+  from pg_catalog.pg_index i
+  left join pg_catalog.pg_attribute a on a.attrelid = i.indrelid and a.attnum = i.indkey[0]
+  where i.indexrelid = to_regclass('public.overtime_projects_source_project_id_key');
+  if not found or not (v.on_table and v.is_unique and v.on_column and v.partial_ok and v.valid_ready) then
+    raise exception 'OVERTIME_SYNC_INDEX_INVALID: overtime_projects_source_project_id_key 모양이 다르다 — 대상 표=% unique=% 열(source_project_id 하나)=% 부분조건(IS NOT NULL)=% valid·ready=%',
+      coalesce(v.on_table::text, '없음'), coalesce(v.is_unique::text, '없음'), coalesce(v.on_column::text, '없음'),
+      coalesce(v.partial_ok::text, '없음'), coalesce(v.valid_ready::text, '없음');
+  end if;
+end $;
 
 create or replace function public.overtime_apply_project_sync(p_inserts jsonb, p_updates jsonb)
 returns jsonb

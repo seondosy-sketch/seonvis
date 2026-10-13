@@ -127,6 +127,20 @@ checks(check_name, verdict, detail) as (
                   to_regclass('public.overtime_projects'), to_regclass('public.overtime_project_members'),
                   to_regclass('public.overtime_employee_tasks'))
   union all
+  -- 동기화 RPC(migration_overtime_project_sync_rpc.sql)의 on conflict가 쓰는 부분 UNIQUE 인덱스 — 없거나 모양이 다르면 STOP
+  select 'p16_sync_source_index',
+         case when x.on_table and x.is_unique and x.on_column and x.partial_ok and x.valid_ready then 'OK' else 'STOP' end,
+         case when x.on_table is null then 'overtime_projects_source_project_id_key 없음 (migration_overtime_source_project.sql 필요)'
+              else '대상 표=' || x.on_table::text || ' unique=' || x.is_unique::text || ' 열=' || x.on_column::text
+                   || ' 부분조건=' || x.partial_ok::text || ' valid·ready=' || x.valid_ready::text end
+  from (select 1) one left join (select i.indrelid = to_regclass('public.overtime_projects') as on_table, i.indisunique as is_unique,
+                 (i.indnatts = 1 and i.indexprs is null and a.attname = 'source_project_id') as on_column,
+                 coalesce(pg_catalog.pg_get_expr(i.indpred, i.indrelid) = '(source_project_id IS NOT NULL)', false) as partial_ok,
+                 (i.indisvalid and i.indisready) as valid_ready
+          from pg_catalog.pg_index i
+          left join pg_catalog.pg_attribute a on a.attrelid = i.indrelid and a.attnum = i.indkey[0]
+          where i.indexrelid = to_regclass('public.overtime_projects_source_project_id_key')) x on true
+  union all
   -- ── 지문: postflight의 같은 이름 행과 같아야 한다 ──
   select 'fp_records', 'INFO',
          count(*) || '건 / ' || coalesce(sum(hours), 0) || 'h / '

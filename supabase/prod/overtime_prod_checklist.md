@@ -10,7 +10,7 @@
 | 0 | 읽기 전용 baseline (+ 관리자 플래그 사전 확인) | `supabase/verify/overtime_planning_catalog.sql`, `overtime_planning_preflight.sql`, `supabase/verify/admin_flag_preflight.sql` | 없음 |
 | 0-1 | (p10·p11 STOP일 때만) 직원 수동 연결 → preflight 재실행 | `supabase/verify/overtime_employee_link_check.sql` (읽기만) | 없음 |
 | 1 | Migration A (표·칸·sync_team_employees 교체) | `supabase/migration_overtime_planning_a_base.sql` | 구버전 화면 그대로 동작 |
-| 2 | 동기화 RPC | `supabase/migration_overtime_project_sync_rpc.sql` | 구버전 화면 무관 |
+| 2 | 동기화 RPC — **필수 확인: 의존 인덱스 `overtime_projects_source_project_id_key`**(preflight `p16_sync_source_index` OK). migration도 첫 문장에서 같은 조건을 확인하고 다르면 함수를 만들기 전에 중단 | `supabase/migration_overtime_project_sync_rpc.sql` | 구버전 화면 무관 |
 | 3 | 월 목표 선입력 (해당·다음 급여기간) → 선입력 확인 | `supabase/prod/overtime_monthly_targets_1_list.sql` → `_2_apply.sql` → `supabase/verify/overtime_monthly_target_precheck.sql` | 없음(강제조건 전) |
 | 4 | 신버전 화면 배포 | (commit·배포) | 신버전 |
 | 5 | Migration B (보호·주 12시간·자동배정 RPC) — 4 직후 | `supabase/migration_overtime_planning_b_activate.sql` | 자동배정 사용 가능 |
@@ -29,6 +29,9 @@
 
 - [ ] project ref가 운영(`lkvb…odrt`)인지 화면 주소로 확인
 - [ ] schema/object 충돌: 새 표 4개·함수·트리거·정책 이름이 아직 없음 (`overtime_planning_preflight.sql`)
+- [ ] **동기화 RPC 의존 인덱스(필수)**: preflight `p16_sync_source_index` OK — `public.overtime_projects_source_project_id_key`가
+      `public.overtime_projects`의 UNIQUE 인덱스이고, 열은 `source_project_id` 하나, 부분 조건 `source_project_id IS NOT NULL`,
+      valid·ready. STOP이면 2단계(동기화 RPC)를 실행하지 않는다(없으면 `supabase/migration_overtime_source_project.sql` 적용 여부부터 확인)
 - [ ] `overtime_work_records` 행 수 — 2026-10-03 기준 0건. **1단계 직전과 6단계 직전에 다시** 센다
 - [ ] 주 12시간 초과 주(weeks_over_12h) 0건 — 5단계 직전 재확인
 - [ ] 재직 직원 수(9명 예상)와 주소록 연결: `engineer_contacts.employee_id` 중복 0
@@ -49,7 +52,7 @@
 | 단계 | 확인 | 되돌리기 판단 기준 | 되돌리기 |
 |---|---|---|---|
 | 1 A | `overtime_planning_postflight_a.sql` 전부 OK(a16~a21 직원 UUID 보존 포함), 구버전 화면 입력·출력 정상. 첫 동기화(화면 진입) 뒤 postflight_a 한 번 더(B 적용 전까지만 — B 이후에는 `overtime_planning_current_postflight.sql`) | postflight FAIL 또는 구버전 입력 오류 | `overtime_planning_rollback_a.sql` (새 표가 비어 있을 때만) |
-| 2 RPC | 함수 존재·EXECUTE는 service_role만 | 권한 FAIL | `overtime_project_sync_rpc_rollback.sql` (화면을 구버전으로 되돌린 뒤) |
+| 2 RPC | 함수 존재·EXECUTE는 service_role만, 의존 인덱스 유지(7단계 뒤 `overtime_planning_current_postflight.sql`의 `cur_s01_sync_source_index` OK) | 권한 FAIL, `OVERTIME_SYNC_INDEX_*` 오류 | `overtime_project_sync_rpc_rollback.sql` (화면을 구버전으로 되돌린 뒤) |
 | 3 목표 | `_2_apply.sql` 결과 전부 OK, 재직 9명 = 목표 9행, `overtime_monthly_target_precheck.sql` FAIL 0 | 값 오입력 | `_3_rollback.sql` (6단계 전만) |
 | 4 화면 | 아래 smoke test | 화면 오류·데이터 이상 | 이전 배포로 되돌림(DB는 A·RPC 상태에서 구버전과 호환) |
 | 5 B | `overtime_planning_postflight_b.sql` 전부 OK | FAIL, 수동 입력 오차단 | `overtime_planning_rollback_b.sql` (자동배정 데이터 없고 월 목표 강제조건이 없을 때만) |

@@ -67,3 +67,6 @@ next-env.d.ts
 /test-results/
 /playwright-report/
 /blob-report/
+
+# 개발 DB 스키마 덤프(로컬 참고용) — 커밋하지 않는다
+/supabase/dev/dev_baseline_schema.sql

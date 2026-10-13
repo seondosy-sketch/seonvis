@@ -391,7 +391,7 @@ describe('현재 상태 사후확인(overtime_planning_current_postflight.sql)',
       'cur_fn_owner_equals_table_owner', 'cur_trg_expected', 'cur_trg_unexpected', 'cur_trg_record_order',
       'cur_m03_isolation_guard:', 'cur_c01_guard_snapshot', 'cur_e01_sync_stops_before_change', 'cur_e02_link_state',
       'cur_d01_employee_refs', 'cur_d03_confirmed_snapshot_mismatch', 'cur_d06_records_without_target',
-      'cur_d07_weeks_over_cap_records', 'cur_d08_weeks_over_cap_with_drafts', 'cur_r01_self_cleaning_tests']) {
+      'cur_d07_weeks_over_cap_records', 'cur_d08_weeks_over_cap_with_drafts', 'cur_r01_self_cleaning_tests', 'cur_s01_sync_source_index']) {
       expect(cur).toContain(`'${name}`)
     }
   })
@@ -620,6 +620,59 @@ describe('리허설 기준 상태 기록(overtime_rollback_rehearsal_baseline.sq
     expect(base).toContain('운영(lkvb…odrt)에서는 실행하지 않는다')
     expect(base).toContain('MD5는 보안 인증이 아니다')
     expect(base).toContain('overtime_ui_seed.sql 복원 뒤')
+  })
+})
+
+describe('동기화 RPC 의존 인덱스(overtime_projects_source_project_id_key) 확인', () => {
+  const RPC = 'supabase/migration_overtime_project_sync_rpc.sql'
+  const rpc = read(RPC)
+  const code = (src: string) => src.replace(/--[^\n]*/g, '')
+  // 인덱스 속성: 대상 표·UNIQUE·열 하나(source_project_id, 식 아님)·부분 조건·valid·ready
+  const PROPS = [
+    "i.indexrelid = to_regclass('public.overtime_projects_source_project_id_key')",
+    "i.indrelid = to_regclass('public.overtime_projects')",
+    'i.indisunique',
+    "i.indnatts = 1 and i.indexprs is null and a.attname = 'source_project_id'",
+    "pg_catalog.pg_get_expr(i.indpred, i.indrelid) = '(source_project_id IS NOT NULL)'",
+    'i.indisvalid and i.indisready',
+  ]
+
+  it('migration: 인덱스 확인 DO 블록이 함수 생성보다 먼저이고, 없음·모양 다름을 각각 예외로 중단한다', () => {
+    const c = code(rpc)
+    const guard = c.indexOf("to_regclass('public.overtime_projects_source_project_id_key') is null")
+    const fn = c.indexOf('create or replace function public.overtime_apply_project_sync')
+    expect(guard).toBeGreaterThan(c.indexOf('begin;'))
+    expect(guard).toBeLessThan(fn)
+    const block = c.slice(guard, fn)
+    for (const p of PROPS.slice(1)) expect(block).toContain(p)
+    expect(block).toContain('OVERTIME_SYNC_INDEX_MISSING')
+    expect(block).toContain('OVERTIME_SYNC_INDEX_INVALID')
+    expect(block).toContain('if not found or not (v.on_table and v.is_unique and v.on_column and v.partial_ok and v.valid_ready)')
+    // 예외 문구의 boolean은 ::text로(%에 그대로 넣으면 t/f로 찍힌다)
+    expect(block).not.toMatch(/,\s*v\.(on_table|is_unique|on_column|partial_ok|valid_ready)\s*[,;)]/)
+  })
+
+  it('migration: on conflict 대상이 확인한 인덱스와 같은 부분 조건이다', () => {
+    expect(code(rpc)).toContain('on conflict (source_project_id) where source_project_id is not null')
+  })
+
+  it.each([
+    ['supabase/verify/overtime_planning_preflight.sql', 'p16_sync_source_index', 'STOP'],
+    ['supabase/verify/overtime_planning_current_postflight.sql', 'cur_s01_sync_source_index', 'FAIL'],
+  ])('%s: %s가 같은 속성을 모두 확인하고, 하나라도 다르면 %s', (f, name, bad) => {
+    const c = code(read(f))
+    const i = c.indexOf(`'${name}'`)
+    expect(i).toBeGreaterThan(0)
+    const block = c.slice(i, c.indexOf('union all', i) > 0 ? c.indexOf('union all', i) : undefined)
+    for (const p of PROPS) expect(block).toContain(p)
+    expect(block).toContain(`then 'OK' else '${bad}' end`)
+  })
+
+  it('운영 체크리스트: 동기화 RPC 단계에 의존 인덱스 확인이 필수로 적혀 있다', () => {
+    const cl = read('supabase/prod/overtime_prod_checklist.md')
+    expect(cl).toContain('| 2 | 동기화 RPC — **필수 확인: 의존 인덱스 `overtime_projects_source_project_id_key`**')
+    expect(cl).toContain('p16_sync_source_index')
+    expect(cl).toContain('cur_s01_sync_source_index')
   })
 })
 

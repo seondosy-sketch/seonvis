@@ -424,6 +424,22 @@ checks(check_name, status, detail) as (
   from week_draft d left join week_rec r on r.employee_id = d.employee_id and r.week_start = d.week_start
   where coalesce(r.hours, 0) + d.hours > 12 and coalesce(r.hours, 0) <= 12
 
+  -- ════════ 동기화 RPC 의존 인덱스 ════════
+  union all
+  -- overtime_apply_project_sync의 on conflict (source_project_id) where source_project_id is not null 이 쓰는 부분 UNIQUE 인덱스
+  select 'cur_s01_sync_source_index',
+         case when x.on_table and x.is_unique and x.on_column and x.partial_ok and x.valid_ready then 'OK' else 'FAIL' end,
+         case when x.on_table is null then 'overtime_projects_source_project_id_key 없음 (migration_overtime_source_project.sql 필요)'
+              else '대상 표=' || x.on_table::text || ' unique=' || x.is_unique::text || ' 열=' || x.on_column::text
+                   || ' 부분조건=' || x.partial_ok::text || ' valid·ready=' || x.valid_ready::text end
+  from (select 1) one left join (select i.indrelid = to_regclass('public.overtime_projects') as on_table, i.indisunique as is_unique,
+                 (i.indnatts = 1 and i.indexprs is null and a.attname = 'source_project_id') as on_column,
+                 coalesce(pg_catalog.pg_get_expr(i.indpred, i.indrelid) = '(source_project_id IS NOT NULL)', false) as partial_ok,
+                 (i.indisvalid and i.indisready) as valid_ready
+          from pg_catalog.pg_index i
+          left join pg_catalog.pg_attribute a on a.attrelid = i.indrelid and a.attnum = i.indkey[0]
+          where i.indexrelid = to_regclass('public.overtime_projects_source_project_id_key')) x on true
+
   -- ════════ 시험 잔여 데이터 ════════
   union all
   -- 스스로 되돌리는 시험(공휴일 확정·직원 연결·권한·공용 표)의 고정 데이터 — 남아 있으면 조치 필요
