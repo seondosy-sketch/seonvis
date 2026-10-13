@@ -133,10 +133,12 @@ checks(check_name, verdict, detail) as (
          case when x.on_table is null then 'overtime_projects_source_project_id_key 없음 (migration_overtime_source_project.sql 필요)'
               else '대상 표=' || x.on_table::text || ' unique=' || x.is_unique::text || ' 열=' || x.on_column::text
                    || ' 부분조건=' || x.partial_ok::text || ' valid·ready=' || x.valid_ready::text end
-  from (select 1) one left join (select i.indrelid = to_regclass('public.overtime_projects') as on_table, i.indisunique as is_unique,
-                 (i.indnatts = 1 and i.indexprs is null and a.attname = 'source_project_id') as on_column,
+  -- 속성마다 coalesce(…, false) — migration 가드와 같은 fail-closed 판정(인덱스가 없으면 x 전체가 NULL → '없음')
+  from (select 1) one left join (select coalesce(i.indrelid = to_regclass('public.overtime_projects'), false) as on_table,
+                 coalesce(i.indisunique, false) as is_unique,
+                 coalesce(i.indnatts = 1 and i.indexprs is null and a.attname = 'source_project_id', false) as on_column,
                  coalesce(pg_catalog.pg_get_expr(i.indpred, i.indrelid) = '(source_project_id IS NOT NULL)', false) as partial_ok,
-                 (i.indisvalid and i.indisready) as valid_ready
+                 coalesce(i.indisvalid and i.indisready, false) as valid_ready
           from pg_catalog.pg_index i
           left join pg_catalog.pg_attribute a on a.attrelid = i.indrelid and a.attnum = i.indkey[0]
           where i.indexrelid = to_regclass('public.overtime_projects_source_project_id_key')) x on true

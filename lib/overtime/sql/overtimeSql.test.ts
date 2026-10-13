@@ -627,27 +627,50 @@ describe('동기화 RPC 의존 인덱스(overtime_projects_source_project_id_key
   const RPC = 'supabase/migration_overtime_project_sync_rpc.sql'
   const rpc = read(RPC)
   const code = (src: string) => src.replace(/--[^\n]*/g, '')
-  // 인덱스 속성: 대상 표·UNIQUE·열 하나(source_project_id, 식 아님)·부분 조건·valid·ready
+  // 인덱스 속성: 대상 표·UNIQUE·열 하나(source_project_id, 식 아님)·부분 조건·valid·ready — 속성마다 coalesce(…, false)(fail-closed)
+  const ALIASES = ['on_table', 'is_unique', 'on_column', 'partial_ok', 'valid_ready']
   const PROPS = [
     "i.indexrelid = to_regclass('public.overtime_projects_source_project_id_key')",
-    "i.indrelid = to_regclass('public.overtime_projects')",
-    'i.indisunique',
-    "i.indnatts = 1 and i.indexprs is null and a.attname = 'source_project_id'",
-    "pg_catalog.pg_get_expr(i.indpred, i.indrelid) = '(source_project_id IS NOT NULL)'",
-    'i.indisvalid and i.indisready',
+    "coalesce(i.indrelid = to_regclass('public.overtime_projects'), false) as on_table",
+    'coalesce(i.indisunique, false) as is_unique',
+    "coalesce(i.indnatts = 1 and i.indexprs is null and a.attname = 'source_project_id', false) as on_column",
+    "coalesce(pg_catalog.pg_get_expr(i.indpred, i.indrelid) = '(source_project_id IS NOT NULL)', false) as partial_ok",
+    'coalesce(i.indisvalid and i.indisready, false) as valid_ready',
   ]
+  // 속성 별칭은 모두 "…, false) as 별칭" 형태로만 나온다 — coalesce 없이 NULL이 될 수 있는 판정이 끼어들면 실패
+  const expectFailClosed = (block: string) => {
+    for (const name of ALIASES) {
+      const all = [...block.matchAll(new RegExp(`\\bas ${name}\\b`, 'g'))].length
+      const closed = [...block.matchAll(new RegExp(`, false\\) as ${name}\\b`, 'g'))].length
+      expect({ name, all, closed }).toEqual({ name, all: 1, closed: 1 })
+    }
+  }
 
-  it('migration: 인덱스 확인 DO 블록이 함수 생성보다 먼저이고, 없음·모양 다름을 각각 예외로 중단한다', () => {
+  it('migration: 인덱스 확인은 begin; 바로 뒤의 do $$ … end $$; 블록이고, 함수 생성보다 먼저다', () => {
     const c = code(rpc)
-    const guard = c.indexOf("to_regclass('public.overtime_projects_source_project_id_key') is null")
-    const fn = c.indexOf('create or replace function public.overtime_apply_project_sync')
-    expect(guard).toBeGreaterThan(c.indexOf('begin;'))
-    expect(guard).toBeLessThan(fn)
-    const block = c.slice(guard, fn)
-    for (const p of PROPS.slice(1)) expect(block).toContain(p)
+    // 정확한 모양: begin; 다음 문장이 do $$, 블록은 end $$;로 닫히고 바로 다음 문장이 함수 생성
+    const m = /\nbegin;\s*\ndo \$\$\n([\s\S]*?)\nend \$\$;\s*\ncreate or replace function public\.overtime_apply_project_sync\(/.exec(c)
+    expect(m, 'begin; → do $$ … end $$; → create function 순서가 아님').not.toBeNull()
+    const block = m![1]
+    expect(block).toContain("to_regclass('public.overtime_projects_source_project_id_key') is null")
     expect(block).toContain('OVERTIME_SYNC_INDEX_MISSING')
     expect(block).toContain('OVERTIME_SYNC_INDEX_INVALID')
-    expect(block).toContain('if not found or not (v.on_table and v.is_unique and v.on_column and v.partial_ok and v.valid_ready)')
+    // 블록 안에 grant·revoke·create가 없다(함수·권한을 바꾸기 전에 끝난다)
+    expect(block).not.toMatch(/\b(create|grant|revoke|alter|drop)\b/i)
+  })
+
+  it('migration: 단일 달러 do $ · end $; 가 없다(PostgreSQL 문법 오류 — B-1 재발 방지)', () => {
+    const c = code(rpc)
+    expect(c).not.toMatch(/\bdo \$(?!\$|[A-Za-z_][A-Za-z0-9_]*\$)/)
+    expect(c).not.toMatch(/\bend \$(?!\$|[A-Za-z_][A-Za-z0-9_]*\$)/)
+  })
+
+  it('migration: 인덱스 속성 판정이 NULL이면 통과하지 않는다(속성마다 coalesce, 최종 조건도 coalesce)', () => {
+    const c = code(rpc)
+    const block = c.slice(c.indexOf('do $$'), c.indexOf('create or replace function public.overtime_apply_project_sync'))
+    for (const p of PROPS.slice(1)) expect(block).toContain(p)
+    expectFailClosed(block)
+    expect(block).toContain('if not found or not coalesce(v.on_table and v.is_unique and v.on_column and v.partial_ok and v.valid_ready, false) then')
     // 예외 문구의 boolean은 ::text로(%에 그대로 넣으면 t/f로 찍힌다)
     expect(block).not.toMatch(/,\s*v\.(on_table|is_unique|on_column|partial_ok|valid_ready)\s*[,;)]/)
   })
@@ -665,7 +688,81 @@ describe('동기화 RPC 의존 인덱스(overtime_projects_source_project_id_key
     expect(i).toBeGreaterThan(0)
     const block = c.slice(i, c.indexOf('union all', i) > 0 ? c.indexOf('union all', i) : undefined)
     for (const p of PROPS) expect(block).toContain(p)
+    expectFailClosed(block)
     expect(block).toContain(`then 'OK' else '${bad}' end`)
+  })
+
+  // 달러 인용 짝 검사 — 주석(--, /* */)·문자열('…', E'…', "식별자") 안의 $는 건너뛰고, 밖에서 만난 $만 본다.
+  //   $1 같은 위치 매개변수와 식별자 안의 $(a$b)는 허용, 그 밖의 $는 $$ 또는 $태그$ 여는 표시여야 하고 같은 표시로 닫혀야 한다.
+  //   한계: PostgreSQL 파서가 아니다 — 달러 인용·주석·문자열의 짝만 보고, 그 밖의 문법 오류는 잡지 못한다.
+  function dollarQuoteProblems(src: string): string[] {
+    const out: string[] = []
+    const lineOf = (k: number) => src.slice(0, k).split('\n').length
+    let i = 0
+    while (i < src.length) {
+      const ch = src[i]
+      if (ch === '-' && src[i + 1] === '-') { const j = src.indexOf('\n', i); i = j < 0 ? src.length : j; continue }
+      if (ch === '/' && src[i + 1] === '*') {
+        const j = src.indexOf('*/', i + 2)
+        if (j < 0) { out.push(`${lineOf(i)}: 닫히지 않은 /* 주석`); break }
+        i = j + 2; continue
+      }
+      if (ch === "'") {
+        const escapeString = /[eE]/.test(src[i - 1] ?? '') && !/[A-Za-z0-9_]/.test(src[i - 2] ?? '')
+        let j = i + 1
+        for (;;) {
+          if (j >= src.length) { out.push(`${lineOf(i)}: 닫히지 않은 문자열`); return out }
+          if (escapeString && src[j] === '\\') { j += 2; continue }
+          if (src[j] === "'") { if (src[j + 1] === "'") { j += 2; continue } break }
+          j++
+        }
+        i = j + 1; continue
+      }
+      if (ch === '"') {
+        const j = src.indexOf('"', i + 1)
+        if (j < 0) { out.push(`${lineOf(i)}: 닫히지 않은 따옴표 식별자`); return out }
+        i = j + 1; continue
+      }
+      if (ch === '$') {
+        if (/[A-Za-z0-9_]/.test(src[i - 1] ?? '') || /[0-9]/.test(src[i + 1] ?? '')) { i++; continue }
+        const tag = /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.exec(src.slice(i))?.[0]
+        if (!tag) { out.push(`${lineOf(i)}: 짝을 이룰 수 없는 단일 $`); i++; continue }
+        const end = src.indexOf(tag, i + tag.length)
+        if (end < 0) { out.push(`${lineOf(i)}: 닫히지 않은 달러 인용 ${tag}`); return out }
+        i = end + tag.length; continue
+      }
+      i++
+    }
+    return out
+  }
+
+  it('달러 인용 검사기 자체: B-1 형태(do $ … end $;)와 닫히지 않은 $$를 잡고, 정상 형태·주석·문자열 안의 $는 통과', () => {
+    expect(dollarQuoteProblems('begin;\ndo $\ndeclare v int;\nbegin\n  null;\nend $;\ncommit;\n').length).toBeGreaterThan(0)
+    expect(dollarQuoteProblems('do $$ begin null;\n').length).toBeGreaterThan(0)
+    expect(dollarQuoteProblems('do $x$ begin null; end $y$;').length).toBeGreaterThan(0)
+    expect(dollarQuoteProblems([
+      'begin;',
+      'do $$ begin perform 1; end $$;',
+      "do $do$ begin execute $fn$ select '$' $fn$; end $do$;",
+      "select '$ 혼자', E'it\\'s $', \"col$x\", a$b, $1, $2 from t; -- 주석 안 $",
+      '/* 블록 주석 $ */',
+      'commit;',
+    ].join('\n'))).toEqual([])
+  })
+
+  it('저장소 supabase SQL 전체의 달러 인용이 짝을 이룬다(단일 $ 없음)', () => {
+    const files: string[] = []
+    const walk = (dir: string) => {
+      for (const name of readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
+        const rel = `${dir}/${name.name}`
+        if (name.isDirectory()) walk(rel)
+        else if (name.name.endsWith('.sql') && rel !== 'supabase/dev/dev_baseline_schema.sql') files.push(rel)   // 로컬 덤프(.gitignore)는 읽지 않는다
+      }
+    }
+    walk('supabase')
+    expect(files.length).toBeGreaterThan(50)
+    const bad = files.flatMap(f => dollarQuoteProblems(read(f)).map(p => `${f}:${p}`))
+    expect(bad).toEqual([])
   })
 
   it('운영 체크리스트: 동기화 RPC 단계에 의존 인덱스 확인이 필수로 적혀 있다', () => {

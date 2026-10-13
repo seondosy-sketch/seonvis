@@ -22,28 +22,29 @@
 
 begin;
 
-do $
+do $$
 declare
   v record;
 begin
   if to_regclass('public.overtime_projects_source_project_id_key') is null then
     raise exception 'OVERTIME_SYNC_INDEX_MISSING: public.overtime_projects_source_project_id_key 없음 — migration_overtime_source_project.sql을 먼저 적용한다';
   end if;
-  select i.indrelid = to_regclass('public.overtime_projects') as on_table,
-         i.indisunique as is_unique,
-         (i.indnatts = 1 and i.indexprs is null and a.attname = 'source_project_id') as on_column,
+  -- 속성마다 coalesce(…, false) — 값이 NULL이면(속성을 알 수 없으면) 통과가 아니라 실패로 본다(fail-closed)
+  select coalesce(i.indrelid = to_regclass('public.overtime_projects'), false) as on_table,
+         coalesce(i.indisunique, false) as is_unique,
+         coalesce(i.indnatts = 1 and i.indexprs is null and a.attname = 'source_project_id', false) as on_column,
          coalesce(pg_catalog.pg_get_expr(i.indpred, i.indrelid) = '(source_project_id IS NOT NULL)', false) as partial_ok,
-         (i.indisvalid and i.indisready) as valid_ready
+         coalesce(i.indisvalid and i.indisready, false) as valid_ready
     into v
   from pg_catalog.pg_index i
   left join pg_catalog.pg_attribute a on a.attrelid = i.indrelid and a.attnum = i.indkey[0]
   where i.indexrelid = to_regclass('public.overtime_projects_source_project_id_key');
-  if not found or not (v.on_table and v.is_unique and v.on_column and v.partial_ok and v.valid_ready) then
+  if not found or not coalesce(v.on_table and v.is_unique and v.on_column and v.partial_ok and v.valid_ready, false) then
     raise exception 'OVERTIME_SYNC_INDEX_INVALID: overtime_projects_source_project_id_key 모양이 다르다 — 대상 표=% unique=% 열(source_project_id 하나)=% 부분조건(IS NOT NULL)=% valid·ready=%',
       coalesce(v.on_table::text, '없음'), coalesce(v.is_unique::text, '없음'), coalesce(v.on_column::text, '없음'),
       coalesce(v.partial_ok::text, '없음'), coalesce(v.valid_ready::text, '없음');
   end if;
-end $;
+end $$;
 
 create or replace function public.overtime_apply_project_sync(p_inserts jsonb, p_updates jsonb)
 returns jsonb
