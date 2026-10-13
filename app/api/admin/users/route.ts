@@ -1,23 +1,10 @@
 import { createSupabaseAdminClient } from '@/lib/supabase-admin'
-import { createSupabaseServerClient } from '@/lib/supabase-server'
+import { normalizeEmail, requireAdminAccess } from '@/lib/access'
 import { NextResponse } from 'next/server'
 
-function getAdminEmails(): string[] {
-  return (process.env.ADMIN_EMAILS ?? '').split(',').map(e => e.trim()).filter(Boolean)
-}
-
-async function assertAdmin() {
-  const supabase = await createSupabaseServerClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user?.email) return null
-  const adminEmails = getAdminEmails()
-  if (!adminEmails.includes(user.email)) return null
-  return user
-}
-
 export async function GET() {
-  const user = await assertAdmin()
-  if (!user) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  const actor = await requireAdminAccess()
+  if (!actor) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
   const admin = createSupabaseAdminClient()
   const { data, error } = await admin.from('allowed_users').select('*').order('created_at', { ascending: false })
@@ -26,8 +13,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const user = await assertAdmin()
-  if (!user) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  const actor = await requireAdminAccess()
+  if (!actor) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
   const { email, is_admin, note } = await request.json()
   if (!email) return NextResponse.json({ error: 'email required' }, { status: 400 })
@@ -37,9 +24,9 @@ export async function POST(request: Request) {
     .from('allowed_users')
     .upsert(
       {
-        email: email.toLowerCase().trim(),
+        email: normalizeEmail(email),
         is_admin: !!is_admin,
-        added_by_email: user.email,
+        added_by_email: actor.email,
         note: typeof note === 'string' ? note.trim() : '',
       },
       { onConflict: 'email' },
@@ -52,8 +39,8 @@ export async function POST(request: Request) {
 }
 
 export async function PATCH(request: Request) {
-  const user = await assertAdmin()
-  if (!user) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  const actor = await requireAdminAccess()
+  if (!actor) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
   // menu_permissions와 note는 각각 따로 저장한다 — 메모를 고칠 때 권한을 함께 보내지 않아도 되고,
   // 그 반대도 마찬가지다. 넘어온 필드만 반영한다.
@@ -88,7 +75,7 @@ export async function PATCH(request: Request) {
   const { data, error } = await admin
     .from('allowed_users')
     .update(patch)
-    .eq('email', email.toLowerCase().trim())
+    .eq('email', normalizeEmail(email))
     .select()
     .single()
 
@@ -97,14 +84,14 @@ export async function PATCH(request: Request) {
 }
 
 export async function DELETE(request: Request) {
-  const user = await assertAdmin()
-  if (!user) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  const actor = await requireAdminAccess()
+  if (!actor) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
   const { email } = await request.json()
   if (!email) return NextResponse.json({ error: 'email required' }, { status: 400 })
 
   const admin = createSupabaseAdminClient()
-  const { error } = await admin.from('allowed_users').delete().eq('email', email.toLowerCase().trim())
+  const { error } = await admin.from('allowed_users').delete().eq('email', normalizeEmail(email))
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ ok: true })
 }

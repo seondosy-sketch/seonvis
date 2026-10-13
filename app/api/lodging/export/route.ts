@@ -1,12 +1,11 @@
 /**
  * 숙박관리 — 출력(Export) API. UI 권한만 신뢰하지 않고 서버에서 직접 세션과
- * menu_permissions.lodging을 검증한다(app/api/admin/users/route.ts의 assertAdmin() 패턴 재사용).
+ * menu_permissions.lodging을 검증한다(판정은 lib/access.ts 한 곳).
  * none → 403, read/write → 출력 진행(출력은 데이터를 변경하지 않으므로 read에도 허용).
  */
 import { NextResponse } from 'next/server'
 import { createSupabaseAdminClient } from '@/lib/supabase-admin'
-import { createSupabaseServerClient } from '@/lib/supabase-server'
-import { permissionFor } from '@/lib/menuConfig'
+import { canReadMenu, resolveSessionAccess } from '@/lib/access'
 import { buildDownloadResponse } from '@/lib/export/response'
 import { monthOverlapQuery } from '@/lib/lodging/monthRange'
 import { buildFinancialSummary, buildOccupancySummary } from '@/lib/lodging/summary'
@@ -27,21 +26,7 @@ interface ExportFilters {
 }
 
 async function assertLodgingExportAccess(): Promise<boolean> {
-  const supabase = await createSupabaseServerClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user?.email) return false
-
-  const admin = createSupabaseAdminClient()
-  const { data: row } = await admin
-    .from('allowed_users')
-    .select('is_admin, menu_permissions')
-    .eq('email', user.email)
-    .single()
-  if (!row) return false
-  if (row.is_admin) return true
-
-  const perm = permissionFor(row.menu_permissions, 'lodging')
-  return perm !== 'none'
+  return canReadMenu(await resolveSessionAccess(), 'lodging')
 }
 
 async function fetchOverlappingRecords(year: number, month: number, filters?: ExportFilters): Promise<LodgingRecord[]> {

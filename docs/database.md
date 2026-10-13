@@ -227,6 +227,9 @@ result_score 또는 evaluation 비어있으면 → "진행중"
 않는다(`app/api/admin/access-requests/route.ts`).
 
 **주의**: 관리자(`ADMIN_EMAILS`)는 이 테이블에 없어도 접근 가능하며 항상 전체 쓰기 권한.
+단, `lib/access.ts`가 관리자를 확인할 때 그 이메일의 `is_admin`을 `true`로 맞춰 행을 만들어 둔다 —
+RLS 정책이 참조하는 `private.menu_permission()`은 env를 못 보고 `is_admin` 컬럼만 보기 때문에,
+동기화가 없으면 화면에서는 전권인 관리자가 브라우저의 직접 조회·저장에서 RLS에 막힌다.
 
 ---
 

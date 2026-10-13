@@ -141,7 +141,7 @@ result_score 또는 evaluation 비어있으면 → "진행중"
 
 ## 6. 관리자 (`/admin`)
 
-- 접근: `ADMIN_EMAILS` 환경 변수에 등록된 이메일만
+- 접근: `ADMIN_EMAILS` 환경 변수에 등록된 이메일 또는 `allowed_users.is_admin` = true (판정: `lib/access.ts`)
 - 기능: `allowed_users` 테이블 조회/추가/삭제
 
 ---
