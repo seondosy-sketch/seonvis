@@ -35,3 +35,64 @@ export function createLoadGate(): LoadGate {
     dispose() { alive = false },
   }
 }
+
+/**
+ * 화면의 "지금 보는 급여기간"과 불러오기를 묶는다 — 순수 함수(React·DB 없음, 세대 판정은 LoadGate).
+ *
+ * reload()는 만들어질 때의 기간이 아니라 호출 시점의 최신 기간(current())을 읽는다. 저장·수정 RPC를 기다리는 동안
+ * 기간이 바뀌어도, 끝난 뒤의 reload가 이전 기간을 다시 불러와 최신 기간 요청을 무효로 만들지 않는다.
+ * changePeriod()는 지금까지의 요청을 모두 낡게 만들고(invalidate), 기간별 안내·오류(onPeriodChange)를 그 자리에서 지운다
+ * — 이전 기간의 늦은 응답은 이미 낡은 요청이라 지운 상태를 다시 덮지 못한다.
+ */
+export interface PeriodLoaderOptions<P> {
+  initial: P
+  /** 기간 → 급여기간 라벨('YYYY-MM') */
+  label: (period: P) => string
+  /** 한 기간 불러오기. await 뒤마다 ticket.isCurrent()를 확인하고 아니면 상태를 바꾸지 않는다. 예외는 던져도 된다 */
+  run: (period: P, sync: boolean, ticket: LoadTicket) => Promise<void>
+  /** reload 시작 시 동기 처리(예: loading 표시) */
+  onReloadStart: () => void
+  /** 기간 전환 순간 — 이전 기간의 안내·오류(attention·syncFailed·loadError)를 지운다 */
+  onPeriodChange: () => void
+  /** run이 예외로 끝났고 그 요청이 아직 최신일 때만 */
+  onError: (ticket: LoadTicket) => void
+}
+
+export interface PeriodLoader<P> {
+  current(): P
+  /** 이 기간 불러오기(기간 전환 effect가 부른다) */
+  load(period: P, sync: boolean): Promise<void>
+  /** 호출 시점의 최신 기간으로 다시 불러오기 */
+  reload(): Promise<void>
+  changePeriod(period: P): void
+  activate(): void
+  dispose(): void
+}
+
+export function createPeriodLoader<P>(opts: PeriodLoaderOptions<P>): PeriodLoader<P> {
+  const gate = createLoadGate()
+  let current = opts.initial
+  async function load(period: P, sync: boolean) {
+    const ticket = gate.begin(opts.label(period))
+    try {
+      await opts.run(period, sync, ticket)
+    } catch {
+      if (ticket.isCurrent()) opts.onError(ticket)
+    }
+  }
+  return {
+    current: () => current,
+    load,
+    reload() {
+      opts.onReloadStart()
+      return load(current, false)
+    },
+    changePeriod(period) {
+      current = period
+      gate.invalidate()
+      opts.onPeriodChange()
+    },
+    activate: () => gate.activate(),
+    dispose: () => gate.dispose(),
+  }
+}

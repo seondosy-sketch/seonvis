@@ -11,7 +11,7 @@ import { koreaToday } from '@/lib/overtime/eligibility'
 import { runAssignment } from '@/lib/overtime/assign/engine'
 import type { AssignmentResult } from '@/lib/overtime/assign/types'
 import { buildAssignmentInput, lockedRange, supersededBy, toPeriodLabel, type PlanningRaw, type PlanningScope } from '@/lib/overtime/planning/input'
-import { createLoadGate, type LoadGate } from '@/lib/overtime/planning/loadGate'
+import { createPeriodLoader, type PeriodLoader } from '@/lib/overtime/planning/loadGate'
 import { friendlyOvertimeError } from '@/lib/overtime/planning/errors'
 import { canSavePreview, makePreview, type StoredPreview } from '@/lib/overtime/planning/fingerprint'
 import { splitPartialPlan, type PartialPlan } from '@/lib/overtime/planning/partial'
@@ -81,15 +81,6 @@ export default function OvertimePlanPage() {
   const label = toPeriodLabel(year, month0)
   const days = useMemo(() => payPeriodDays(year, month0), [year, month0])
 
-  // 응답 세대 판정 — 가장 최근 요청의 응답·오류만 반영한다(늦게 온 이전 기간 응답, 화면이 사라진 뒤의 응답은 버림)
-  const gateRef = useRef<LoadGate | null>(null)
-  if (gateRef.current === null) gateRef.current = createLoadGate()
-  useEffect(() => {
-    const gate = gateRef.current!
-    gate.activate()
-    return () => gate.dispose()
-  }, [])
-
   // 첫 setState가 await 뒤에 오도록 둔다 — 화면 상태 초기화(loading 등)는 호출하는 쪽(changePeriod·reload)이 한다
   // 한 기간 불러오기. await마다 isCurrent()를 확인하고, 아니면 아무 상태도 바꾸지 않고 끝낸다
   async function loadPeriod(y: number, m: number, sync: boolean, periodLabel: string, isCurrent: () => boolean) {
@@ -151,27 +142,36 @@ export default function OvertimePlanPage() {
     setLoading(false)
   }
 
-  const load = useCallback(async (y: number, m: number, sync: boolean) => {
-    const periodLabel = toPeriodLabel(y, m)
-    const ticket = gateRef.current!.begin(periodLabel)
-    try {
-      await loadPeriod(y, m, sync, periodLabel, ticket.isCurrent)
-    } catch {
+  // 지금 보는 기간과 불러오기(lib/overtime/planning/loadGate.ts) — 가장 최근 요청의 응답·오류만 반영하고
+  // (늦게 온 이전 기간 응답, 화면이 사라진 뒤의 응답은 버림), reload는 호출 시점의 최신 기간을 읽는다
+  const loaderRef = useRef<PeriodLoader<{ year: number; month0: number }> | null>(null)
+  if (loaderRef.current === null) {
+    loaderRef.current = createPeriodLoader({
+      initial: { year: initial.year, month0: initial.month },
+      label: p => toPeriodLabel(p.year, p.month0),
+      run: (p, sync, ticket) => loadPeriod(p.year, p.month0, sync, ticket.periodLabel, ticket.isCurrent),
+      onReloadStart: () => setLoading(true),
+      // 기간 전환 순간 이전 기간의 동기화 안내·오류를 지운다(새 기간 요청의 안내·오류는 그 요청이 다시 채운다)
+      onPeriodChange: () => { setAttention([]); setSyncFailed(false); setLoadError(null) },
       // 네트워크 오류 등 예외 — 최신 요청일 때만 안내한다(원문 오류는 보여주지 않는다)
-      if (!ticket.isCurrent()) return
-      setLoadError('자료를 불러오지 못했습니다. 잠시 뒤 다시 시도하세요.')
-      setLoading(false)
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+      onError: () => { setLoadError('자료를 불러오지 못했습니다. 잠시 뒤 다시 시도하세요.'); setLoading(false) },
+    })
+  }
+  useEffect(() => {
+    const loader = loaderRef.current!
+    loader.activate()
+    return () => loader.dispose()
   }, [])
 
   // 급여기간이 바뀌면 프로젝트 동기화 후 다시 읽는다 — interviews 화면처럼 async 함수 안에서 불러
   // effect 본문에서 곧바로 setState하지 않는다(react-hooks/set-state-in-effect)
   useEffect(() => {
-    void (async () => { await load(year, month0, true) })()
-  }, [year, month0, load])
+    void (async () => { await loaderRef.current!.load({ year, month0 }, true) })()
+  }, [year, month0])
 
-  const reload = useCallback(() => { setLoading(true); return load(year, month0, false) }, [load, year, month0])
+  // 저장·수정 RPC 뒤 다시 읽기 — 만들어질 때가 아니라 호출 시점의 최신 기간으로(RPC를 기다리는 동안 기간이 바뀌어도
+  // 이전 기간을 다시 불러와 최신 기간 요청을 무효로 만들지 않는다)
+  const reload = useCallback(() => loaderRef.current!.reload(), [])
 
   // ── 파생값 ──
   const sourceById = useMemo(() => new Map(sources.map(s => [s.id, s])), [sources])
@@ -384,16 +384,17 @@ export default function OvertimePlanPage() {
 
   const changePeriod = (delta: number) => {
     const n = year * 12 + month0 + delta
-    // 새 기간 요청이 시작되기 전이라도 지금까지의 요청 응답은 모두 버린다
-    gateRef.current!.invalidate()
+    const next = { year: Math.floor(n / 12), month0: n % 12 }
+    // 새 기간 요청이 시작되기 전이라도 지금까지의 요청 응답은 모두 버리고, 이전 기간의 안내·오류를 지운다
+    loaderRef.current!.changePeriod(next)
     setLoading(true)
     setPreview(null)
     setPreviewCleared(false)
     setMessage(null)
     setEditing(null)
     setScope({ kind: 'all' })
-    setYear(Math.floor(n / 12))
-    setMonth0(n % 12)
+    setYear(next.year)
+    setMonth0(next.month0)
   }
   const md = (d: string) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`
 
