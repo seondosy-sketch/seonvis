@@ -11,7 +11,7 @@ import { koreaToday } from '@/lib/overtime/eligibility'
 import { runAssignment } from '@/lib/overtime/assign/engine'
 import type { AssignmentResult } from '@/lib/overtime/assign/types'
 import { buildAssignmentInput, lockedRange, supersededBy, toPeriodLabel, type PlanningRaw, type PlanningScope } from '@/lib/overtime/planning/input'
-import { createPeriodLoader, type PeriodLoader } from '@/lib/overtime/planning/loadGate'
+import { createPeriodLoader, periodDataOwned, periodDataReady, runPeriodAction, type ActionToken, type LoadTicket, type PeriodLoader } from '@/lib/overtime/planning/loadGate'
 import { friendlyOvertimeError } from '@/lib/overtime/planning/errors'
 import { canSavePreview, makePreview, type StoredPreview } from '@/lib/overtime/planning/fingerprint'
 import { splitPartialPlan, type PartialPlan } from '@/lib/overtime/planning/partial'
@@ -53,8 +53,10 @@ export default function OvertimePlanPage() {
 
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
-  // 화면에 반영된 자료의 급여기간 라벨 — 지금 보는 기간(label)과 다르면 아직 불러오는 중으로 본다
-  const [dataLabel, setDataLabel] = useState<string | null>(null)
+  // 화면에 반영된 자료의 급여기간 라벨·세대 — 지금 보는 기간(label·viewEpoch)과 다르면 아직 불러오는 중으로 본다
+  const [dataKey, setDataKey] = useState<{ label: string; epoch: number } | null>(null)
+  // 화면이 그린 기간 세대(PeriodLoader.changePeriod가 돌려준 값) — A→B→A로 돌아와도 이전 A와 구분한다
+  const [viewEpoch, setViewEpoch] = useState(0)
   const [employees, setEmployees] = useState<Employee[]>([])
   const [tasks, setTasks] = useState<EmployeeTask[]>([])
   const [projects, setProjects] = useState<Project[]>([])
@@ -82,17 +84,10 @@ export default function OvertimePlanPage() {
   const days = useMemo(() => payPeriodDays(year, month0), [year, month0])
 
   // 첫 setState가 await 뒤에 오도록 둔다 — 화면 상태 초기화(loading 등)는 호출하는 쪽(changePeriod·reload)이 한다
-  // 한 기간 불러오기. await마다 isCurrent()를 확인하고, 아니면 아무 상태도 바꾸지 않고 끝낸다
-  async function loadPeriod(y: number, m: number, sync: boolean, periodLabel: string, isCurrent: () => boolean) {
-    const { start, end } = payPeriodRange(y, m)
+  // 한 기간 자료 불러오기(동기화는 loader가 먼저 끝낸다). await마다 isCurrent()를 확인하고, 아니면 아무 상태도 바꾸지 않고 끝낸다
+  async function loadPeriod(y: number, m: number, ticket: LoadTicket) {
+    const { periodLabel, isCurrent } = ticket
     const range = lockedRange(y, m)
-    if (sync) {
-      // 실패해도 기존 목록으로 계속 진행하되, 화면에 안내한다(원문 오류는 보여주지 않는다)
-      const res = await requestProjectSync(start, end)
-      if (!isCurrent()) return
-      setAttention(res.attention)
-      setSyncFailed(!res.ok)
-    }
     const [empRes, taskRes, projRes, srcRes, memRes, mtRes, tgRes, holRes, recRes, runRes, lockDraftRes] = await Promise.all([
       supabase.from('overtime_employees').select('*').eq('is_active', true).order('sort_order', { ascending: true }),
       supabase.from('overtime_employee_tasks').select('*').order('sort_order', { ascending: true }).order('created_at', { ascending: true }),
@@ -138,18 +133,22 @@ export default function OvertimePlanPage() {
     setRuns(runRows)
     setDrafts(draftRows)
     setLockDrafts(lockDraftRes.data as LockDraftRow[])
-    setDataLabel(periodLabel)
+    setDataKey({ label: periodLabel, epoch: ticket.epoch })
     setLoading(false)
   }
 
   // 지금 보는 기간과 불러오기(lib/overtime/planning/loadGate.ts) — 가장 최근 요청의 응답·오류만 반영하고
-  // (늦게 온 이전 기간 응답, 화면이 사라진 뒤의 응답은 버림), reload는 호출 시점의 최신 기간을 읽는다
+  // (늦게 온 이전 기간 응답, 화면이 사라진 뒤의 응답은 버림), reload는 호출 시점의 최신 기간을 읽는다.
+  // 동기화는 기간 세대마다 하나 — 끝나기 전의 reload는 그 동기화에 합류해 안내를 반영하고 동기화 뒤의 자료를 읽는다
   const loaderRef = useRef<PeriodLoader<{ year: number; month0: number }> | null>(null)
   if (loaderRef.current === null) {
     loaderRef.current = createPeriodLoader({
       initial: { year: initial.year, month0: initial.month },
       label: p => toPeriodLabel(p.year, p.month0),
-      run: (p, sync, ticket) => loadPeriod(p.year, p.month0, sync, ticket.periodLabel, ticket.isCurrent),
+      sync: p => { const { start, end } = payPeriodRange(p.year, p.month0); return requestProjectSync(start, end) },
+      // 실패해도 기존 목록으로 계속 진행하되, 화면에 안내한다(원문 오류는 보여주지 않는다)
+      onSync: res => { setAttention(res.attention); setSyncFailed(!res.ok) },
+      run: (p, ticket) => loadPeriod(p.year, p.month0, ticket),
       onReloadStart: () => setLoading(true),
       // 기간 전환 순간 이전 기간의 동기화 안내·오류를 지운다(새 기간 요청의 안내·오류는 그 요청이 다시 채운다)
       onPeriodChange: () => { setAttention([]); setSyncFailed(false); setLoadError(null) },
@@ -212,8 +211,16 @@ export default function OvertimePlanPage() {
     }
   }
 
-  // 불러오기가 끝났고, 화면에 반영된 자료가 지금 보는 급여기간의 것일 때만 실행·저장한다
-  const dataReady = !loading && dataLabel === label
+  // 불러오기가 끝났고, 화면에 반영된 자료가 지금 보는 급여기간·세대의 것일 때만 실행·저장·확정·폐기·확정 취소한다.
+  // 설정(월 목표·참여 프로젝트·업무)은 자료가 지금 기간·세대의 것이면(같은 기간 reload 중이어도) 고칠 수 있다
+  const periodData = { label, viewEpoch, data: dataKey, loading }
+  const dataReady = periodDataReady(periodData)
+  const dataOwned = periodDataOwned(periodData)
+
+  // 기간 종속 작업의 소유권 — 이 렌더의 자료가 준비됐고 그 사이 기간이 바뀌지 않았을 때만(버튼 disabled와 별도로 handler에서 다시 확인)
+  function beginPeriodAction(): ActionToken | null {
+    return dataReady ? loaderRef.current!.beginAction(viewEpoch) : null
+  }
 
   function runEngine(s: number) {
     if (!dataReady) return
@@ -235,9 +242,10 @@ export default function OvertimePlanPage() {
     setPreviewCleared(true)
   }
 
-  // 설정(월 목표·참여 프로젝트·업무)을 바꾸면 미리보기를 지우고 다시 읽는다
+  // 설정(월 목표·참여 프로젝트·업무)을 바꾸면 미리보기를 지우고 다시 읽는다. 설정 화면은 기간 세대마다 새로 그리므로(key)
+  // 이 콜백이 받은 viewEpoch가 지금 세대와 다르면 이전 기간 설정의 늦은 완료 — 화면 상태는 두고 최신 기간만 다시 읽는다
   const onSettingsChanged = () => {
-    if (preview) { setPreview(null); setPreviewCleared(true) }
+    if (loaderRef.current!.beginAction(viewEpoch) && preview) { setPreview(null); setPreviewCleared(true) }
     void reload()
   }
 
@@ -245,7 +253,9 @@ export default function OvertimePlanPage() {
   const partial: PartialPlan | null = useMemo(() => (preview ? splitPartialPlan(preview.result) : null), [preview])
 
   async function saveDraft() {
-    if (!preview || !partial || !partial.canSave || !dataReady) return
+    if (!preview || !partial || !partial.canSave) return
+    const token = beginPeriodAction()
+    if (!token) return
     // 저장 직전 다시 확인 — 미리보기 뒤 입력이 바뀌었으면 저장하지 않는다
     if (!canSavePreview(preview, buildAssignmentInput(buildRaw(preview.input.seed)), scope)) {
       setMessage({ kind: 'error', text: '미리보기 뒤에 설정이나 기존 기록이 바뀌었습니다. 자동배정을 다시 실행한 뒤 저장하세요.' })
@@ -272,7 +282,7 @@ export default function OvertimePlanPage() {
       excluded_employee_count: partial.excluded.length,
       excluded: partial.excluded.map(x => ({ employee_id: x.employee_id, code: x.code })),
     }
-    const { error } = await supabase.rpc('overtime_save_assignment_run', {
+    const saveArgs = {
       p_run: {
         period_label: input.period.label, seed: input.seed, scope: runScope.kind,
         scope_employee_id: runScope.kind === 'employee' ? runScope.employee_id : null,
@@ -285,34 +295,56 @@ export default function OvertimePlanPage() {
         task_id: a.task_id, time_type: a.time_type, exception_reason: a.exception_reason,
         is_holiday: a.is_holiday,
       })),
+    }
+    const savedText = `초안 ${partial.drafts.length}건을 저장했습니다(직원 ${partial.included.length}명${partial.excluded.length > 0 ? `, 제외 ${partial.excluded.length}명` : ''}). '초안·확정' 탭에서 확인 후 확정하세요.`
+    // 끝났을 때 기간이 바뀌었으면(token) busy·메시지·미리보기·탭을 건드리지 않는다 — 그 사이 새 기간에서 만든 미리보기를 지우지 않게
+    await runPeriodAction({
+      token,
+      work: () => supabase.rpc('overtime_save_assignment_run', saveArgs),
+      onDone: ({ error }) => {
+        setBusy(false)
+        if (error) { setMessage({ kind: 'error', text: friendlyOvertimeError(error.message) }); return }
+        setPreview(null)
+        setMessage({ kind: 'ok', text: savedText })
+      },
+      reload,
+      afterReload: () => setTab('drafts'),
     })
-    setBusy(false)
-    if (error) { setMessage({ kind: 'error', text: friendlyOvertimeError(error.message) }); return }
-    setPreview(null)
-    setMessage({ kind: 'ok', text: `초안 ${partial.drafts.length}건을 저장했습니다(직원 ${partial.included.length}명${partial.excluded.length > 0 ? `, 제외 ${partial.excluded.length}명` : ''}). '초안·확정' 탭에서 확인 후 확정하세요.` })
-    await reload()
-    setTab('drafts')
   }
 
+  // 확정·폐기·확정 취소 RPC — 시작 기간을 소유할 때만 시작하고, 끝났을 때도 소유할 때만 busy·메시지를 바꾼다.
+  // 돌려주는 값: reload 뒤까지 지금 기간을 소유한 채로 성공했는지(편집창 닫기 등)
   async function callRpc(fn: string, args: Record<string, unknown>, okText: string) {
+    const token = beginPeriodAction()
+    if (!token) return false
     setBusy(true)
     setMessage(null)
-    const { error } = await supabase.rpc(fn, args)
-    setBusy(false)
-    if (error) { setMessage({ kind: 'error', text: friendlyOvertimeError(error.message) }); return false }
-    setMessage({ kind: 'ok', text: okText })
-    await reload()
-    return true
+    return runPeriodAction({
+      token,
+      work: () => supabase.rpc(fn, args),
+      onDone: ({ error }) => {
+        setBusy(false)
+        setMessage(error ? { kind: 'error', text: friendlyOvertimeError(error.message) } : { kind: 'ok', text: okText })
+      },
+      reload,
+    })
   }
 
   async function updateDraft(d: AssignmentDraft, patch: Partial<Pick<AssignmentDraft, 'time_type' | 'task_id' | 'status'>>) {
+    const token = beginPeriodAction()
+    if (!token) return
     setBusy(true)
     setMessage(null)
-    const { error } = await supabase.from('overtime_assignment_drafts').update(patch).eq('id', d.id)
-    setBusy(false)
-    if (error) { setMessage({ kind: 'error', text: friendlyOvertimeError(error.message) }); return }
-    setEditing(null)
-    await reload()
+    await runPeriodAction({
+      token,
+      work: () => supabase.from('overtime_assignment_drafts').update(patch).eq('id', d.id),
+      onDone: ({ error }) => {
+        setBusy(false)
+        if (error) { setMessage({ kind: 'error', text: friendlyOvertimeError(error.message) }); return }
+        setEditing(null)
+      },
+      reload,
+    })
   }
 
   // ── 그리드 행 ──
@@ -385,9 +417,11 @@ export default function OvertimePlanPage() {
   const changePeriod = (delta: number) => {
     const n = year * 12 + month0 + delta
     const next = { year: Math.floor(n / 12), month0: n % 12 }
-    // 새 기간 요청이 시작되기 전이라도 지금까지의 요청 응답은 모두 버리고, 이전 기간의 안내·오류를 지운다
-    loaderRef.current!.changePeriod(next)
+    // 새 기간 요청이 시작되기 전이라도 지금까지의 요청 응답은 모두 버리고, 이전 기간의 안내·오류를 지운다.
+    // 이전 기간 작업의 busy도 푼다 — 그 작업은 끝나도 소유권(세대)이 없어 화면 상태를 바꾸지 않는다
+    setViewEpoch(loaderRef.current!.changePeriod(next))
     setLoading(true)
+    setBusy(false)
     setPreview(null)
     setPreviewCleared(false)
     setMessage(null)
@@ -444,7 +478,9 @@ export default function OvertimePlanPage() {
             <div style={{ fontSize: 12, color: '#777', marginBottom: 8 }}>
               월 목표시간은 이 급여기간의 직원별 총 연장근무 한도입니다(수동 입력·자동배정 합산). 비워 두면 그 직원은 자동배정·수동 입력이 모두 막히고, 0이면 0시간입니다. 직원별로 참여 프로젝트와 업무를 고르세요.
             </div>
+            {/* 기간 세대마다 새로 그린다 — 이전 기간 설정의 진행 중 작업은 이전 세대의 onChanged로 끝난다. 자료가 지금 기간 것일 때만 수정 */}
             <PlanSettings
+              key={viewEpoch}
               periodLabel={label}
               employees={employees}
               targets={targetMap}
@@ -454,7 +490,7 @@ export default function OvertimePlanPage() {
               members={members}
               memberTasks={memberTasks}
               tasks={tasks}
-              canWrite={canWrite}
+              canWrite={canWrite && dataOwned}
               onChanged={onSettingsChanged}
             />
           </>
@@ -535,30 +571,30 @@ export default function OvertimePlanPage() {
                   <>
                     <ConfirmByEmployee
                       employees={employees.filter(e => drafts.some(d => d.run_id === run.id && d.status === 'draft' && d.employee_id === e.id))}
-                      disabled={busy}
+                      disabled={busy || !dataReady}
                       label="이 직원만 확정"
                       onConfirm={ids => callRpc('overtime_confirm_run', { p_run_id: run.id, p_employee_ids: ids }, '선택한 직원의 초안을 확정했습니다. 연장근무 기록에 반영되었습니다.')}
                     />
-                    <button disabled={busy} onClick={() => { if (confirm('이 실행의 초안을 모두 확정할까요? 확정하면 연장근무 기록에 들어갑니다.')) callRpc('overtime_confirm_run', { p_run_id: run.id, p_employee_ids: null }, '초안을 모두 확정했습니다. 연장근무 기록에 반영되었습니다.') }} style={darkBtn}>전체 확정</button>
+                    <button disabled={busy || !dataReady} onClick={() => { if (confirm('이 실행의 초안을 모두 확정할까요? 확정하면 연장근무 기록에 들어갑니다.')) callRpc('overtime_confirm_run', { p_run_id: run.id, p_employee_ids: null }, '초안을 모두 확정했습니다. 연장근무 기록에 반영되었습니다.') }} style={darkBtn}>전체 확정</button>
                   </>
                 )}
                 {/* 폐기는 남은 초안 수가 아니라 실행 상태로 보인다 — 칸을 모두 빼서 초안이 0건이어도 실행을 정리할 수 있게 */}
                 {canWrite && canDiscardRun(run) && (
                   draftCountByRun(run.id, 'draft') > 0
-                    ? <button disabled={busy} onClick={() => { if (confirm('남은 초안을 모두 버릴까요? (이미 확정된 기록은 그대로입니다)')) callRpc('overtime_discard_run', { p_run_id: run.id }, '남은 초안을 버렸습니다.') }} style={dangerBtn}>초안 버리기</button>
-                    : <button disabled={busy} onClick={() => { if (confirm('남은 초안이 없는 실행입니다. 이 실행을 폐기할까요? (이미 확정된 기록은 그대로입니다)')) callRpc('overtime_discard_run', { p_run_id: run.id }, '실행을 정리했습니다.') }} style={dangerBtn}>실행 폐기</button>
+                    ? <button disabled={busy || !dataReady} onClick={() => { if (confirm('남은 초안을 모두 버릴까요? (이미 확정된 기록은 그대로입니다)')) callRpc('overtime_discard_run', { p_run_id: run.id }, '남은 초안을 버렸습니다.') }} style={dangerBtn}>초안 버리기</button>
+                    : <button disabled={busy || !dataReady} onClick={() => { if (confirm('남은 초안이 없는 실행입니다. 이 실행을 폐기할까요? (이미 확정된 기록은 그대로입니다)')) callRpc('overtime_discard_run', { p_run_id: run.id }, '실행을 정리했습니다.') }} style={dangerBtn}>실행 폐기</button>
                 )}
                 {/* 관리자 확정 취소 — 자동확정 기록을 지우고 초안(draft)으로 되돌린다. DB도 관리자만 허용 */}
                 {isAdmin && draftCountByRun(run.id, 'confirmed') > 0 && (
                   <>
                     <ConfirmByEmployee
                       employees={employees.filter(e => drafts.some(d => d.run_id === run.id && d.status === 'confirmed' && d.employee_id === e.id))}
-                      disabled={busy}
+                      disabled={busy || !dataReady}
                       label="이 직원 확정 취소"
                       minCount={1}
                       onConfirm={ids => callRpc('overtime_unconfirm_drafts', { p_draft_ids: drafts.filter(d => d.run_id === run.id && d.status === 'confirmed' && ids.includes(d.employee_id)).map(d => d.id) }, '선택한 직원의 확정을 취소했습니다. 연장근무 기록에서 빠지고 초안으로 돌아갔습니다.')}
                     />
-                    <button disabled={busy} onClick={() => { if (confirm('이 실행의 확정을 모두 취소할까요? 자동배정 기록이 연장근무 기록에서 빠지고 초안으로 돌아갑니다.')) callRpc('overtime_unconfirm_drafts', { p_draft_ids: drafts.filter(d => d.run_id === run.id && d.status === 'confirmed').map(d => d.id) }, '확정을 모두 취소했습니다. 연장근무 기록에서 빠지고 초안으로 돌아갔습니다.') }} style={dangerBtn}>전체 확정 취소</button>
+                    <button disabled={busy || !dataReady} onClick={() => { if (confirm('이 실행의 확정을 모두 취소할까요? 자동배정 기록이 연장근무 기록에서 빠지고 초안으로 돌아갑니다.')) callRpc('overtime_unconfirm_drafts', { p_draft_ids: drafts.filter(d => d.run_id === run.id && d.status === 'confirmed').map(d => d.id) }, '확정을 모두 취소했습니다. 연장근무 기록에서 빠지고 초안으로 돌아갔습니다.') }} style={dangerBtn}>전체 확정 취소</button>
                   </>
                 )}
               </div>
@@ -595,7 +631,7 @@ export default function OvertimePlanPage() {
           tasks={tasks.filter(t => t.employee_id === editing.employee_id)}
           currentTaskName={editing.task_id ? taskById.get(editing.task_id)?.task_name ?? editing.task_name : editing.task_name}
           isAdmin={isAdmin}
-          busy={busy}
+          busy={busy || !dataReady}
           onClose={() => setEditing(null)}
           onSave={patch => updateDraft(editing, patch)}
           onUnconfirm={async () => { if (await callRpc('overtime_unconfirm_drafts', { p_draft_ids: [editing.id] }, '확정을 취소했습니다. 연장근무 기록에서 빠지고 초안으로 돌아갔습니다.')) setEditing(null) }}
