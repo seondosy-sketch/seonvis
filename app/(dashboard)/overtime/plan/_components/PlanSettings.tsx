@@ -31,6 +31,7 @@ export default function PlanSettings({
   memberTasks,
   tasks,
   canWrite,
+  canStartAction,
   onChanged,
 }: {
   periodLabel: string
@@ -43,6 +44,9 @@ export default function PlanSettings({
   memberTasks: Pick<MemberTask, 'id' | 'member_id' | 'task_id'>[]
   tasks: EmployeeTask[]
   canWrite: boolean
+  // DB 쓰기 직전 호출 — 호출 시점에 이 화면의 기간·세대가 아직 지금 화면이고 자료 소유·쓰기 권한이 있는지
+  // (lib/overtime/planning/settingsGuard.ts). false면 쓰기·메시지·onChanged 없이 조용히 끝낸다
+  canStartAction: () => boolean
   onChanged: () => void
 }) {
   const supabase = createSupabaseBrowserClient()
@@ -53,6 +57,7 @@ export default function PlanSettings({
   const md = (d: string | null) => (d ? `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}` : '')
 
   async function saveTarget(employeeId: string, text: string) {
+    if (!canStartAction()) return
     setError(null)
     const value = text.trim()
     let res
@@ -70,6 +75,7 @@ export default function PlanSettings({
   }
 
   async function toggleProject(employeeId: string, projectId: string, on: boolean) {
+    if (!canStartAction()) return
     setError(null)
     const res = on
       ? await supabase.from('overtime_project_members').insert({ project_id: projectId, employee_id: employeeId })
@@ -79,6 +85,7 @@ export default function PlanSettings({
   }
 
   async function toggleTask(memberId: string, employeeId: string, taskId: string, on: boolean) {
+    if (!canStartAction()) return
     setError(null)
     const res = on
       ? await supabase.from('overtime_member_tasks').insert({ member_id: memberId, task_id: taskId, employee_id: employeeId })

@@ -12,6 +12,7 @@ import { runAssignment } from '@/lib/overtime/assign/engine'
 import type { AssignmentResult } from '@/lib/overtime/assign/types'
 import { buildAssignmentInput, lockedRange, supersededBy, toPeriodLabel, type PlanningRaw, type PlanningScope } from '@/lib/overtime/planning/input'
 import { createPeriodLoader, periodDataOwned, periodDataReady, runPeriodAction, type ActionToken, type LoadTicket, type PeriodLoader } from '@/lib/overtime/planning/loadGate'
+import { createSettingsActionGuard } from '@/lib/overtime/planning/settingsGuard'
 import { friendlyOvertimeError } from '@/lib/overtime/planning/errors'
 import { canSavePreview, makePreview, type StoredPreview } from '@/lib/overtime/planning/fingerprint'
 import { splitPartialPlan, type PartialPlan } from '@/lib/overtime/planning/partial'
@@ -216,6 +217,18 @@ export default function OvertimePlanPage() {
   const periodData = { label, viewEpoch, data: dataKey, loading }
   const dataReady = periodDataReady(periodData)
   const dataOwned = periodDataOwned(periodData)
+
+  // 설정 화면 쓰기의 소유권 확인 — handler가 호출 시점의 자료 소유·쓰기 권한을 읽도록 렌더 뒤 ref에 맞춰 둔다
+  const settingsStateRef = useRef({ owned: false, canWrite: false })
+  useEffect(() => { settingsStateRef.current = { owned: dataOwned, canWrite } }, [dataOwned, canWrite])
+  // 설정 화면(key=viewEpoch)이 만들어진 세대·기간에 묶인 가드 — 기간이 바뀌면(A→B→A 포함) 이전 화면의 handler는 false
+  // (호출될 때만 가드를 만들어 평가한다 — 렌더 중에는 ref를 읽지 않는다)
+  const canStartSettingsAction = useCallback(() => createSettingsActionGuard({
+    beginAction: e => loaderRef.current!.beginAction(e),
+    viewEpoch,
+    periodLabel: label,
+    state: () => settingsStateRef.current,
+  })(), [viewEpoch, label])
 
   // 기간 종속 작업의 소유권 — 이 렌더의 자료가 준비됐고 그 사이 기간이 바뀌지 않았을 때만(버튼 disabled와 별도로 handler에서 다시 확인)
   function beginPeriodAction(): ActionToken | null {
@@ -491,6 +504,7 @@ export default function OvertimePlanPage() {
               memberTasks={memberTasks}
               tasks={tasks}
               canWrite={canWrite && dataOwned}
+              canStartAction={canStartSettingsAction}
               onChanged={onSettingsChanged}
             />
           </>
