@@ -126,7 +126,7 @@
 - "월 마감" 전용 권한 레벨이 현재 권한 체계(`menu_permissions` 3단계)에 없다(01문서 §6) — 신규 권한 개념이 반드시 필요.
 
 **Open Question**
-- 마감/마감취소 권한을 어떻게 표현할지: (a) `ADMIN_EMAILS` 관리자만 가능하게 제한, (b) `menu_permissions`에 이 메뉴 전용 4번째 값을 추가(예: `write_close`), (c) 별도 권한 컬럼(`allowed_users.can_close_attendance boolean`) 신설. 세 방식 모두 구현 가능하며 트레이드오프가 다르다 → 사용자 선택 필요(→ `03-data-model.md`에 3안 비교 정리).
+- 마감/마감취소 권한을 어떻게 표현할지: (a) `ADMIN_EMAILS` 관리자만 가능하게 제한, (b) `menu_permissions`에 이 메뉴 전용 4번째 값을 추가(예: `write_close`), (c) 별도 권한 컬럼(`allowed_users.can_close_attendance boolean`) 신설. 세 방식 모두 구현 가능하며 트레이드오프가 다르다 → 사용자 선택 필요(→ `03-data-model.md`에 3안 비교 정리). *(설계 당시 선택지 — 2026-10부터 관리자는 `allowed_users.is_admin`, `ADMIN_EMAILS`는 인가에 쓰지 않음)*
 
 ---
 
@@ -194,6 +194,6 @@
 | 3 | 면접일 미입력·비정형 처리 | (Proposed) 연장근무와 동일하게 종료일 없이 계속 허용 — 확인 필요 |
 | 4 | 다중 셀 드래그 입력 | 1차 범위 포함 여부 |
 | 5 | 월별 비고 vs 변경이력 화면 분리 | 완전 분리 / 통합 표시 |
-| 6 | 월마감·마감취소 권한 표현 | ADMIN_EMAILS 재사용 / menu_permissions 확장 / 신규 권한 컬럼 |
+| 6 | 월마감·마감취소 권한 표현 | ADMIN_EMAILS 재사용(설계 당시 선택지 — 현재 인가에 쓰지 않음) / menu_permissions 확장 / 신규 권한 컬럼 |
 
 다음 문서(`03-data-model.md`)는 이 Open Question들에 대한 분석자 권장안과 근거를 담아 사용자 결정을 요청한다.

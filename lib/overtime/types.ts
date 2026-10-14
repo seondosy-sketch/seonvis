@@ -78,6 +78,10 @@ export interface WorkRecord {
                              // null은 기존 방식 레코드(식사시간 1시간 자동 차감, time.ts calculateHours)
   note: string                // 비고
   created_at: string          // 대시보드 "최근 입력 내역" 정렬 기준 (7단계)
+  // 자동배정 개편(supabase/migration_overtime_planning_a_base.sql)에서 추가된 칸 — migration 전 DB에는 없으므로 선택.
+  // source가 'auto'면 자동배정 확정 기록: 화면에서 직접 고치거나 지울 수 없다(관리자 확정 취소로만).
+  source?: 'manual' | 'auto' | null
+  assignment_exception_reason?: string | null
 }
 
 /**

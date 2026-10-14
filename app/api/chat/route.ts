@@ -1,4 +1,5 @@
 import { createSupabaseServerClient } from '@/lib/supabase-server'
+import { chatMode, getMenuAccess } from '@/lib/auth/menuAccess'
 
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`
 
@@ -142,6 +143,10 @@ function buildPreview(name: string, args: Record<string, unknown>): string {
 type GeminiMessage = { role: string; parts: ({ text: string } | { functionCall: { name: string; args: Record<string, unknown> } } | { functionResponse: { name: string; response: Record<string, unknown> } })[] }
 
 export async function POST(request: Request) {
+  // 대화에 프로젝트 List 전체를 넣으므로, 프로젝트 List 권한이 없는(none) 사용자는 서버에서 막는다
+  if (chatMode(await getMenuAccess()) === 'none') {
+    return Response.json({ type: 'text', text: '프로젝트 List 권한이 없어 미래봇을 사용할 수 없어요. 필요하면 관리자에게 권한을 요청하세요.' }, { status: 403 })
+  }
   try {
   const { messages } = await request.json() as { messages: { role: string; text: string }[] }
 

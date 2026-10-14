@@ -8,7 +8,7 @@
 
 ## 주요 사용자
 - 미래사업팀 팀원 (Google 계정 로그인 후 관리자 승인 필요)
-- 관리자 (`ADMIN_EMAILS` 환경 변수에 등록된 이메일)
+- 관리자 (DB `allowed_users.is_admin = true`인 계정 — `ADMIN_EMAILS` 환경 변수는 2026-10부터 관리자 권한을 주지 않음)
 
 ## 기술 스택
 

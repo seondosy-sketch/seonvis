@@ -1,42 +1,24 @@
 import { redirect } from 'next/navigation'
-import { createSupabaseServerClient } from '@/lib/supabase-server'
-import { createSupabaseAdminClient } from '@/lib/supabase-admin'
+import { getMenuAccess } from '@/lib/auth/menuAccess'
+import { permissionFor } from '@/lib/menuConfig'
 import SidebarContainer from '../components/SidebarContainer'
 
-function getAdminEmails(): string[] {
-  return (process.env.ADMIN_EMAILS ?? '').split(',').map(e => e.trim()).filter(Boolean)
-}
-
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const supabase = await createSupabaseServerClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user?.email) redirect('/login')
-
-  const adminEmails = getAdminEmails()
-  const isAdmin = adminEmails.includes(user.email)
-
-  // 관리자는 항상 접근 허용 + 전체 메뉴 쓰기. 일반 사용자는 allowed_users 테이블 확인
-  // (admin client로 RLS 우회) 겸 항목별 권한(menu_permissions: none/read/write)을 읽어온다.
+  // allowed_users 행이 있어야 접근 허용(admin client로 RLS 우회). 관리자(allowed_users.is_admin)는 전체 메뉴 쓰기,
+  // 일반 사용자는 항목별 권한(menu_permissions: none/read/write — 무효값은 none으로 해석)을 읽어온다.
   // none은 사이드바에서 숨기고, read/write는 PermissionsProvider로 페이지들에 내려준다.
-  let menuPermissions: Record<string, 'none' | 'read' | 'write'> = {}
-  if (!isAdmin) {
-    const admin = createSupabaseAdminClient()
-    const { data } = await admin
-      .from('allowed_users')
-      .select('email, menu_permissions')
-      .eq('email', user.email.toLowerCase().trim())
-      .maybeSingle()
+  // 판정·조회는 lib/auth/menuAccess.ts 한 곳 — 메뉴 폴더 layout.tsx의 requireMenu와 같은 요청 안에서 한 번만 조회한다.
+  // (사이드바 숨김은 접근통제가 아니다 — 직접 URL 접근은 메뉴 폴더 layout.tsx가 막는다)
+  const access = await getMenuAccess()
+  if (!access) redirect('/login')
+  if (!access.approved) redirect('/unauthorized')
 
-    if (!data) redirect('/unauthorized')
-    menuPermissions = data.menu_permissions ?? {}
-  }
-  const hiddenMenuItems = Object.entries(menuPermissions)
-    .filter(([, v]) => v === 'none')
-    .map(([k]) => k)
+  const menuPermissions = access.isAdmin ? {} : access.permissions
+  // permissionFor로 판정 — 저장값이 무효('NONE' 등)면 none이므로 사이드바에서도 숨긴다(화면 가드와 같은 결과)
+  const hiddenMenuItems = Object.keys(menuPermissions).filter(k => permissionFor(menuPermissions, k) === 'none')
 
   return (
-    <SidebarContainer isAdmin={isAdmin} userEmail={user.email} hiddenMenuItems={hiddenMenuItems} menuPermissions={menuPermissions}>
+    <SidebarContainer isAdmin={access.isAdmin} userEmail={access.email} hiddenMenuItems={hiddenMenuItems} menuPermissions={menuPermissions}>
       {children}
     </SidebarContainer>
   )

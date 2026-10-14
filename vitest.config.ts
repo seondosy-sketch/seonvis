@@ -9,6 +9,9 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname),
+      // lib/supabase-admin.ts의 import 'server-only' — Next.js는 내장 별칭으로 처리하지만 vitest(node)는 모른다.
+      // 패키지를 설치하지 않고 Next에 들어 있는 빈 모듈(서버 컴포넌트용)로 연결한다.
+      'server-only': path.resolve(__dirname, 'node_modules/next/dist/compiled/server-only/empty.js'),
     },
   },
   test: {

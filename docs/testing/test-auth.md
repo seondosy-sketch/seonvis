@@ -89,7 +89,7 @@ curl -s -X POST http://localhost:3000/api/test-auth/logout
 4. `TEST_AUTH_EMAIL` 없음 → 404
 5. `TEST_AUTH_PASSWORD` 없음 → 404
 6. 요청이 지목한 이메일 ≠ `TEST_AUTH_EMAIL` → 403
-7. 그 이메일이 `allowed_users`(또는 `ADMIN_EMAILS`)에 없음 → 403
+7. 그 이메일이 `allowed_users`에 없음 → 403 (`ADMIN_EMAILS`에 있어도 마찬가지 — 관리자 여부는 `allowed_users.is_admin`)
 
 여기에 더해 `proxy.ts`는 test auth가 켜진 환경에서만 로그인 리다이렉트 예외를 연다. production에서는
 예외가 아예 생기지 않아 요청이 라우트에 닿기도 전에 `/login`으로 간다.

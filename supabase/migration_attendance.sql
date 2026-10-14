@@ -231,7 +231,7 @@ create index if not exists idx_attendance_audit_log_actiontype on attendance_aud
 -- 기존 menu_permissions(none/read/write 3단계)에는 "마감"처럼 쓰기 권한과 분리된
 -- 개별 액션 권한 개념이 없다(01-current-analysis.md §6). 이 기능 전용 권한 컬럼을 신설한다.
 -- 마감 취소도 이 권한으로 통제한다(사용자 지시: "마감취소는 can_close_attendance 권한이
--- 있는 사용자만 가능"). ADMIN_EMAILS 관리자는 기존 관례대로 이 컬럼과 무관하게 항상 가능.
+-- 있는 사용자만 가능"). ADMIN_EMAILS 관리자는 기존 관례대로 이 컬럼과 무관하게 항상 가능. (2026-10부터 관리자는 allowed_users.is_admin, ADMIN_EMAILS는 인가에 쓰지 않는다)
 alter table allowed_users
   add column if not exists can_close_attendance boolean not null default false;
 

@@ -1,17 +1,9 @@
-import { redirect } from 'next/navigation'
-import { createSupabaseServerClient } from '@/lib/supabase-server'
+import { requireAdminPage } from '@/lib/auth/menuAccess'
 import AdminUserManager from './AdminUserManager'
 
-function getAdminEmails(): string[] {
-  return (process.env.ADMIN_EMAILS ?? '').split(',').map(e => e.trim()).filter(Boolean)
-}
-
 export default async function AdminPage() {
-  const supabase = await createSupabaseServerClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user?.email) redirect('/login')
-  if (!getAdminEmails().includes(user.email)) redirect('/unauthorized')
+  // 관리자 = DB allowed_users.is_admin(매 요청 서버 조회). 로그인 없음 → /login, 관리자 아님 → /unauthorized
+  await requireAdminPage()
 
   return (
     <div style={{ padding: '32px 40px', maxWidth: 700 }}>

@@ -4,6 +4,8 @@ import { useState } from 'react'
 import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import { Employee, EmployeeTask, Project, WorkRecord } from '@/lib/overtime/types'
 import { calculateRecognizedHours, TIME_TYPE_PRESETS, TimeType } from '@/lib/overtime/time'
+import { precheckManualSave } from '@/lib/overtime/monthlyCap'
+import { friendlyOvertimeError } from '@/lib/overtime/planning/errors'
 
 /**
  * 프로젝트별 그리드의 셀 클릭 시 열리는 작은 팝오버 입력창.
@@ -90,8 +92,11 @@ export default function OvertimeEntryPopover({
   const customCalc = timeType === 'custom'
     ? calculateRecognizedHours(startTime, endTime, parseFloat(breakHours))
     : null
+  // 자동배정으로 확정된 기록은 보기만 — 고치거나 지우려면 관리자 확정 취소(DB 트리거도 막는다)
+  const autoLocked = records.find(r => r.id === editingId)?.source === 'auto'
 
   async function handleSave() {
+    // 검사 순서: ① 필수 입력·시간 산출 ② 자동확정 잠금 ③ 월 목표 존재 ④ 월 목표 초과 ⑤ 주 12시간 ⑥ 저장
     const taskDescription = (taskChoice === CUSTOM_TASK ? customTask : taskChoice).trim()
     if (!taskDescription) { setError('업무내용을 선택하거나 입력하세요'); return }
 
@@ -108,9 +113,13 @@ export default function OvertimeEntryPopover({
       const p = PRESETS[timeType]
       payloadTimes = { start_time: p.start, end_time: p.end, break_hours: p.breakH, hours: p.hours }
     }
+    if (autoLocked) { setError('자동배정으로 확정된 기록이라 여기서 고치거나 지울 수 없습니다. 바꾸려면 관리자에게 확정 취소를 요청하세요.'); return }
 
     setSaving(true)
     setError(null)
+    // 월 목표·주 12시간 사전검증 — DB 트리거와 같은 규칙(lib/overtime/monthlyCap.ts·weeklyCap.ts)으로 먼저 친절하게 막는다
+    const capError = await precheckManualSave(supabase, [{ employee_id: employee.id, work_date: date, hours: payloadTimes.hours, replacing_id: editingId }])
+    if (capError) { setSaving(false); setError(capError); return }
     const payload = {
       employee_id: employee.id,
       project_id: project.id,
@@ -123,18 +132,18 @@ export default function OvertimeEntryPopover({
       ? await supabase.from('overtime_work_records').update(payload).eq('id', editingId)
       : await supabase.from('overtime_work_records').insert(payload)
     setSaving(false)
-    if (saveError) { setError(`저장 실패: ${saveError.message}`); return }
+    if (saveError) { setError(friendlyOvertimeError(saveError.message)); return }
     onSaved()
     onClose()
   }
 
   async function handleDelete() {
-    if (!editingId) return
+    if (!editingId || autoLocked) return
     if (!confirm('이 업무 기록을 삭제하시겠습니까?')) return
     setSaving(true)
     const { error: deleteError } = await supabase.from('overtime_work_records').delete().eq('id', editingId)
     setSaving(false)
-    if (deleteError) { setError(`삭제 실패: ${deleteError.message}`); return }
+    if (deleteError) { setError(friendlyOvertimeError(deleteError.message)); return }
     onSaved()
     onClose()
   }
@@ -170,7 +179,10 @@ export default function OvertimeEntryPopover({
                   onClick={() => applyRecord(r)}
                   style={{ ...recordRow, borderColor: r.id === editingId ? '#111' : '#e8e8e6', background: r.id === editingId ? '#f4f4f2' : '#fff' }}
                 >
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.task_description || '(업무내용 없음)'}</span>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {r.source === 'auto' && <span style={autoBadge}>자동</span>}
+                    {r.task_description || '(업무내용 없음)'}
+                  </span>
                   <span style={{ flexShrink: 0, fontWeight: 600 }}>{r.hours}h</span>
                 </button>
               ))}
@@ -248,14 +260,21 @@ export default function OvertimeEntryPopover({
           </div>
 
           {error && <div style={{ fontSize: 11, color: '#b91c1c' }}>{error}</div>}
+          {autoLocked && (
+            <div style={{ fontSize: 11, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 5, padding: '6px 8px' }}>
+              자동배정으로 확정된 기록이라 여기서 고치거나 지울 수 없습니다. 바꾸려면 관리자에게 확정 취소를 요청하세요.
+            </div>
+          )}
 
           <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-            {editingId && (
+            {editingId && !autoLocked && (
               <button onClick={handleDelete} disabled={saving} style={deleteBtn}>삭제</button>
             )}
-            <button onClick={handleSave} disabled={saving} style={{ ...saveBtn, opacity: saving ? 0.6 : 1 }}>
-              {saving ? '저장 중...' : '저장'}
-            </button>
+            {!autoLocked && (
+              <button onClick={handleSave} disabled={saving} style={{ ...saveBtn, opacity: saving ? 0.6 : 1 }}>
+                {saving ? '저장 중...' : '저장'}
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -272,3 +291,4 @@ const typeBtnActive: React.CSSProperties = { ...typeBtn, background: '#111', col
 const recordRow: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, height: 28, padding: '0 8px', borderRadius: 5, borderWidth: 1, borderStyle: 'solid', borderColor: '#e8e8e6', background: '#fff', fontSize: 11, color: '#333', cursor: 'pointer', textAlign: 'left' }
 const deleteBtn: React.CSSProperties = { height: 30, padding: '0 12px', borderRadius: 5, border: 'none', background: '#fee2e2', color: '#b91c1c', fontSize: 12, cursor: 'pointer' }
 const saveBtn: React.CSSProperties = { height: 30, padding: '0 16px', borderRadius: 5, border: 'none', background: '#111', color: '#fff', fontSize: 12, cursor: 'pointer' }
+const autoBadge: React.CSSProperties = { fontSize: 9, padding: '1px 4px', borderRadius: 3, background: '#eff6ff', color: '#1d4ed8', marginRight: 4 }
