@@ -1,144 +1,158 @@
--- 월 목표 선입력 2단계 — 미리보기 / 적용 (운영 SQL Editor, 한 번에 전체 실행)
+-- 월 목표 선입력 2단계 — 검사 / 적용 (운영 SQL Editor, 한 번에 전체 실행)
 --
--- 사용법
---   ① 아래 [설정]의 period_label·expected_count를 확인하고, apply = false 로 둔 채 [입력표]를 채워 실행 → 미리보기 표 확인
---   ② 미리보기의 verdict가 전부 OK면 apply = true 로 바꿔 다시 실행 → 적용 결과 표 확인
---   - 이름으로 고르지 않는다: overtime_employee_id(1단계 목록의 UUID)만 쓴다. 동명이인도 UUID로 구분된다.
---   - 대상 = 재직 미래사업팀 직원(overtime_employees.is_active AND 주소록 연결 + company '미래사업팀' + '재직').
---     대상 인원이 expected_count(9)와 다르면 적용하지 않는다.
---   ⚠ 결과표 아래쪽 "입력값" 행에는 이름이 나온다 — SQL Editor 화면 확인용. 내보내거나 대화창·문서에 붙이지 않는다.
---   - 목표시간은 0 이상(0 = 그 기간 연장근무 0시간, 양수 입력 전부 차단). 빈칸(null)은 허용하지 않는다.
---   - 이미 목표가 있는 직원이 있으면 overwrite = true일 때만 덮어쓴다(기본은 중단).
--- 안전: 전체가 한 트랜잭션. 검사 하나라도 실패하면 아무것도 바뀌지 않는다(apply = true여도 미적용).
---       누락 직원·중복·없는 ID·비재직 ID·개수 불일치·범위 밖 값은 모두 FAIL.
--- 되돌리기(월 목표 강제조건 적용 전에만): overtime_monthly_targets_3_rollback.sql
+-- 구조: 맨 바깥에는 begin · DO 블록 하나 · 결과 SELECT · commit만 있다(맨 바깥 insert/update/delete 없음).
+--   예전 파일은 맨 바깥에서 임시표(ot_target_opts·ot_target_input)에 값을 넣었는데, 운영 SQL Editor가 실행 전에
+--   그 표를 찾다가 relation "ot_target_opts" does not exist(42P01)로 멈췄다. 그래서 입력값은 DO 블록 안 배열 변수로 받는다.
+--
+-- 사용법 (값은 SQL Editor 안에서만 고친다. 이 파일에 실제 UUID를 저장하지 않는다)
+--   1) [설정] v_labels(급여기간)·v_expected(재직 미래사업팀 인원)를 확인한다.
+--   2) [입력표] v_ids: 1단계 목록(_1_list.sql) 화면의 overtime_employee_id를 화면순번 순서로(주소록_uuid 아님).
+--      v_hours: 같은 순서의 목표시간. 이름으로 고르지 않는다 — 동명이인도 UUID로 구분된다.
+--   3) v_apply = false(기본)로 한 번 실행 → 오류 없이 끝나고 마지막 표 t01이 기간마다 NONE(0행)인지 확인.
+--   4) (별도 승인 후) v_apply = true로 바꿔 한 번만 실행 → t01이 기간마다 OK(v_expected행), t02 분포가 입력과 같은지 확인.
+-- 대상 = 재직 미래사업팀 직원(overtime_employees.is_active AND 주소록 연결 + company '미래사업팀' + '재직').
+--   운영 기준 8명(주소록에 연결된 직원은 9명이지만 그중 1명은 비활성). 대상 인원이 v_expected와 다르면 적용하지 않는다.
+-- 검사(하나라도 실패하면 raise → 아무것도 바뀌지 않음): c01 급여기간 없음·형식·중복 / c02 입력 줄 수 / c03 대상 인원 /
+--   c04 재직이지만 대상 아님 / c05 자리표시 ID / c06 빈칸 / c07 범위(0~300) / c07b 소수 셋째 자리 이상(numeric(5,2) 반올림 방지) /
+--   c08 중복 ID / c09 대상이 아닌 ID / c10 누락된 대상 직원 / c11 기존 목표 있음(덮어쓰기 없음).
+--   목표시간 0 = 그 기간 연장근무 0시간(양수 입력 전부 차단).
+-- 안전: 전체가 한 트랜잭션 — 여러 급여기간이 모두 들어가거나 모두 안 들어간다. 적용 후 행 수와 값을 다시 확인해
+--   다르면 raise로 전체 되돌림. 같은 값으로 apply = true를 두 번 실행하면 c11로 중단된다.
+-- 출력: 이름·UUID를 내지 않는다(실패 사유도 항목 번호와 개수만). 이름 확인은 1단계 화면에서.
+-- 되돌리기(월 목표 강제조건 activation 전에만): overtime_monthly_targets_3_rollback.sql
 
 begin;
 
-create temp table ot_target_opts (period_label text, expected_count int, apply boolean, overwrite boolean) on commit drop;
-create temp table ot_target_input (employee_id uuid, target_hours numeric) on commit drop;
-
--- ── [설정] ─────────────────────────────────────────────────────────────────
-insert into ot_target_opts values ('2026-10', 9, false, false);
---                                  급여기간   재직인원 적용여부 덮어쓰기
-
--- ── [입력표] 1단계 목록의 employee_id와 목표시간을 적는다 (9줄) ───────────────────
-insert into ot_target_input (employee_id, target_hours) values
-  ('00000000-0000-0000-0000-000000000000', null),
-  ('00000000-0000-0000-0000-000000000000', null),
-  ('00000000-0000-0000-0000-000000000000', null),
-  ('00000000-0000-0000-0000-000000000000', null),
-  ('00000000-0000-0000-0000-000000000000', null),
-  ('00000000-0000-0000-0000-000000000000', null),
-  ('00000000-0000-0000-0000-000000000000', null),
-  ('00000000-0000-0000-0000-000000000000', null),
-  ('00000000-0000-0000-0000-000000000000', null);
--- ───────────────────────────────────────────────────────────────────────────
-
-create temp table ot_target_result (seq int generated always as identity, check_name text, verdict text, detail text) on commit drop;
-
--- 대상 직원(재직 미래사업팀) — 검사·적용·미리보기가 모두 이 목록을 기준으로 한다
-create or replace temp view ot_target_scope as
-  select e.id as employee_id, c.id as contact_id, e.name, e.sort_order, e.created_at
-  from public.overtime_employees e
-  join public.engineer_contacts c on c.employee_id = e.id
-  where e.is_active and c.company = '미래사업팀' and c.employment_status = '재직';
-
 do $$
 declare
-  o record;
-  v_errors int;
-  v_written int := 0;
+  -- ── [설정] ──────────────────────────────────────────────────────────────
+  v_labels   text[]    := array['2026-10', '2026-11'];   -- 적용할 급여기간
+  v_expected int       := 8;                             -- 재직 미래사업팀 인원
+  v_apply    boolean   := false;                         -- false = 검사만, true = 적용
+  -- ── [입력표] 같은 순서로 v_expected개씩 ──────────────────────────────────
+  v_ids uuid[] := array[
+    '00000000-0000-0000-0000-000000000000',
+    '00000000-0000-0000-0000-000000000000',
+    '00000000-0000-0000-0000-000000000000',
+    '00000000-0000-0000-0000-000000000000',
+    '00000000-0000-0000-0000-000000000000',
+    '00000000-0000-0000-0000-000000000000',
+    '00000000-0000-0000-0000-000000000000',
+    '00000000-0000-0000-0000-000000000000'
+  ]::uuid[];
+  v_hours numeric[] := array[20, 20, 20, 20, 20, 20, 20, 20]::numeric[];
+  -- ───────────────────────────────────────────────────────────────────────
+  -- 실패 사유는 pg_catalog.array_append로 모은다(text[] || '문자열'은 오른쪽이 배열 리터럴로 해석된다)
+  v_fail text[] := array[]::text[];
+  v_label text;
+  v_written int;
+  v_after int;
 begin
-  select * into o from ot_target_opts;
   if to_regclass('public.overtime_monthly_targets') is null then
     raise exception '중단: Migration A가 적용되지 않았다(overtime_monthly_targets 없음)';
   end if;
+  -- 결과 SELECT가 같은 급여기간을 보도록 이 트랜잭션 안에서만 넘긴다(표에 쓰지 않는다)
+  perform pg_catalog.set_config('ot_target.labels', array_to_string(coalesce(v_labels, array[]::text[]), ','), true);
 
-  insert into ot_target_result (check_name, verdict, detail)
-  select '급여기간 형식', case when o.period_label ~ '^[0-9]{4}-(0[1-9]|1[0-2])$' then 'OK' else 'FAIL' end, o.period_label
-  union all
-  select '입력 줄 수 = 재직인원(' || o.expected_count || ')',
-         case when (select count(*) from ot_target_input) = o.expected_count then 'OK' else 'FAIL' end,
-         (select count(*) from ot_target_input)::text || '줄'
-  union all
-  select '대상(재직 미래사업팀) 인원 = ' || o.expected_count,
-         case when (select count(*) from ot_target_scope) = o.expected_count then 'OK' else 'FAIL' end,
-         (select count(*) from ot_target_scope)::text || '명'
-  union all
-  select '재직이지만 대상 아님(주소록 미연결·비재직)', case when exists (select 1 from public.overtime_employees e where e.is_active
-                                    and not exists (select 1 from ot_target_scope s where s.employee_id = e.id)) then 'FAIL' else 'OK' end,
-         (select count(*) from public.overtime_employees e where e.is_active
-           and not exists (select 1 from ot_target_scope s where s.employee_id = e.id))::text || '명'
-  union all
-  select '자리표시 ID(000…) 남아 있음', case when exists (select 1 from ot_target_input where employee_id = '00000000-0000-0000-0000-000000000000') then 'FAIL' else 'OK' end, ''
-  union all
-  select '목표시간 빈칸', case when exists (select 1 from ot_target_input where target_hours is null) then 'FAIL' else 'OK' end,
-         (select count(*) from ot_target_input where target_hours is null)::text || '줄'
-  union all
-  select '목표시간 범위(0~300)', case when exists (select 1 from ot_target_input where target_hours < 0 or target_hours > 300) then 'FAIL' else 'OK' end, ''
-  union all
-  select '중복 employee_id', case when exists (select 1 from ot_target_input group by employee_id having count(*) > 1) then 'FAIL' else 'OK' end,
-         coalesce((select string_agg(employee_id::text, ', ') from (select employee_id from ot_target_input group by employee_id having count(*) > 1) d), '')
-  union all
-  select '대상이 아닌 ID(없음·비재직·다른 팀)', case when exists (select 1 from ot_target_input i where not exists
-                                    (select 1 from ot_target_scope s where s.employee_id = i.employee_id)) then 'FAIL' else 'OK' end,
-         coalesce((select string_agg(i.employee_id::text, ', ') from ot_target_input i where not exists
-                   (select 1 from ot_target_scope s where s.employee_id = i.employee_id)), '')
-  union all
-  select '누락된 대상 직원', case when exists (select 1 from ot_target_scope s
-                                    where not exists (select 1 from ot_target_input i where i.employee_id = s.employee_id)) then 'FAIL' else 'OK' end,
-         coalesce((select string_agg(s.employee_id::text, ', ') from ot_target_scope s
-                   where not exists (select 1 from ot_target_input i where i.employee_id = s.employee_id)), '')
-  union all
-  select '이미 목표가 있는 직원', case when not exists (select 1 from public.overtime_monthly_targets t join ot_target_input i on i.employee_id = t.employee_id
-                                                        where t.period_label = o.period_label) then 'OK'
-                                        when o.overwrite then 'OK(덮어씀)' else 'FAIL' end,
-         (select count(*) from public.overtime_monthly_targets t join ot_target_input i on i.employee_id = t.employee_id where t.period_label = o.period_label)::text || '명';
-
-  select count(*) into v_errors from ot_target_result where verdict = 'FAIL';
-
-  if o.apply then
-    if v_errors > 0 then
-      raise exception '중단: 검사 실패 %건 — 아무것도 적용하지 않았다. apply = false로 미리보기를 먼저 확인하세요', v_errors;
-    end if;
-    insert into public.overtime_monthly_targets (employee_id, period_label, target_hours)
-    select employee_id, o.period_label, target_hours from ot_target_input
-    on conflict (employee_id, period_label) do update set target_hours = excluded.target_hours
-      where o.overwrite;
-    get diagnostics v_written = row_count;
-    insert into ot_target_result (check_name, verdict, detail)
-    select '적용 행 수', case when v_written = o.expected_count then 'OK' else 'FAIL' end, v_written::text || '행'
-    union all
-    select '적용 후 ' || o.period_label || ' 대상 직원 목표 = ' || o.expected_count || '명',
-           case when (select count(*) from public.overtime_monthly_targets t join ot_target_scope s on s.employee_id = t.employee_id
-                       where t.period_label = o.period_label) = o.expected_count then 'OK' else 'FAIL' end,
-           (select count(*) from public.overtime_monthly_targets t join ot_target_scope s on s.employee_id = t.employee_id
-             where t.period_label = o.period_label)::text || '명';
-    if exists (select 1 from ot_target_result where verdict = 'FAIL') then
-      raise exception '중단: 적용 후 확인 실패 — 전체 되돌림';
-    end if;
-  else
-    insert into ot_target_result (check_name, verdict, detail) values ('모드', 'INFO', '미리보기만 — 아무것도 바꾸지 않았다 (apply = false)');
+  -- 공통 검사
+  if coalesce(array_length(v_labels, 1), 0) = 0 then v_fail := pg_catalog.array_append(v_fail, 'c01 급여기간 없음'::text); end if;
+  if exists (select 1 from unnest(v_labels) l where l is null or l !~ '^[0-9]{4}-(0[1-9]|1[0-2])$') then v_fail := pg_catalog.array_append(v_fail, 'c01 급여기간 형식'::text); end if;
+  if exists (select 1 from unnest(v_labels) l group by l having count(*) > 1) then v_fail := pg_catalog.array_append(v_fail, 'c01 급여기간 중복'::text); end if;
+  if coalesce(array_length(v_ids, 1), 0) <> v_expected or coalesce(array_length(v_hours, 1), 0) <> v_expected then
+    v_fail := pg_catalog.array_append(v_fail, ('c02 입력 줄 수(ID ' || coalesce(array_length(v_ids, 1), 0) || ' / 시간 ' || coalesce(array_length(v_hours, 1), 0) || ') ≠ ' || v_expected)::text);
   end if;
+  if (select count(*) from public.overtime_employees e join public.engineer_contacts c on c.employee_id = e.id
+      where e.is_active and c.company = '미래사업팀' and c.employment_status = '재직') <> v_expected then
+    v_fail := pg_catalog.array_append(v_fail, 'c03 대상 인원 ≠ 재직인원'::text);
+  end if;
+  if exists (select 1 from public.overtime_employees e where e.is_active
+             and not exists (select 1 from public.engineer_contacts c where c.employee_id = e.id
+                             and c.company = '미래사업팀' and c.employment_status = '재직')) then
+    v_fail := pg_catalog.array_append(v_fail, 'c04 재직이지만 대상 아님'::text);
+  end if;
+  if exists (select 1 from unnest(v_ids) i where i = '00000000-0000-0000-0000-000000000000') then v_fail := pg_catalog.array_append(v_fail, 'c05 자리표시 ID 남음'::text); end if;
+  if exists (select 1 from unnest(v_ids) i where i is null) or exists (select 1 from unnest(v_hours) h where h is null) then
+    v_fail := pg_catalog.array_append(v_fail, 'c06 빈칸'::text);
+  end if;
+  if exists (select 1 from unnest(v_hours) h where h < 0 or h > 300) then v_fail := pg_catalog.array_append(v_fail, 'c07 범위(0~300) 밖'::text); end if;
+  if exists (select 1 from unnest(v_hours) h where h <> round(h, 2)) then v_fail := pg_catalog.array_append(v_fail, 'c07b 소수 셋째 자리 이상'::text); end if;
+  if exists (select 1 from unnest(v_ids) i group by i having count(*) > 1) then v_fail := pg_catalog.array_append(v_fail, 'c08 중복 ID'::text); end if;
+  if exists (select 1 from unnest(v_ids) i where i is not null and not exists (
+               select 1 from public.overtime_employees e join public.engineer_contacts c on c.employee_id = e.id
+               where e.id = i and e.is_active and c.company = '미래사업팀' and c.employment_status = '재직')) then
+    v_fail := pg_catalog.array_append(v_fail, 'c09 대상이 아닌 ID'::text);
+  end if;
+  if exists (select 1 from public.overtime_employees e join public.engineer_contacts c on c.employee_id = e.id
+             where e.is_active and c.company = '미래사업팀' and c.employment_status = '재직'
+               and not (e.id = any (coalesce(v_ids, array[]::uuid[])))) then
+    v_fail := pg_catalog.array_append(v_fail, 'c10 누락된 대상 직원'::text);
+  end if;
+  -- 기간별: 기존 목표(덮어쓰기 없음)
+  foreach v_label in array coalesce(v_labels, array[]::text[]) loop
+    if exists (select 1 from public.overtime_monthly_targets t where t.period_label = v_label and t.employee_id = any (v_ids)) then
+      v_fail := pg_catalog.array_append(v_fail, ('c11 기존 목표 있음 ' || v_label)::text);
+    end if;
+  end loop;
+
+  if array_length(v_fail, 1) > 0 then
+    raise exception '중단(아무것도 바꾸지 않음): %', array_to_string(v_fail, ' / ');
+  end if;
+
+  if not v_apply then
+    raise notice '검사 전부 통과 — v_apply = false라 아무것도 쓰지 않았다';
+    return;
+  end if;
+
+  insert into public.overtime_monthly_targets (employee_id, period_label, target_hours)
+  select i.id, l.label, i.h
+  from unnest(v_ids, v_hours) as i(id, h)
+  cross join unnest(v_labels) as l(label)
+  on conflict (employee_id, period_label) do nothing;
+  get diagnostics v_written = row_count;
+  if v_written <> v_expected * array_length(v_labels, 1) then
+    raise exception '중단(전체 되돌림): 적용 행 수 % ≠ 기대 %', v_written, v_expected * array_length(v_labels, 1);
+  end if;
+
+  -- 적용 후 확인: 기간마다 대상 직원 전원이 입력한 시간 그대로
+  foreach v_label in array v_labels loop
+    select count(*) into v_after
+    from unnest(v_ids, v_hours) as i(id, h)
+    join public.overtime_monthly_targets t on t.employee_id = i.id and t.period_label = v_label and t.target_hours = i.h;
+    if v_after <> v_expected then
+      raise exception '중단(전체 되돌림): % 적용 후 일치 % ≠ %', v_label, v_after, v_expected;
+    end if;
+  end loop;
+  raise notice '적용 완료: %행', v_written;
 end $$;
 
--- 미리보기 / 적용 결과
---   위쪽(검사 행): ID·숫자만. 아래쪽(입력값 행): 화면순번·두 UUID·이름·재직·주소록 연결·기존 목표·입력할 목표 — 이름은 화면 확인용
-select r.seq, r.check_name, r.verdict, r.detail,
-       null::bigint as 화면순번, null::uuid as overtime_employee_id, null::uuid as 주소록_uuid, null::text as 이름_화면확인용,
-       null::boolean as 재직, null::boolean as 주소록_연결, null::numeric as 기존_목표시간, null::numeric as 입력할_목표시간
-from ot_target_result r
+-- 결과 (이름·UUID 없음). 급여기간은 위 DO 블록의 v_labels.
+--   t01: 대상 직원 중 목표 행 수 — v_apply = false면 NONE(0), 적용 후면 OK(대상 인원)
+with scope as (
+  select e.id from public.overtime_employees e join public.engineer_contacts c on c.employee_id = e.id
+  where e.is_active and c.company = '미래사업팀' and c.employment_status = '재직'
+),
+labels as (
+  select l as label
+  from unnest(pg_catalog.string_to_array(pg_catalog.current_setting('ot_target.labels', true), ',')) as l
+)
+select 't01 ' || l.label || ' 대상 직원 목표 행' as check_name,
+       case n.cnt when 0 then 'NONE' when (select count(*) from scope) then 'OK' else 'FAIL' end as verdict,
+       n.cnt::text || ' / ' || (select count(*) from scope) || '명' as detail
+from labels l
+cross join lateral (select count(*) as cnt from public.overtime_monthly_targets t
+                    where t.period_label = l.label and t.employee_id in (select id from scope)) n
 union all
-select 1000 + row_number() over (order by e.sort_order nulls last, e.created_at, i.employee_id), '입력값', 'INFO', '',
-       (select x.n from (select s2.employee_id, row_number() over (order by s2.sort_order, s2.created_at, s2.employee_id) as n from ot_target_scope s2) x
-         where x.employee_id = i.employee_id),
-       i.employee_id, s.contact_id, e.name, e.is_active, s.employee_id is not null,
-       (select t.target_hours from public.overtime_monthly_targets t, ot_target_opts o where t.employee_id = i.employee_id and t.period_label = o.period_label),
-       i.target_hours
-from ot_target_input i
-left join public.overtime_employees e on e.id = i.employee_id
-left join ot_target_scope s on s.employee_id = i.employee_id
+select 't02 ' || l.label || ' 목표시간 분포', 'INFO',
+       coalesce((select string_agg(h || 'h×' || cnt, ', ' order by h)
+                 from (select t.target_hours::text as h, count(*) as cnt from public.overtime_monthly_targets t
+                       where t.period_label = l.label group by t.target_hours) d), '(없음)')
+from labels l
+union all
+select 't03 전체 목표 행(모든 기간)', 'INFO', count(*)::text || '행' from public.overtime_monthly_targets
+union all
+select 't04 월 목표 강제조건 트리거', 'INFO',
+       case when exists (select 1 from pg_catalog.pg_trigger where tgname = 'overtime_work_records_ab_monthly_target')
+            then '있음(activation 적용됨)' else '없음(activation 전)' end
 order by 1;
 
 commit;

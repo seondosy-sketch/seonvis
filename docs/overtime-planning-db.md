@@ -229,7 +229,7 @@ Phase 4 화면은 저장 전에 같은 기준으로 사전검증하고 `현재 �
     조회 실패를 퇴직으로 오판하는 경로가 없다.
   - 재연결: 주소록에서 그 기술인의 `employee_id`를 기존 직원 id로 지정하면 다음 동기화에서 2)가 재활성화한다(관리 화면은 Phase 4 검토).
   - 행 삭제 없음 → 과거 기록·참여·업무 보존.
-- 현재 9명은 전부 연결돼 있고 주소록 값과 같다 → 적용·동기화 시 UPDATE 0건(preflight p08·p09·p10, postflight a14·a15·fp_linked_employees).
+- 현재 9명은 전부 연결돼 있고 주소록 값과 같다(그중 1명은 비활성 — 재직 8명이 월 목표 대상) → 적용·동기화 시 UPDATE 0건(preflight p08·p09·p10, postflight a14·a15·fp_linked_employees).
 - 이름 기반 수동 프로젝트 전환(`lib/overtime/sync.ts`)은 별개 — Phase 4 코드 항목.
 
 ## 프로젝트 동기화 — C안 (최종)
@@ -358,7 +358,8 @@ C가 forward 보정이다. 함수 본문은 A·B와 글자 그대로 같다(`lib
 - 순서·확인·되돌리기 기준: `supabase/prod/overtime_prod_checklist.md`
 - 월 목표 강제조건은 운영에서 `supabase/prod/overtime_monthly_target_activation.sql` 한 트랜잭션으로 켠다
   (원본 `migration_overtime_monthly_target_guard.sql` + `migration_overtime_cap_isolation_guard.sql` 본문을 그대로 묶은 생성물).
-- 월 목표 선입력: `supabase/prod/overtime_monthly_targets_1_list.sql`(ID 목록) → `_2_apply.sql`(미리보기·적용) → `_3_rollback.sql`
+- 월 목표 선입력: `supabase/prod/overtime_monthly_targets_1_list.sql`(ID 목록) → `_2_apply.sql`(검사·적용, 기본 `v_apply = false`, 재직 8명 × 급여기간) → `_3_rollback.sql`(기본 검사만).
+  두 파일은 맨 바깥에서 표에 쓰지 않는다 — 입력값은 DO 블록 안 배열 변수, 결과는 마지막 SELECT(운영 SQL Editor가 맨 바깥 임시표 쓰기를 실행 전 42P01로 막았다)
 - 선입력 확인: `supabase/verify/overtime_monthly_target_precheck.sql`(재직 직원 전원 목표 행, 라벨은 파일 맨 위 [설정]) — FAIL 0일 때만 activation.
   activation 맨 앞 DO 블록도 오늘(Asia/Seoul) 급여기간 라벨로 다시 확인하고, 21일 경계 7일 전(14~20일)이면 다음 급여기간 목표까지 요구한다
   (경계 직전에 켜면 다음 날부터 목표 없는 전원의 수동 입력이 막히므로 일부러 막는다 — 그 기간에는 다음 기간 목표를 먼저 넣는다).

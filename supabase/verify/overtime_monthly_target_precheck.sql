@@ -38,8 +38,9 @@ checks(sort_key, check_name, status, detail) as (
          || case when c.near_boundary then ' (21일 경계 7일 이내 — 다음 기간 목표도 필요)' else '' end
   from cur c
   union all
+  -- <> all (…)은 괄호 안 subquery를 "행 집합"으로 읽어 text <> text[](42883)이 된다 → ::text[]로 배열 하나와 비교
   select 1, 'mt01_required_labels_in_settings',
-         case when not exists (select 1 from required r where r.label <> all ((select labels from opts))) then 'OK' else 'FAIL' end,
+         case when not exists (select 1 from required r where r.label <> all ((select labels from opts)::text[])) then 'OK' else 'FAIL' end,
          'activation이 요구하는 라벨: ' || (select string_agg(r.label, ', ' order by r.label) from required r)
          || ' / [설정]: ' || (select array_to_string(labels, ', ') from opts)
   union all

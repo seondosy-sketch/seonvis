@@ -34,7 +34,7 @@
       valid·ready. STOP이면 2단계(동기화 RPC)를 실행하지 않는다(없으면 `supabase/migration_overtime_source_project.sql` 적용 여부부터 확인)
 - [ ] `overtime_work_records` 행 수 — 2026-10-03 기준 0건. **1단계 직전과 6단계 직전에 다시** 센다
 - [ ] 주 12시간 초과 주(weeks_over_12h) 0건 — 5단계 직전 재확인
-- [ ] 재직 직원 수(9명 예상)와 주소록 연결: `engineer_contacts.employee_id` 중복 0
+- [ ] 재직 직원 수(8명 예상 — 주소록 연결 9명 중 1명 비활성)와 주소록 연결: `engineer_contacts.employee_id` 중복 0
 - [ ] **직원 분리 위험**: preflight `p10_unlinked_active_employees`(주소록 미연결 재직 직원)와 `p11_unlinked_team_contacts`
       (미연결 미래사업팀 주소록)가 둘 다 0보다 크면 둘 다 STOP. 이 상태에서는 A·C와 `sync_team_employees`가
       `OVERTIME_EMPLOYEE_LINK_REQUIRED`로 아무것도 바꾸지 않고 멈춘다(자동 이름 매칭 없음).
@@ -53,7 +53,7 @@
 |---|---|---|---|
 | 1 A | `overtime_planning_postflight_a.sql` 전부 OK(a16~a21 직원 UUID 보존 포함), 구버전 화면 입력·출력 정상. 첫 동기화(화면 진입) 뒤 postflight_a 한 번 더(B 적용 전까지만 — B 이후에는 `overtime_planning_current_postflight.sql`) | postflight FAIL 또는 구버전 입력 오류 | `overtime_planning_rollback_a.sql` (새 표가 비어 있을 때만) |
 | 2 RPC | 함수 존재·EXECUTE는 service_role만, 의존 인덱스 유지(7단계 뒤 `overtime_planning_current_postflight.sql`의 `cur_s01_sync_source_index` OK) | 권한 FAIL, `OVERTIME_SYNC_INDEX_*` 오류 | `overtime_project_sync_rpc_rollback.sql` (화면을 구버전으로 되돌린 뒤) |
-| 3 목표 | `_2_apply.sql` 결과 전부 OK, 재직 9명 = 목표 9행, `overtime_monthly_target_precheck.sql` FAIL 0 | 값 오입력 | `_3_rollback.sql` (6단계 전만) |
+| 3 목표 | `_2_apply.sql`(`v_expected` = 8) 검사 실행 오류 없음 → 적용 후 t01이 급여기간마다 OK(재직 8명 = 목표 8행), `overtime_monthly_target_precheck.sql` FAIL 0 | 값 오입력 | `_3_rollback.sql` (6단계 전만) |
 | 4 화면 | 아래 smoke test | 화면 오류·데이터 이상 | 이전 배포로 되돌림(DB는 A·RPC 상태에서 구버전과 호환) |
 | 5 B | `overtime_planning_postflight_b.sql` 전부 OK | FAIL, 수동 입력 오차단 | `overtime_planning_rollback_b.sql` (자동배정 데이터 없고 월 목표 강제조건이 없을 때만) |
 | 6 월 목표 | 직전 `overtime_monthly_target_precheck.sql` FAIL 0 → 적용 → `overtime_monthly_target_postflight.sql` 전부 OK(isolation_guard 포함) | 목표 입력된 직원이 막힘 | `overtime_cap_isolation_guard_rollback.sql` → `overtime_monthly_target_rollback.sql` |
