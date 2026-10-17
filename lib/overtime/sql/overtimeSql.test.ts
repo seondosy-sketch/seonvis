@@ -7,6 +7,8 @@
  * - 격리수준 되돌리기는 월 목표 함수를 있을 때만 다시 만든다
  * - 직원 분리 방지: preflight p10·p11 동시 STOP, sync_team_employees가 데이터 변경 전에 OVERTIME_EMPLOYEE_LINK_REQUIRED
  * - 새 dev SQL은 개발 DB 안전장치를 갖고, 새 verify·dev SQL은 check_name / status / detail로 결과를 낸다
+ * - 운영 SQL은 맨 바깥에서 표에 쓰지 않고(SQL Editor 42P01), "<> all ((select …))" 형태(42883)가 없다
+ *   (월 목표 선입력 SQL의 실제 실행은 monthlyTargetSql.pglite.test.ts)
  */
 import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
@@ -793,5 +795,88 @@ describe('읽기 전용 확인 SQL에 SQL처럼 보이는 "… into 이름" 문�
     const code = read(f).replace(/--[^\n]*/g, '')
     expect(code).not.toMatch(/\binto\b/i)
     expect(code).toContain("('select * in' || 'to v_fresh')")
+  })
+})
+
+describe('운영 SQL Editor에서 그대로 실행되는 형태(월 목표 선입력·확인)', () => {
+  // SQL Editor는 실행 전에 맨 바깥 문장의 표를 찾는다 — 맨 바깥 임시표 insert는 relation does not exist(42P01),
+  // 문자열 안의 'insert into X.표'도 schema X does not exist로 멈췄다. 그래서 운영 파일의 쓰기는 DO 블록(달러 인용) 안에만 둔다.
+  /** 주석·문자열·따옴표 식별자·달러 인용 본문을 공백으로 지운 맨 바깥 SQL */
+  function topLevelCode(src: string): string {
+    let out = ''
+    let i = 0
+    while (i < src.length) {
+      const ch = src[i]
+      let j = -1
+      if (ch === '-' && src[i + 1] === '-') { j = src.indexOf('\n', i); if (j < 0) j = src.length }
+      else if (ch === '/' && src[i + 1] === '*') { j = src.indexOf('*/', i + 2); j = j < 0 ? src.length : j + 2 }
+      else if (ch === "'") { j = i + 1; while (j < src.length && !(src[j] === "'" && src[j + 1] !== "'")) j += src[j] === "'" ? 2 : 1; j++ }
+      else if (ch === '"') { j = src.indexOf('"', i + 1); j = j < 0 ? src.length : j + 1 }
+      else if (ch === '$' && !/[A-Za-z0-9_]/.test(src[i - 1] ?? '')) {
+        const tag = /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.exec(src.slice(i))?.[0]
+        if (tag) { j = src.indexOf(tag, i + tag.length); j = j < 0 ? src.length : j + tag.length }
+      }
+      if (j > i) { out += ' '; i = j; continue }
+      out += ch
+      i++
+    }
+    return out
+  }
+
+  const PROD_FILES = readdirSync(path.join(ROOT, 'supabase/prod')).filter(n => n.endsWith('.sql')).map(n => `supabase/prod/${n}`)
+  const TARGET_FILES = ['supabase/prod/overtime_monthly_targets_2_apply.sql', 'supabase/prod/overtime_monthly_targets_3_rollback.sql']
+
+  it('검사기 자체: 맨 바깥 쓰기는 남기고, DO 본문·문자열·주석 안 쓰기는 지운다', () => {
+    const t = topLevelCode("begin;\ninsert into ot_x values (1);\ndo $$ begin insert into public.t values (1); end $$;\nselect 'insert into a.b' -- delete from c\n;")
+    expect(t).toMatch(/insert into ot_x/)
+    expect(t).not.toMatch(/public\.t|a\.b|delete/)
+  })
+
+  it.each(PROD_FILES)('%s: 맨 바깥(달러 인용 밖)에 insert/update/delete/truncate가 없다', f => {
+    expect(topLevelCode(read(f))).not.toMatch(/\b(insert\s+into|update\s+[a-z_."]+\s+set|delete\s+from|truncate)\b/i)
+  })
+
+  it.each(TARGET_FILES)('%s: 임시표 없이 begin → DO 블록 하나 → 결과 SELECT → commit', f => {
+    const src = read(f)
+    expect(src.replace(/--[^\n]*/g, '')).not.toMatch(/\b(create\s+(temp|temporary)\s+(table|view)|ot_target_(opts|input|rollback|result|scope))\b/i)
+    const stmts = topLevelCode(src).split(';').map(s => s.replace(/\s+/g, ' ').trim()).filter(Boolean)
+    expect(stmts.map(s => s.split(' ')[0].toLowerCase())).toEqual(['begin', 'do', 'with', 'commit'])
+    expect(src).toMatch(/v_apply\s+boolean\s+:= false;/)   // 기본은 검사만
+    // 실패 사유는 array_append로 — text[] || '문자열'은 오른쪽을 배열 리터럴로 읽는다
+    expect(src).not.toMatch(/v_fail\s*:=\s*v_fail\s*\|\|/)
+  })
+
+  it('적용 파일: 대상 8명 기준, 검사 c01~c11·c07b, on conflict do nothing, 적용 후 행 수·값 재확인, 결과 t01~t04', () => {
+    const src = read('supabase/prod/overtime_monthly_targets_2_apply.sql')
+    expect(src).toMatch(/v_expected int\s+:= 8;/)
+    for (const c of ['c01', 'c02', 'c03', 'c04', 'c05', 'c06', 'c07', 'c07b', 'c08', 'c09', 'c10', 'c11']) expect(src).toContain(`'${c} `)
+    expect(src).toContain('on conflict (employee_id, period_label) do nothing')
+    expectOrder(src, ['get diagnostics v_written = row_count', '중단(전체 되돌림): 적용 행 수', '중단(전체 되돌림): % 적용 후 일치'])
+    for (const t of ['t01', 't02', 't03', 't04']) expect(src).toContain(`'${t} `)
+  })
+
+  it('맨 바깥 결과 SELECT가 이름·UUID 열을 내지 않는다', () => {
+    for (const f of TARGET_FILES) {
+      const select = topLevelCode(read(f)).split(';').find(s => /^\s*with\b/i.test(s)) ?? ''
+      expect(select, f).not.toMatch(/\.name\b|contact_id|employee_id\s+as|\bi\.id\b/i)
+    }
+  })
+
+  it('verify·prod SQL에 "<> all ((select …))" 형태가 없다(괄호 안 subquery는 행 집합 — text <> text[] 42883)', () => {
+    const files = [
+      ...PROD_FILES,
+      ...readdirSync(path.join(ROOT, 'supabase/verify')).filter(n => n.endsWith('.sql')).map(n => `supabase/verify/${n}`),
+    ]
+    const re = /(<>|!=|=|<|>)\s*(all|any|some)\s*\(\s*\(\s*select\b[^()]*\)\s*\)/i
+    const bad = files.filter(f => re.test(read(f).replace(/--[^\n]*/g, '')))
+    expect(bad).toEqual([])
+    expect(read('supabase/verify/overtime_monthly_target_precheck.sql')).toContain('r.label <> all ((select labels from opts)::text[])')
+  })
+
+  it('문서·체크리스트는 재직 8명 기준(주소록 연결 9명 중 1명 비활성)', () => {
+    const cl = read('supabase/prod/overtime_prod_checklist.md')
+    expect(cl).not.toMatch(/재직 9명|9명 예상|목표 9행/)
+    expect(cl).toContain('재직 8명 = 목표 8행')
+    expect(read('docs/overtime-planning-db.md')).toContain('그중 1명은 비활성 — 재직 8명이 월 목표 대상')
   })
 })
