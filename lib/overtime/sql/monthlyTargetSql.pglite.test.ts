@@ -7,6 +7,7 @@
  *
  * 표는 최소 구성: overtime_monthly_targets는 migration A의 create table을 그대로 쓰고(auth.jwt() 기본값만 ''로),
  * overtime_employees·engineer_contacts는 파일이 읽는 열만 둔다. 직원은 주소록 연결 9명 중 1명 비활성(운영과 같은 모양).
+ * 비활성 직원의 주소록은 일부러 '미래사업팀·재직'으로 둔다 — 그래야 대상 조건의 is_active가 실제로 시험된다(주소록만 보면 9명).
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -74,10 +75,9 @@ beforeEach(async () => {
   `)
   const all = [...ACTIVE, INACTIVE]
   for (const [i, id] of all.entries()) {
-    const active = id !== INACTIVE
-    await db.query('insert into public.overtime_employees (id, name, is_active, sort_order) values ($1, $2, $3, $4)', [id, `가짜이름${i + 1}`, active, i])
+    await db.query('insert into public.overtime_employees (id, name, is_active, sort_order) values ($1, $2, $3, $4)', [id, `가짜이름${i + 1}`, id !== INACTIVE, i])
     await db.query('insert into public.engineer_contacts (employee_id, company, employment_status) values ($1, $2, $3)',
-      [id, '미래사업팀', active ? '재직' : '퇴사'])
+      [id, '미래사업팀', '재직'])
   }
 })
 afterEach(async () => { await db.close() })
@@ -130,6 +130,20 @@ describe('월 목표 2단계 적용(_2_apply.sql)', () => {
   it('대상 인원이 v_expected와 다르면 c03', async () => {
     await db.query("update public.engineer_contacts set employment_status = '퇴사' where employee_id = $1", [ACTIVE[7]])
     await expect(run(withApply(withIds(APPLY, ACTIVE)))).rejects.toThrow(/c03 대상 인원 ≠ 재직인원/)
+    expect(await targetCount()).toBe(0)
+  })
+
+  it('on conflict do nothing 등으로 한 행이라도 빠지면 적용 행 수 검사가 전체를 되돌린다', async () => {
+    // 검사(c11)를 지난 뒤 끼어든 행을 흉내 낸다 — 한 행만 조용히 건너뛰게 하는 BEFORE INSERT 트리거
+    await db.exec(`
+      create function public.f_skip_one() returns trigger language plpgsql as $$
+      begin
+        if new.employee_id = '${ACTIVE[0]}' and new.period_label = '2026-11' then return null; end if;
+        return new;
+      end $$;
+      create trigger t_skip_one before insert on public.overtime_monthly_targets for each row execute function public.f_skip_one();
+    `)
+    await expect(run(withApply(withIds(APPLY, ACTIVE)))).rejects.toThrow(/적용 행 수 15 ≠ 기대 16/)
     expect(await targetCount()).toBe(0)
   })
 })
