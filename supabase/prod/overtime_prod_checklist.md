@@ -53,7 +53,7 @@
 |---|---|---|---|
 | 1 A | `overtime_planning_postflight_a.sql` 전부 OK(a16~a21 직원 UUID 보존 포함), 구버전 화면 입력·출력 정상. 첫 동기화(화면 진입) 뒤 postflight_a 한 번 더(B 적용 전까지만 — B 이후에는 `overtime_planning_current_postflight.sql`) | postflight FAIL 또는 구버전 입력 오류 | `overtime_planning_rollback_a.sql` (새 표가 비어 있을 때만) |
 | 2 RPC | 함수 존재·EXECUTE는 service_role만, 의존 인덱스 유지(7단계 뒤 `overtime_planning_current_postflight.sql`의 `cur_s01_sync_source_index` OK) | 권한 FAIL, `OVERTIME_SYNC_INDEX_*` 오류 | `overtime_project_sync_rpc_rollback.sql` (화면을 구버전으로 되돌린 뒤) |
-| 3 목표 | `_2_apply.sql`(`v_expected` = 8) 검사 실행 오류 없음 → 적용 후 t01이 급여기간마다 OK(재직 8명 = 목표 8행), `overtime_monthly_target_precheck.sql` FAIL 0 | 값 오입력 | `_3_rollback.sql` (6단계 전만) |
+| 3 목표 | `_2_apply.sql`(`v_expected` = 8) 파일 전체 실행(결과 SELECT만 실행 금지 — t00 FAIL) 검사 오류 없음·t00 OK → 적용 후 t00 OK, t01이 급여기간마다 OK(재직 8명 = 목표 8행), `overtime_monthly_target_precheck.sql` FAIL 0 | 값 오입력 | `_3_rollback.sql` (6단계 전만, 지정 8명 × 급여기간 = 정확히 16행일 때만 삭제 — r00·r10·r11·r20 OK) |
 | 4 화면 | 아래 smoke test | 화면 오류·데이터 이상 | 이전 배포로 되돌림(DB는 A·RPC 상태에서 구버전과 호환) |
 | 5 B | `overtime_planning_postflight_b.sql` 전부 OK | FAIL, 수동 입력 오차단 | `overtime_planning_rollback_b.sql` (자동배정 데이터 없고 월 목표 강제조건이 없을 때만) |
 | 6 월 목표 | 직전 `overtime_monthly_target_precheck.sql` FAIL 0 → 적용 → `overtime_monthly_target_postflight.sql` 전부 OK(isolation_guard 포함) | 목표 입력된 직원이 막힘 | `overtime_cap_isolation_guard_rollback.sql` → `overtime_monthly_target_rollback.sql` |

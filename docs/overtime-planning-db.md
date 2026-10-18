@@ -358,7 +358,9 @@ C가 forward 보정이다. 함수 본문은 A·B와 글자 그대로 같다(`lib
 - 순서·확인·되돌리기 기준: `supabase/prod/overtime_prod_checklist.md`
 - 월 목표 강제조건은 운영에서 `supabase/prod/overtime_monthly_target_activation.sql` 한 트랜잭션으로 켠다
   (원본 `migration_overtime_monthly_target_guard.sql` + `migration_overtime_cap_isolation_guard.sql` 본문을 그대로 묶은 생성물).
-- 월 목표 선입력: `supabase/prod/overtime_monthly_targets_1_list.sql`(ID 목록) → `_2_apply.sql`(검사·적용, 기본 `v_apply = false`, 재직 8명 × 급여기간) → `_3_rollback.sql`(기본 검사만).
+- 월 목표 선입력: `supabase/prod/overtime_monthly_targets_1_list.sql`(ID 목록) → `_2_apply.sql`(검사·적용, 기본 `v_apply = false`, 재직 8명 × 급여기간) → `_3_rollback.sql`(기본 검사만, 지정 ID × 급여기간 = `v_expected` × 기간 수(16)행이 정확히 있을 때만 지우고 삭제 행·잔여·범위 밖 행을 다시 확인).
+  rollback은 지금의 재직 미래사업팀 여부를 묻지 않는다(그 사이 비활성·주소록 변경돼도 2단계가 넣은 행을 되돌릴 수 있게) — ID 존재와 정확한 행 수로 막는다.
+  두 파일 결과표 맨 앞 t00·r00은 같은 트랜잭션의 DO 블록 결과일 때만 OK — 결과 SELECT만 골라 실행하면 FAIL.
   두 파일은 맨 바깥에서 표에 쓰지 않는다 — 입력값은 DO 블록 안 배열 변수, 결과는 마지막 SELECT(운영 SQL Editor가 맨 바깥 임시표 쓰기를 실행 전 42P01로 막았다)
 - 선입력 확인: `supabase/verify/overtime_monthly_target_precheck.sql`(재직 직원 전원 목표 행, 라벨은 파일 맨 위 [설정]) — FAIL 0일 때만 activation.
   activation 맨 앞 DO 블록도 오늘(Asia/Seoul) 급여기간 라벨로 다시 확인하고, 21일 경계 7일 전(14~20일)이면 다음 급여기간 목표까지 요구한다

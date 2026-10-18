@@ -852,7 +852,66 @@ describe('운영 SQL Editor에서 그대로 실행되는 형태(월 목표 선�
     for (const c of ['c01', 'c02', 'c03', 'c04', 'c05', 'c06', 'c07', 'c07b', 'c08', 'c09', 'c10', 'c11']) expect(src).toContain(`'${c} `)
     expect(src).toContain('on conflict (employee_id, period_label) do nothing')
     expectOrder(src, ['get diagnostics v_written = row_count', '중단(전체 되돌림): 적용 행 수', '중단(전체 되돌림): % 적용 후 일치'])
-    for (const t of ['t01', 't02', 't03', 't04']) expect(src).toContain(`'${t} `)
+    for (const t of ['t00', 't01', 't02', 't03', 't04']) expect(src).toContain(`'${t} `)
+  })
+
+  // 결과 SELECT만 단독 실행했을 때의 실제 결과(t00·r00 FAIL)는 monthlyTargetSql.pglite.test.ts가 실행으로 확인한다
+  it.each([
+    ['supabase/prod/overtime_monthly_targets_2_apply.sql', 'ot_apply', 't00', ['checked', 'applied']],
+    ['supabase/prod/overtime_monthly_targets_3_rollback.sql', 'ot_rollback', 'r00', ['checked', 'deleted']],
+  ])('%s: 결과 SELECT 맨 앞 게이트는 이 트랜잭션의 DO 블록 결과일 때만 OK(NULL·빈 값·다른 트랜잭션은 FAIL)', (f, prefix, gate, states) => {
+    const src = read(f)
+    // DO 본문: 모든 검사 뒤 마지막에 transaction-local(true)로 넘긴다
+    const body = src.slice(src.indexOf('do $$'), src.indexOf('end $$;'))
+    expect(body).toContain(`set_config('${prefix}.state', case when v_apply then '${states[1]}' else '${states[0]}' end, true)`)
+    expect(body).toContain(`set_config('${prefix}.xact', pg_catalog.pg_current_xact_id()::text, true)`)
+    expect(body).not.toMatch(/set_config\([^)]*,\s*false\)/)
+    expectOrder(body, ['raise exception \'중단(아무것도', `set_config('${prefix}.state'`])
+    // 결과 SELECT: current_setting(…, true) + 같은 트랜잭션 번호 + 빈 값 거부, 기본은 FAIL
+    expect(src).toContain(`coalesce(pg_catalog.current_setting('${prefix}.xact', true), '')`)
+    expect(src).toContain("= coalesce(pg_catalog.pg_current_xact_id_if_assigned()::text, '-') as same_xact")
+    expect(src).toMatch(new RegExp(`select coalesce\\(g\\.state in \\('${states[0]}', '${states[1]}'\\) and g\\.same_xact[\\s\\S]*?coalesce\\(g\\.labels, ''\\) <> ''[\\s\\S]*?, false\\) as ok`))
+    expect(src).toContain(`select '${gate} 파일 전체 실행 확인' as check_name,`)
+    expect(src).toContain("case when r.ok then 'OK' else 'FAIL' end as verdict")
+    expect(src).toContain('결과 SELECT만 단독 실행한 상태다(이 트랜잭션에 DO 블록 결과 없음) — 파일 전체를 한 번에 실행한다')
+    // 기간별 행은 게이트를 통과했을 때만 만든다
+    expect(src).toMatch(/labels as \(\s*select l as label\s+from run r cross join unnest\(pg_catalog\.string_to_array\(r\.labels, ','\)\) as l\s+where r\.ok/)
+    // 머리말 경고
+    expect(src.split('\n').slice(0, 25).join('\n')).toContain('언제나 파일 전체를 한 번에 실행한다')
+  })
+
+  it('되돌리기 파일: v_expected 8·자리표시 8줄·검사만 기본, r01~r09 검사, 지정 범위(ID × 급여기간)만 삭제', () => {
+    const src = read('supabase/prod/overtime_monthly_targets_3_rollback.sql')
+    expect(src).toMatch(/v_expected int\s+:= 8;/)
+    expect(src).toMatch(/v_apply\s+boolean := false;/)
+    expect(src).toContain("array['2026-10', '2026-11']")
+    const ids = /v_ids uuid\[\] := array\[\n([\s\S]*?)\]::uuid\[\];/.exec(src)?.[1] ?? ''
+    expect(ids.match(/'0{8}-0{4}-0{4}-0{4}-0{12}'/g)).toHaveLength(8)
+    for (const c of ['r01 급여기간 없음', 'r01 급여기간 형식', 'r01 급여기간 중복', "'r02 ID 수 '", 'r02 빈칸', 'r03 자리표시 ID 남음',
+      'r04 중복 ID', 'r05 overtime_employees에 없는 ID', 'r06 지정 범위(ID × 급여기간) 목표 행', 'r07 실제 삭제 행', 'r08 삭제 후 지정 범위에 남은 행', 'r09 지정 범위 밖 행']) {
+      expect(src).toContain(c)
+    }
+    expect(src).toContain('coalesce(array_length(v_ids, 1), 0) <> v_expected')
+    expect(src).toContain('v_want := v_expected * array_length(v_labels, 1);')
+    // 순서: 검사 → 삭제 전 행 수(r06) → DELETE → row_count(r07) → 잔여(r08) → 범위 밖 보존(r09)
+    expectOrder(src, ['r05 overtime_employees', 'if v_found <> v_want then', 'delete from public.overtime_monthly_targets t',
+      'get diagnostics v_deleted = row_count', 'if v_deleted <> v_want then', 'if v_left <> 0 then', 'if v_outside_after <> v_outside then'])
+    // DELETE는 하나뿐이고, ID와 급여기간 두 조건을 모두 건다
+    const deletes = [...src.matchAll(/delete from public\.overtime_monthly_targets t\s+where ([^;]*);/g)].map(m => m[1].replace(/\s+/g, ' '))
+    expect(deletes).toEqual(['t.employee_id = any (v_ids) and t.period_label = any (v_labels)'])
+    // 지금의 재직 미래사업팀 여부로 막지 않는다(근거는 머리말) — 대신 존재(r05)·정확한 행 수(r06)
+    expect(src).not.toMatch(/engineer_contacts|is_active/)
+    expect(src).toContain('지금의 "재직 미래사업팀" 여부는 묻지 않는다')
+    // 결과 행 이름이 "이번 rollback 대상 ID"와 "전체 직원(참고)"을 구분한다
+    expect(src).toContain("' 이번 rollback 대상 ID의 남은 목표 행'")
+    expect(src).toContain("' 전체 직원의 목표 행(참고)', 'INFO'")
+  })
+
+  it('precheck 머리말: mt20 UUID를 밖으로 옮기지 않고 기간별 누락 인원 수만 보고', () => {
+    const head = read('supabase/verify/overtime_monthly_target_precheck.sql').split('\n').slice(0, 12).join('\n')
+    expect(head).toContain('mt20은 목표가 없는 직원의 UUID를 그대로 낸다')
+    expect(head).toContain('대화창·문서·로그·이슈에 붙이거나 내보내지(Export·CSV) 않는다')
+    expect(head).toContain('기간별 누락 인원 수(mt10)만 쓴다')
   })
 
   it('맨 바깥 결과 SELECT가 이름·UUID 열을 내지 않는다', () => {

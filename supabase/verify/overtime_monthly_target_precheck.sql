@@ -6,6 +6,8 @@
 --   mt01이 "오늘 기준으로 activation이 요구하는 라벨"을 계산해 [설정]에 빠진 라벨이 있으면 FAIL로 알려 준다.
 -- 대상: overtime_employees.is_active = true 전원(월 목표 트리거는 직원 구분 없이 모든 기록에 걸린다).
 -- 결과: check_name / status(OK·FAIL·INFO) / detail. 이름은 내지 않는다(직원 UUID만) — 이름 확인은 _1_list.sql 화면에서.
+-- ⚠ mt20은 목표가 없는 직원의 UUID를 그대로 낸다. 이름은 없지만 UUID도 직원 식별자다 — 운영 결과의 mt20 원문을
+--   대화창·문서·로그·이슈에 붙이거나 내보내지(Export·CSV) 않는다. 보고에는 기간별 누락 인원 수(mt10)만 쓴다.
 
 with
 opts as (select array['2026-10', '2026-11']::text[] as labels),   -- [설정] 확인할 급여기간 라벨
