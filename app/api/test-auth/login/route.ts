@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createSupabaseServerClient } from '@/lib/supabase-server'
 import { createSupabaseAdminClient } from '@/lib/supabase-admin'
 import { resolveTestAuth } from '@/lib/testAuth'
+import { resolveMenuAccess } from '@/lib/auth/accessRules'
 
 /**
  * 개발환경 전용 로그인 — Google OAuth 화면만 건너뛴다(권한은 건너뛰지 않는다).
@@ -36,12 +37,8 @@ async function handle(request: Request) {
     return NextResponse.json({ ok: false, reason: decision.reason }, { status: 403 })
   }
 
-  // 승인된 사용자만 — allowed_users(또는 ADMIN_EMAILS)에 없는 이메일로는 세션을 만들지 않는다.
+  // 승인된 사용자만 — allowed_users에 없는 이메일로는 세션을 만들지 않는다(환경변수 ADMIN_EMAILS는 판정에 쓰지 않는다).
   // dashboard layout도 같은 검사를 하지만, 여기서 먼저 막아 쓸모없는 세션이 남지 않게 한다.
-  const adminEmails = (process.env.ADMIN_EMAILS ?? '')
-    .split(',').map(e => e.trim().toLowerCase()).filter(Boolean)
-  const isAdmin = adminEmails.includes(decision.email)
-
   const admin = createSupabaseAdminClient()
   const { data: allowed } = await admin
     .from('allowed_users')
@@ -49,7 +46,8 @@ async function handle(request: Request) {
     .eq('email', decision.email)
     .maybeSingle()
 
-  if (!allowed && !isAdmin) {
+  const access = resolveMenuAccess(decision.email, allowed)
+  if (!access.approved) {
     return NextResponse.json({ ok: false, reason: 'not-in-allowed-users' }, { status: 403 })
   }
 
@@ -68,8 +66,8 @@ async function handle(request: Request) {
     ok: true,
     email: decision.email,
     hasSession: true,
-    isAdmin: isAdmin || allowed?.is_admin === true,
-    menuPermissions: allowed?.menu_permissions ?? {},
+    isAdmin: access.isAdmin,   // DB allowed_users.is_admin
+    menuPermissions: allowed?.menu_permissions ?? {},   // 저장값 그대로(진단용 표시)
   })
 }
 

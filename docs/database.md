@@ -226,7 +226,7 @@ result_score 또는 evaluation 비어있으면 → "진행중"
 신청자가 적은 `name`/`reason`이 `"이름 — 사유"` 형태로 초기값이 되고, 이미 메모가 있으면 덮어쓰지
 않는다(`app/api/admin/access-requests/route.ts`).
 
-**주의**: 관리자(`ADMIN_EMAILS`)는 이 테이블에 없어도 접근 가능하며 항상 전체 쓰기 권한.
+**주의**: 관리자는 이 테이블의 `is_admin = true` 행이다(행이 있어야 함, 전체 쓰기 권한). 환경변수 `ADMIN_EMAILS`는 2026-10부터 관리자 권한을 주지 않는다 — 운영 적용 전 `supabase/verify/admin_flag_preflight.sql`로 관리자 행을 확인한다.
 
 ---
 
@@ -398,7 +398,7 @@ result_score 또는 evaluation 비어있으면 → "진행중"
 - `attendance_closure_snapshot_rows(id, closure_id FK CASCADE, project_id, project_name_snapshot, participant_id, engineer_id, name_snapshot, role_snapshot, specialty_snapshot, is_director_snapshot, sort_order, attendance_dates date[], present_count, note_snapshot)` — 마감 시점 값을 통째로 얼려 Project List가 나중에 바뀌어도 과거 출력물이 재현되게 한다. UNIQUE(closure_id, participant_id) — `closure_id`가 마감 "버전"의 id를 가리키므로 재마감으로 새 버전이 생겨도 이전 버전의 스냅샷 행은 그대로 남는다. CHECK(present_count = cardinality(attendance_dates)) + 중복 날짜 방지 트리거로 배열 무결성을 DB 레벨로도 강제한다("기간 내 날짜인지"는 회계기간 규칙이 JS에만 있어 SQL로 재검증하지 않고 생성 함수(`lib/attendance/snapshotBuilder.ts`)가 예외를 던져 보장한다).
 - `project_change_history(id, project_id FK→projects RESTRICT, change_type(director_change|participant_change|cancelled|reannounced|amended|announce_date_change|interview_date_change|field_change|other), change_date, before_value, after_value, memo, created_by, created_at)` — 재공고/변경공고/공고취소 여부의 공식 원본(사용자 확정). 월별 화면·출력의 "비고"는 이 테이블을 기간별로 조회해 조립한다(`lib/attendance/changeHistoryFormat.ts`), 별도 비고 테이블을 두지 않는다.
 - `attendance_audit_log(id, action_type(closure_reopen|past_record_edit|out_of_period_check|other), table_name, record_id, actor, reason, before_data jsonb, after_data jsonb, created_at)` — 마감취소·과거기록수정·기간외 입력 전용 범용 감사 로그.
-- `allowed_users.can_close_attendance`(boolean, default false) — 월 마감/마감취소 전용 권한(사용자 확정 #6). 기존 `menu_permissions`(none/read/write)와 별개이며, `ADMIN_EMAILS` 관리자는 기존 관례대로 이 컬럼과 무관하게 항상 가능.
+- `allowed_users.can_close_attendance`(boolean, default false) — 월 마감/마감취소 전용 권한(사용자 확정 #6). 기존 `menu_permissions`(none/read/write)와 별개이며, 관리자(`allowed_users.is_admin = true`)는 이 컬럼과 무관하게 항상 가능(`ADMIN_EMAILS`는 인가에 쓰지 않음).
 
 **마이그레이션**: `supabase/migration_attendance.sql`. 순수 계산 로직(기간 계산·체크기간 검증·마감 전 검증·비고 조립)은 `lib/attendance/*.ts` + `lib/attendance/*.test.ts`(Vitest) 참고 — 이 코드베이스 관례상 쿼리 레이어(`queries.ts`)를 두지 않으므로 실제 Supabase 호출은 Phase 2 이후 화면 컴포넌트 안에 직접 작성한다.
 

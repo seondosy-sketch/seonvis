@@ -49,9 +49,10 @@ lib/
 app/(dashboard)/layout.tsx  [Server Component]
     → createSupabaseServerClient()로 세션 확인
     → 없으면 /login 리다이렉트
-    → 있으면 ADMIN_EMAILS 확인
-    → 일반 사용자: allowed_users 테이블 조회 (admin client로 RLS 우회)
+    → allowed_users 행 조회 (admin client로 RLS 우회, 매 요청)
     → 없으면 /unauthorized
+    → is_admin = true면 관리자(전체 write), 아니면 menu_permissions
+      (환경변수 ADMIN_EMAILS는 2026-10부터 인가에 쓰지 않는다 — docs/menu-access-control.md)
     → 있으면 SidebarContainer 렌더 → children
 ```
 

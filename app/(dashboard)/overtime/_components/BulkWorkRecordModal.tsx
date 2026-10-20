@@ -5,6 +5,8 @@ import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import { Employee, EmployeeTask, Project } from '@/lib/overtime/types'
 import { PayPeriodDay } from '@/lib/overtime/summary'
 import { calculateRecognizedHours, TIME_TYPE_PRESETS, TimeType } from '@/lib/overtime/time'
+import { precheckManualSave } from '@/lib/overtime/monthlyCap'
+import { friendlyOvertimeError } from '@/lib/overtime/planning/errors'
 
 const CUSTOM_TASK = '__custom__'
 
@@ -87,6 +89,9 @@ export default function BulkWorkRecordModal({
 
     setSaving(true)
     setError(null)
+    // 월 목표·주 12시간 사전검증 — 선택한 날짜들을 급여기간별·주별로 합쳐 DB 트리거와 같은 규칙으로 본다 (신규 입력이라 자동확정 잠금 해당 없음)
+    const capError = await precheckManualSave(supabase, [...selectedDates].map(work_date => ({ employee_id: employeeId, work_date, hours: payloadTimes.hours })))
+    if (capError) { setSaving(false); setError(capError); return }
     const rows = [...selectedDates].map(work_date => ({
       employee_id: employeeId,
       project_id: projectId,
@@ -98,7 +103,7 @@ export default function BulkWorkRecordModal({
     const { error: saveError } = await supabase.from('overtime_work_records').insert(rows)
     setSaving(false)
 
-    if (saveError) { setError(`저장 실패: ${saveError.message}`); return }
+    if (saveError) { setError(friendlyOvertimeError(saveError.message)); return }
     onSaved()
     onClose()
   }

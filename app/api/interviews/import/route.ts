@@ -14,9 +14,7 @@
  */
 import { NextResponse } from 'next/server'
 import { parse } from 'kordoc'
-import { createSupabaseAdminClient } from '@/lib/supabase-admin'
-import { createSupabaseServerClient } from '@/lib/supabase-server'
-import { permissionFor } from '@/lib/menuConfig'
+import { canUseMenu } from '@/lib/auth/menuAccess'
 import {
   buildReviewDraft,
   countImportedQuestions,
@@ -32,20 +30,9 @@ const MAX_BYTES = 20 * 1024 * 1024
 const ALLOWED_EXTENSIONS = ['.hwp', '.hwpx'] as const
 
 async function assertInterviewWriteAccess(): Promise<boolean> {
-  const supabase = await createSupabaseServerClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user?.email) return false
-
-  const admin = createSupabaseAdminClient()
-  const { data: row } = await admin
-    .from('allowed_users')
-    .select('is_admin, menu_permissions')
-    .eq('email', user.email)
-    .single()
-  if (!row) return false
-  if (row.is_admin) return true
-
-  return permissionFor(row.menu_permissions, 'interview_db') === 'write'
+  // 회사 문서를 서버에서 여는 경로라 면접 DB write만 허용
+  // 관리자(DB allowed_users.is_admin)는 전체 허용, 미승인·비로그인은 거부 — 화면(requireMenu)과 같은 판정(lib/auth/menuAccess.ts)
+  return canUseMenu('interview_db', 'write')
 }
 
 export async function POST(request: Request) {

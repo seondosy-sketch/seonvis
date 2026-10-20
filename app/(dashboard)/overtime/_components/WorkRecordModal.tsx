@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import { DailySummary, Project, WorkRecord } from '@/lib/overtime/types'
 import WorkRecordForm from './WorkRecordForm'
+import { friendlyOvertimeError } from '@/lib/overtime/planning/errors'
 
 /**
  * "YYYY-MM-DD" 문자열을 로컬 타임존으로 직접 파싱한다.
@@ -89,7 +90,7 @@ export default function WorkRecordModal({
     setDeleteError(null)
     const { error } = await supabase.from('overtime_work_records').delete().eq('id', record.id)
     setDeletingId(null)
-    if (error) { setDeleteError(`삭제 실패: ${error.message}`); return }
+    if (error) { setDeleteError(friendlyOvertimeError(error.message)); return }
     onSaved()
   }
 
@@ -124,10 +125,15 @@ export default function WorkRecordModal({
                     <div style={{ fontSize: 12, color: '#555' }}>{record.start_time}~{record.end_time}</div>
                     {record.note && <div style={{ fontSize: 11, color: '#999', marginTop: 4 }}>{record.note}</div>}
                   </div>
-                  <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-                    <button onClick={() => openEditForm(record)} style={editBtn}>수정</button>
-                    <button onClick={() => handleDelete(record)} disabled={deletingId === record.id} style={deleteBtn}>삭제</button>
-                  </div>
+                  {record.source === 'auto' ? (
+                    // 자동배정 확정 기록은 보기만 — 바꾸려면 관리자 확정 취소(DB 트리거도 막는다)
+                    <span title="자동배정으로 확정된 기록 — 관리자 확정 취소로만 바꿀 수 있습니다" style={autoBadge}>자동배정 확정</span>
+                  ) : (
+                    <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                      <button onClick={() => openEditForm(record)} style={editBtn}>수정</button>
+                      <button onClick={() => handleDelete(record)} disabled={deletingId === record.id} style={deleteBtn}>삭제</button>
+                    </div>
+                  )}
                 </div>
               </div>
             ))
@@ -158,3 +164,4 @@ export default function WorkRecordModal({
 const addBtn: React.CSSProperties = { width: '100%', height: 36, borderRadius: 6, border: '1px solid #e8e8e6', background: '#f8f8f7', color: '#555', fontSize: 13, cursor: 'pointer' }
 const editBtn: React.CSSProperties = { height: 24, padding: '0 8px', borderRadius: 4, border: '1px solid #e8e8e6', background: '#fff', color: '#333', fontSize: 11, cursor: 'pointer' }
 const deleteBtn: React.CSSProperties = { height: 24, padding: '0 8px', borderRadius: 4, border: 'none', background: '#fee2e2', color: '#b91c1c', fontSize: 11, cursor: 'pointer' }
+const autoBadge: React.CSSProperties = { flexShrink: 0, fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', whiteSpace: 'nowrap', cursor: 'help' }

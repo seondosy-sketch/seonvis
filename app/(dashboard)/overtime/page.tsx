@@ -6,8 +6,9 @@ import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import { useIsMobile } from '@/lib/useIsMobile'
 import { DailySummary, Employee, EmployeeTask, Project, ProjectMember, WorkRecord } from '@/lib/overtime/types'
 import { currentPayPeriod, payPeriodDays, payPeriodRange, summarizeByEmployeeAndDate, summaryKey } from '@/lib/overtime/summary'
-import { syncBidProjects } from '@/lib/overtime/sync'
+import { requestProjectSync } from '@/lib/overtime/sync'
 import { syncTeamEmployees } from '@/lib/overtime/teamSync'
+import { friendlyOvertimeError } from '@/lib/overtime/planning/errors'
 import { loadProjectNumbers, sortOvertimeProjects } from '@/lib/overtime/projectOrder'
 import { useMenuPermission } from '@/app/components/PermissionsProvider'
 import MonthGrid from './_components/MonthGrid'
@@ -33,6 +34,8 @@ export default function OvertimePage() {
   const [employees, setEmployees] = useState<Employee[]>([])
   const [employeesLoading, setEmployeesLoading] = useState(true)
   const [employeesError, setEmployeesError] = useState<string | null>(null)
+  // 직원 명단 동기화가 연결 확인 필요로 멈췄을 때의 안내(명단은 기존 그대로 보인다)
+  const [teamSyncNotice, setTeamSyncNotice] = useState<string | null>(null)
 
   const [summaries, setSummaries] = useState<Map<string, DailySummary>>(new Map())
   const [records, setRecords] = useState<WorkRecord[]>([])
@@ -56,7 +59,8 @@ export default function OvertimePage() {
   const loadEmployees = useCallback(async () => {
     setEmployeesLoading(true)
     // 직원 명단의 원본은 기술인 주소록(소속 '미래사업팀') — 읽기 전에 맞춰 넣는다
-    await syncTeamEmployees(supabase)
+    const sync = await syncTeamEmployees(supabase)
+    setTeamSyncNotice(sync.ok ? null : sync.linkRequired ? friendlyOvertimeError('OVERTIME_EMPLOYEE_LINK_REQUIRED') : null)
     // 기본업무내용(employeeTasks)은 팝오버 입력창의 업무내용 드롭다운 선택지 — 직원과 함께 불러온다
     const [empRes, taskRes] = await Promise.all([
       supabase.from('overtime_employees').select('*').eq('is_active', true).order('sort_order', { ascending: true }),
@@ -98,10 +102,11 @@ export default function OvertimePage() {
   }, [])
 
   const loadProjects = useCallback(async (year: number, month: number) => {
-    // 조회 기간과 공고일~발표일이 겹치는 입찰 프로젝트를 먼저 자동 등록/갱신한다 —
-    // 프로젝트 List에서 가져오므로 작성자가 수동으로 입력할 필요가 없다 (수동 등록도 여전히 가능).
+    // 프로젝트 List → 연장근무 프로젝트 동기화를 서버에 맡긴다(app/api/overtime/sync-projects).
+    // 대상기간·상태는 lib/overtime/eligibility.ts 규칙으로 정해지고, 확인 필요·차단 사업은 '종료'가 되어
+    // 신규 입력 선택지에서 빠진다(기존 기록은 그대로 보인다). 실패해도 기존 목록으로 화면은 뜬다.
     const { start, end } = payPeriodRange(year, month)
-    await syncBidProjects(supabase, start, end)
+    await requestProjectSync(start, end)
     // 종료된 프로젝트도 과거 기록에서 이름을 보여줘야 하므로 status로 거르지 않고 전체를 가져온다.
     // 담당직원 배정(members)은 프로젝트별 그리드의 행 구성에 쓰이므로 함께 불러온다.
     const [projRes, memRes, numbers] = await Promise.all([
@@ -143,6 +148,9 @@ export default function OvertimePage() {
             <Link href="/overtime/print" style={{ textDecoration: 'none' }}>
               <span style={{ ...outlineBtn, display: 'inline-flex', alignItems: 'center' }}>출력</span>
             </Link>
+            <Link href="/overtime/plan" style={{ textDecoration: 'none' }}>
+              <span style={{ ...outlineBtn, display: 'inline-flex', alignItems: 'center' }}>자동배정</span>
+            </Link>
             {canWrite && <button onClick={() => setShowBulkEntry(true)} style={outlineBtn}>일괄 입력</button>}
             {canWrite && <button onClick={() => setShowEmployeeManager(true)} style={outlineBtn}>직원 관리</button>}
             {canWrite && <button onClick={() => setShowProjectManager(true)} style={outlineBtn}>프로젝트 관리</button>}
@@ -166,6 +174,12 @@ export default function OvertimePage() {
             <button onClick={() => setView('employee')} style={view === 'employee' ? viewBtnActive : viewBtn}>직원별</button>
           </div>
         </div>
+
+        {teamSyncNotice && (
+          <div style={{ marginBottom: 12, padding: '10px 14px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, fontSize: 12, color: '#92400e' }}>
+            {teamSyncNotice}
+          </div>
+        )}
 
         {(employeesError || recordsError) && (
           <div style={{ marginBottom: 12, padding: '10px 14px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, fontSize: 12, color: '#b91c1c' }}>

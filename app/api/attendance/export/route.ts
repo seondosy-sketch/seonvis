@@ -11,8 +11,7 @@
  */
 import { NextResponse } from 'next/server'
 import { createSupabaseAdminClient } from '@/lib/supabase-admin'
-import { createSupabaseServerClient } from '@/lib/supabase-server'
-import { permissionFor } from '@/lib/menuConfig'
+import { canUseMenu } from '@/lib/auth/menuAccess'
 import { buildDownloadResponse } from '@/lib/export/response'
 import { getPayPeriodForLabel, getPayPeriodRangeForLabel, todayKST } from '@/lib/attendance/period'
 import { filterParticipantRows, filterVisibleProjects, projectIdsWithActiveParticipantsInPeriod } from '@/lib/attendance/gridFilters'
@@ -51,20 +50,9 @@ interface ProjectRow {
 }
 
 async function assertAttendanceExportAccess(): Promise<boolean> {
-  const supabase = await createSupabaseServerClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user?.email) return false
-
-  const admin = createSupabaseAdminClient()
-  const { data: row } = await admin
-    .from('allowed_users')
-    .select('is_admin, menu_permissions')
-    .eq('email', user.email)
-    .single()
-  if (!row) return false
-  if (row.is_admin) return true
-
-  return permissionFor(row.menu_permissions, 'attendance') !== 'none'
+  // 출력은 데이터를 바꾸지 않으므로 read 이상 허용(none만 403)
+  // 관리자(DB allowed_users.is_admin)는 전체 허용, 미승인·비로그인은 거부 — 화면(requireMenu)과 같은 판정(lib/auth/menuAccess.ts)
+  return canUseMenu('attendance', 'read')
 }
 
 /** 마감 상태 문구 — 마감 이력이 없으면 "미마감"이라고 그대로 적는다(빈칸으로 두지 않는다). */

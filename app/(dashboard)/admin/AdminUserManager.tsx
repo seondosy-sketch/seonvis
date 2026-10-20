@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { MenuPermission, PERMISSION_LABEL, RESTRICTABLE_MENU_ITEMS, permissionFor } from '@/lib/menuConfig'
+import { MenuPermission, PERMISSION_LABEL, RESTRICTABLE_MENU_ITEMS, isMenuPermission, normalizeMenuPermissions, permissionFor } from '@/lib/menuConfig'
 
 interface AllowedUser {
   id: string
@@ -9,7 +9,8 @@ interface AllowedUser {
   is_admin: boolean
   added_by_email: string | null
   created_at: string
-  menu_permissions: Record<string, MenuPermission> | null
+  /** 검증 안 된 저장값(jsonb) — 해석은 permissionFor로만 한다 */
+  menu_permissions: Record<string, unknown> | null
   /** 관리자가 남기는 식별 메모 — 이메일만으로는 누구인지 알 수 없어서 둔 자유 텍스트 */
   note: string | null
 }
@@ -25,6 +26,9 @@ interface AccessRequest {
   reviewed_at: string | null
   reviewed_by: string | null
 }
+
+/** 관리자 계정의 메뉴 권한 칸 안내 — 관리자 판정은 allowed_users.is_admin 하나뿐이고 menu_permissions는 무시된다 */
+const ADMIN_MENU_NOTICE = '관리자는 전체 권한이며 메뉴별 설정이 적용되지 않습니다.'
 
 export default function AdminUserManager() {
   const [tab, setTab] = useState<'users' | 'requests'>('users')
@@ -80,8 +84,17 @@ export default function AdminUserManager() {
   }
 
   async function setPermission(u: AllowedUser, key: string, value: MenuPermission) {
+    // 관리자(is_admin)는 메뉴별 설정과 무관하게 전체 권한 — 바꿔도 적용되지 않으므로 저장하지 않는다
+    if (u.is_admin) return
     // write(기본)는 저장하지 않고 키를 지운다 — 새 메뉴가 추가돼도 자동으로 쓰기가 되게
-    const next = { ...(u.menu_permissions ?? {}) }
+    // 무효 저장값('NONE' 등)은 실제 판정값(none)으로 바꿔 저장한다 — 그대로 두면 PATCH 검증(400)에 걸리고,
+    // 지우면 키 없음(write)이 되어 권한이 넓어진다
+    // (객체가 아닌 저장값은 전 메뉴 none으로 판정되므로 그 상태를 그대로 옮긴다)
+    const raw: unknown = u.menu_permissions
+    const next: Record<string, MenuPermission> =
+      raw === null || raw === undefined ? {}
+        : typeof raw !== 'object' || Array.isArray(raw) ? normalizeMenuPermissions(raw)
+        : Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, isMenuPermission(v) ? v : 'none']))
     if (value === 'write') delete next[key]
     else next[key] = value
     setSavingPerms(u.email)
@@ -232,8 +245,9 @@ export default function AdminUserManager() {
                           {u.is_admin && (
                             <span style={{ fontSize: 10, background: '#eff6ff', color: '#2563eb', padding: '1px 7px', borderRadius: 10, fontWeight: 600 }}>관리자</span>
                           )}
-                          {(() => {
-                            const perms = Object.values(u.menu_permissions ?? {})
+                          {!u.is_admin && (() => {
+                            // permissionFor로 해석 — 무효 저장값('NONE' 등)도 실제 판정대로 숨김으로 센다
+                            const perms = RESTRICTABLE_MENU_ITEMS.map(item => permissionFor(u.menu_permissions, item.key))
                             const hidden = perms.filter(v => v === 'none').length
                             const readOnly = perms.filter(v => v === 'read').length
                             return (
@@ -282,9 +296,16 @@ export default function AdminUserManager() {
                         <div style={{ fontSize: 11, color: '#888', marginBottom: 10 }}>
                           쓰기 = 전체 사용 · 읽기 = 조회만 가능(추가/수정/삭제 버튼 숨김) · 숨김 = 사이드바에서 제거
                         </div>
+                        {u.is_admin && (
+                          <div style={{ fontSize: 12, color: '#2563eb', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 5, padding: '6px 10px', marginBottom: 10 }}>
+                            {ADMIN_MENU_NOTICE}
+                          </div>
+                        )}
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: '8px 20px' }}>
                           {RESTRICTABLE_MENU_ITEMS.map(item => {
-                            const current = permissionFor(u.menu_permissions, item.key)
+                            // 관리자는 실제 판정(전체 쓰기)을 그대로 보여 주고 조작을 막는다 — 저장값이 제한처럼 보이지 않게
+                            const current: MenuPermission = u.is_admin ? 'write' : permissionFor(u.menu_permissions, item.key)
+                            const locked = u.is_admin || savingPerms === u.email
                             return (
                               <div key={item.key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                 <span style={{ fontSize: 12, color: '#555', flex: 1, whiteSpace: 'nowrap' }}>{item.label}</span>
@@ -292,14 +313,15 @@ export default function AdminUserManager() {
                                   {(['write', 'read', 'none'] as MenuPermission[]).map(v => (
                                     <button
                                       key={v}
-                                      disabled={savingPerms === u.email}
-                                      onClick={() => { if (current !== v) setPermission(u, item.key, v) }}
+                                      disabled={locked}
+                                      title={u.is_admin ? ADMIN_MENU_NOTICE : undefined}
+                                      onClick={() => { if (!locked && current !== v) setPermission(u, item.key, v) }}
                                       style={{
-                                        padding: '3px 9px', border: 'none', fontSize: 11, cursor: 'pointer',
+                                        padding: '3px 9px', border: 'none', fontSize: 11, cursor: locked ? 'not-allowed' : 'pointer',
                                         background: current === v ? (v === 'write' ? '#111' : v === 'read' ? '#0369a1' : '#92400e') : '#fff',
                                         color: current === v ? '#fff' : '#888',
                                         fontWeight: current === v ? 600 : 400,
-                                        opacity: savingPerms === u.email ? 0.5 : 1,
+                                        opacity: locked ? 0.5 : 1,
                                       }}
                                     >
                                       {PERMISSION_LABEL[v]}

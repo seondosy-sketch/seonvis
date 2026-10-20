@@ -1,16 +1,10 @@
 import { createSupabaseAdminClient } from '@/lib/supabase-admin'
-import { createSupabaseServerClient } from '@/lib/supabase-server'
+import { getAdminAccess } from '@/lib/auth/menuAccess'
 import { NextResponse } from 'next/server'
 
-function getAdminEmails() {
-  return (process.env.ADMIN_EMAILS ?? '').split(',').map(e => e.trim()).filter(Boolean)
-}
-
+/** 관리자 = DB allowed_users.is_admin(매 요청 서버 조회, lib/auth/menuAccess.ts). 아니면 null → 403 */
 async function assertAdmin() {
-  const supabase = await createSupabaseServerClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user?.email || !getAdminEmails().includes(user.email)) return null
-  return user
+  return getAdminAccess()
 }
 
 export async function GET() {

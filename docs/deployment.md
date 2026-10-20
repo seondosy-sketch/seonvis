@@ -10,8 +10,9 @@ NEXT_PUBLIC_SUPABASE_URL=https://xxxx.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
 SUPABASE_SERVICE_ROLE_KEY=eyJ...   # 서버 사이드 전용, 클라이언트 노출 금지
 
-# 관리자 이메일 (콤마 구분)
-ADMIN_EMAILS=admin@example.com,admin2@example.com
+# 관리자: 환경변수가 아니라 DB allowed_users.is_admin = true 행으로 정한다.
+# 예전 ADMIN_EMAILS 값이 남아 있어도 인가에 쓰지 않는다(효과 없음). 배포 전 supabase/verify/admin_flag_preflight.sql로
+# 관리자 행이 1명 이상인지 확인하고, 0명이면 배포를 멈춘다.
 
 # Claude API (미래봇)
 ANTHROPIC_API_KEY=sk-ant-...

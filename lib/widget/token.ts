@@ -6,12 +6,14 @@
  * (allowed_users 행 존재 + menu_permissions). 권한을 회수당한 사람의 위젯이 계속 살아 있으면
  * 웹에서 막은 것이 무의미해지기 때문이다.
  *
- * 권한 판정은 app/(dashboard)/layout.tsx와 같은 규칙을 쓴다:
- *   ADMIN_EMAILS(env)에 있으면 관리자 → 전부 write
- *   아니면 allowed_users 행이 있어야 하고, 없으면 미승인으로 간주해 거부
+ * 권한 판정은 app/(dashboard)/layout.tsx와 같은 규칙을 쓴다(lib/auth/accessRules.ts resolveMenuAccess):
+ *   allowed_users 행이 있어야 하고, 없으면 미승인으로 간주해 거부
+ *   allowed_users.is_admin이면 관리자 → 전부 write (환경변수 ADMIN_EMAILS는 판정에 쓰지 않는다)
+ *   그 외 menu_permissions(키 없으면 write, 무효값은 none)
  */
 import { randomBytes } from 'node:crypto'
 import { createSupabaseAdminClient } from '@/lib/supabase-admin'
+import { resolveMenuAccess } from '@/lib/auth/accessRules'
 import type { MenuPermission } from '@/lib/menuConfig'
 
 export interface WidgetIdentity {
@@ -22,10 +24,6 @@ export interface WidgetIdentity {
 
 export function normalizeEmail(email: string): string {
   return email.toLowerCase().trim()
-}
-
-function getAdminEmails(): string[] {
-  return (process.env.ADMIN_EMAILS ?? '').split(',').map(e => e.trim()).filter(Boolean)
 }
 
 function generateToken(): string {
@@ -85,18 +83,14 @@ export async function resolveWidgetToken(token: string | null): Promise<WidgetId
   if (!row?.email) return null
 
   const email = normalizeEmail(row.email)
-  const isAdmin = getAdminEmails().includes(email)
-
-  let menuPermissions: Record<string, MenuPermission> = {}
-  if (!isAdmin) {
-    const { data: user } = await admin
-      .from('allowed_users')
-      .select('email, menu_permissions')
-      .eq('email', email)
-      .maybeSingle()
-    if (!user) return null // 승인 취소·퇴사 → 토큰이 남아 있어도 거부
-    menuPermissions = (user.menu_permissions ?? {}) as Record<string, MenuPermission>
-  }
+  const { data: user } = await admin
+    .from('allowed_users')
+    .select('email, is_admin, menu_permissions')
+    .eq('email', email)
+    .maybeSingle()
+  const access = resolveMenuAccess(email, user)
+  if (!access.approved) return null // 승인 취소·퇴사 → 토큰이 남아 있어도 거부
+  const { isAdmin, permissions: menuPermissions } = access
 
   // last_used_at은 "이 위젯이 아직 쓰이는지" 파악용 부가 정보라 매 요청마다 쓸 필요가 없다.
   // 마지막 기록이 1시간 이상 지났을 때만 UPDATE해서 불필요한 DB 쓰기를 없앤다(위젯은 자동

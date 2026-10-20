@@ -77,10 +77,11 @@ cp .env.example .env.local
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
-ADMIN_EMAILS=
 GEMINI_API_KEY=
 NEXT_PUBLIC_KAKAO_MAP_KEY=   # Kakao Developers JavaScript 키 (지도/주소검색/길찾기)
 ```
+
+관리자는 환경변수가 아니라 DB `allowed_users.is_admin = true` 행으로 정한다. 예전 `ADMIN_EMAILS` 값이 남아 있어도 인가에 쓰지 않는다(운영 적용 전 `supabase/verify/admin_flag_preflight.sql`로 관리자 행 확인).
 
 `NEXT_PUBLIC_KAKAO_MAP_KEY`는 [Kakao Developers](https://developers.kakao.com)에서 앱 등록 후 발급받는 JavaScript 키이며, 사용하는 도메인(localhost, Vercel 배포 도메인)을 등록하고 **카카오맵 제품(서비스)을 활성화**해야 동작합니다.
 
