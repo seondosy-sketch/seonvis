@@ -164,25 +164,27 @@ export default function AttendancePage() {
   }, [])
 
   // Project List 자동연계 백그라운드 동기화(사용자 지시) — 사용자가 동기화 버튼을 누르기 전에도
-  // 후보가 정확히 1명인 슬롯(auto_ready)은 자동으로 반영한다. 동명이인/주소록미등록/원본변경/제거됨
-  // 등 판단이 필요한 상태는 절대 자동 처리하지 않고 참여기술인 관리 모달에서 사용자가 직접 확인한다.
+  // 후보가 정확히 1명인 슬롯(auto_ready)과, 단장 이름이 바뀌어 새 후보가 정확히 1명인 단장 슬롯은
+  // 자동으로 반영한다. 동명이인/주소록미등록/제거됨, 단장이 아닌 슬롯의 원본변경 등 판단이 필요한
+  // 상태는 자동 처리하지 않고 참여기술인 관리 모달에서 사용자가 직접 확인한다.
   // 개찰일(bid_date)이 지난 프로젝트는 대상에서 제외한다(lib/attendance/autoSync.ts).
   useEffect(() => {
     if (!canWrite) return // 읽기 권한 사용자는 다른 쓰기 액션과 동일하게 자동 동기화도 트리거하지 않는다
     if (projectsLoading || participantsLoading || engineers.length === 0) return
     if (autoSyncInFlightRef.current) return
-    const candidates = selectAutoSyncCandidates({ projects, links, engineers, today: todayKST() })
+    const today = todayKST()
+    const candidates = selectAutoSyncCandidates({ projects, links, participants, engineers, today })
     if (candidates.length === 0) return
     autoSyncInFlightRef.current = true
-    applyAutoSyncCandidates(supabase, candidates, specialties).then(confirmedCount => {
+    applyAutoSyncCandidates(supabase, candidates, specialties, { today, nowIso: new Date().toISOString() }).then(appliedCount => {
       autoSyncInFlightRef.current = false
-      if (confirmedCount > 0) {
-        showToast(`Project List와 자동 동기화: ${confirmedCount}건 연결됨`)
+      if (appliedCount > 0) {
+        showToast(`Project List와 자동 동기화: ${appliedCount}건 반영됨`)
         reloadParticipantsAndLinks()
       }
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projects, links, engineers, specialties, projectsLoading, participantsLoading, canWrite])
+  }, [projects, links, participants, engineers, specialties, projectsLoading, participantsLoading, canWrite])
 
   const days = useMemo(() => getPayPeriodForLabel(viewYear, viewPeriodMonth), [viewYear, viewPeriodMonth])
   const { start: periodStart, end: periodEnd } = useMemo(
