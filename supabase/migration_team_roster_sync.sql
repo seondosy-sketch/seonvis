@@ -1,6 +1,6 @@
 -- 팀 직원 명단 = 기술인 주소록의 소속 '미래사업팀' — 단방향 동기화 (engineer_contacts → overtime_employees)
 --
--- overtime_employees는 연장근무(제안서팀)·연장근무(실무자)·휴가관리·숙박관리가 같이 쓰는 직원 테이블이고,
+-- overtime_employees는 연장근무(제안서팀)·연장근무(실근무)·휴가관리·숙박관리가 같이 쓰는 직원 테이블이고,
 -- 근무기록·휴가 등 FK가 전부 여기를 가리킨다. 그래서 테이블을 바꾸지 않고, 주소록을 원본으로 삼아
 -- 이 테이블을 맞춰 넣는다. 둘의 연결은 migration_engineers.sql에서 예약만 해두었던
 -- engineer_contacts.employee_id를 쓴다.
