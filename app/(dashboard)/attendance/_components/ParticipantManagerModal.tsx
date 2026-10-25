@@ -313,8 +313,16 @@ export default function ParticipantManagerModal({
         p_new_participation_start: reassignEffectiveFrom || null,
         p_new_participation_end: p.participation_end,
       })
+      if (rpcError) { setBusy(false); setError(directorReplaceErrorMessage(rpcError)); return }
+      // RPC는 director 링크를 새 참여행으로 옮기지만 확정 당시 이름은 갱신하지 않는다 —
+      // 맞춰 두지 않으면 교체한 뒤에도 '원본변경'으로 계속 남는다.
+      if (link) {
+        await supabase
+          .from('project_participant_links')
+          .update({ source_name_snapshot: slotValue(project, link.source_slot).trim(), updated_at: new Date().toISOString() })
+          .eq('id', link.id)
+      }
       setBusy(false)
-      if (rpcError) { setError(directorReplaceErrorMessage(rpcError)); return }
       onToast('단장을 교체했습니다.')
       setReassignForId(null)
       onChange()

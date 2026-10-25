@@ -142,6 +142,8 @@ export type SourceSlot = 'director' | 'staff_arch' | 'staff_civil' | 'staff_mech
  * source_name_snapshot은 "마지막으로 사용자가 이 연결을 확정/재확인했을 때"의 Project List 슬롯
  * 텍스트다 — 단순 조회·동기화 미리보기 과정에서는 절대 갱신하지 않는다. 현재 Project List 텍스트가
  * 이 값과 다르면 "원본변경" 상태로 표시하되 자동 재매핑은 하지 않는다(사용자 확인 후에만 처리).
+ * 예외: 단장 슬롯은 새 이름의 후보가 정확히 1명이면 출근부 진입 시 자동으로 단장을 교체한다
+ * (사용자 지시, lib/attendance/autoSync.ts).
  */
 export interface ProjectParticipantLink {
   id: string

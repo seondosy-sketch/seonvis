@@ -410,6 +410,7 @@ result_score 또는 evaluation 비어있으면 → "진행중"
 - 신규 RPC: `attendance_confirm_participant_link`(슬롯 최초 확정), `attendance_reassign_engineer`(출근기록 있는 일반 참여자의 연결 기술인 교체 — "종료+신규" 패턴, 링크도 같은 트랜잭션에서 함께 이동). `attendance_replace_director`는 시그니처를 유지한 채 "옛 단장 링크를 새 단장 참여행으로 이동" 로직만 추가.
 - 참여기간 상속 확장: `participation_start`도 `participation_end`처럼 NULL이면 Project List(`announce_date`)를 상속하도록 `lib/attendance/participantPeriod.ts`를 확장(컬럼 추가 없음).
 - 백그라운드 자동 동기화(`lib/attendance/autoSync.ts`, 2026-07-22 추가): 후보 1명인 슬롯은 사용자가 동기화 버튼을 누르기 전에 페이지 로드 시점에 자동 반영. 개찰일(`projects.bid_date`, 기존 컬럼 재사용)이 지난 프로젝트, 상태가 '취소'인 프로젝트는 대상 제외.
+- 단장 자동 교체(2026-10-20 추가): director 슬롯이 원본변경이고 새 이름의 후보가 1명이면 `attendance_replace_director`로 자동 교체 후 링크 `source_name_snapshot`을 갱신한다. 단장이 아닌 슬롯의 원본변경은 여전히 수동 처리.
 - 그리드 표시 필터(`lib/attendance/gridFilters.ts`)도 확장 — 면접일이 비어 있어도 개찰일이 조회 기간 시작보다 이전이면 더 이상 "겹침"으로 보지 않고, 상태가 '취소'인 프로젝트는 상태 필터에서 명시적으로 '취소'를 선택하지 않는 한 활성 참여자·기록 유무와 무관하게 기본적으로 숨긴다.
 - 마이그레이션: `supabase/migration_attendance_participant_links.sql`, `supabase/migration_attendance_participant_links_rpc.sql` — `BEGIN...ROLLBACK` 검증 후 **2026-07-22 실사용 DB(seonvis)에 적용 완료**(사용자 승인). 적용 후 신규 함수 3개 모두 `search_path`를 명시적으로 고정하는 후속 마이그레이션도 함께 적용해 Supabase 보안 어드바이저의 `function_search_path_mutable` 경고를 해소했다.
 

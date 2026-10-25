@@ -1,7 +1,7 @@
-# 연장근무 (실무자)
+# 연장근무(실근무)
 
 > 제안서팀 연장근무(`/overtime`, [overtime.md](./overtime.md))와 별개인 실무자용 연장근무 화면. 경로 `/field-overtime`,
-> 사이드바 근태관리 → `연장근무(실무자)`, 메뉴 권한 키 `field_overtime`.
+> 사이드바 근태관리 → `연장근무(실근무)`, 메뉴 권한 키 `field_overtime`.
 
 ## 제안서팀 버전과 다른 점
 

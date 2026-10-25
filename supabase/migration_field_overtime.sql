@@ -1,4 +1,4 @@
--- 연장근무 (실무자) — 제안서팀 연장근무(migration_overtime.sql)와 별개인 실무자용 기능.
+-- 연장근무(실근무) — 제안서팀 연장근무(migration_overtime.sql)와 별개인 실무자용 기능.
 -- 먼저 migration_team_roster_sync.sql을 적용한다(직원 명단 = 기술인 주소록 '미래사업팀').
 --
 -- 제안서팀 버전과 달리 프로젝트/업무내용 없이 "직원 + 날짜 + 종료시간"만 입력한다.
@@ -32,6 +32,6 @@ create policy "menu_insert" on field_overtime_records for insert with check (pri
 create policy "menu_update" on field_overtime_records for update using (private.menu_permission('field_overtime') = 'write') with check (private.menu_permission('field_overtime') = 'write');
 create policy "menu_delete" on field_overtime_records for delete using (private.menu_permission('field_overtime') = 'write');
 
--- 실무자 연장근무 사용자는 overtime 권한이 없어도 직원 이름을 읽을 수 있어야 한다 (정책은 OR로 합쳐진다).
+-- 연장근무(실근무) 사용자는 overtime 권한이 없어도 직원 이름을 읽을 수 있어야 한다 (정책은 OR로 합쳐진다).
 -- 쓰기는 주지 않는다 — 명단 변경은 주소록 + sync_team_employees()(security definer)로만 일어난다.
 create policy "field_overtime_select" on overtime_employees for select using (private.menu_permission('field_overtime') <> 'none');
