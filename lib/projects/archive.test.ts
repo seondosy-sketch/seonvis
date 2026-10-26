@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import ExcelJS from 'exceljs'
-import { buildArchiveParticipationSheet, liveLedgerYear, type ArchiveStaffRow } from './archive'
+import { buildArchiveParticipationSheet, liveLedgerYear, liveParticipationSheet, mergeParticipationYears, participantKey, type ArchiveStaffRow } from './archive'
 import { buildProjectLedgerWorkbook } from './export/projectLedgerWorkbook'
 import type { LedgerProject } from './export/ledgerRows'
 
@@ -75,5 +75,54 @@ describe('buildProjectLedgerWorkbook — 과거 연도 2시트 주입', () => {
     expect(sheet2.getCell(3, 2).value).toBe('김우영')
     expect(sheet2.getCell(3, 4).value).toBe('LH천안신부\n인천지방법원 별관청사')
     expect(sheet2.getCell(3, 5).value).toBe(2)
+  })
+})
+
+describe('전체 연도 참여현황', () => {
+  const y2021 = buildArchiveParticipationSheet([
+    staff({ section: 'specialist', person_seq: 1, name: '정준철', field: '건축', project_text: '해군C012', archive_project_id: 'p-lose' }),
+    staff({ section: 'specialist', person_seq: 2, name: '이상원', field: '건축', project_text: 'LH밀양가곡', archive_project_id: 'p-win' }),
+  ], PROJECTS)
+  const y2025 = buildArchiveParticipationSheet([
+    staff({ section: 'specialist', person_seq: 1, name: '정준철', field: '안전', project_text: '25-A-00부대(A005)', archive_project_id: 'p-lose' }),
+    staff({ section: 'specialist', person_seq: 1, name: '정준철', field: '안전', line_no: 2, project_text: '25-D-어린이집(B007)', archive_project_id: 'p-lose' }),
+    staff({ section: 'specialist', person_seq: 2, name: '이상원(57)', field: '건축', project_text: '온누림 플렛폼', archive_project_id: 'p-lose' }),
+  ], PROJECTS)
+  const merged = mergeParticipationYears([{ year: 2021, sheet: y2021 }, { year: 2025, sheet: y2025 }])
+
+  it('같은 사람의 연도별 줄을 최근 연도부터 한 행으로 모은다', () => {
+    const row = merged.specialists.find(r => r.name === '정준철')!
+    expect(row.lines.map(l => [l.year, l.text])).toEqual([
+      [2025, '25-A-00부대(A005)'], [2025, '25-D-어린이집(B007)'], [2021, '해군C012'],
+    ])
+    expect(row.count).toBe(3)
+    expect(row.field).toBe('안전') // 가장 최근 연도의 분야
+  })
+
+  it("'이상원(57)'과 '이상원'은 같은 사람으로 본다 — 표기는 최근 연도 것", () => {
+    const row = merged.specialists.find(r => participantKey(r.name) === '이상원')!
+    expect(row.name).toBe('이상원(57)')
+    expect(row.count).toBe(2)
+    expect(row.hasWin).toBe(true) // 2021년 수주 건이 있다
+  })
+
+  it('누적이 많은 사람부터 정렬한다', () => {
+    expect(merged.specialists.map(r => r.count)).toEqual([3, 2])
+  })
+})
+
+describe('liveParticipationSheet', () => {
+  it('올해 집계에 줄 단위 수주 여부를 붙인다', () => {
+    const sheet = liveParticipationSheet(
+      { directors: [{ name: '김지훈', field: '건축', projectNames: ['154kV 서충주S/S', '25-A-00부대(A406)'], count: 2, hasWin: true }], specialists: [] },
+      [
+        { name: '154kV 서충주S/S', result_score: '수', evaluation: '선', participants: '', status_override: null },
+        { name: '25-A-00부대(A406)', result_score: '상', evaluation: '예성', participants: '', status_override: null },
+      ],
+    )
+    expect(sheet.directors[0].lines).toEqual([
+      { text: '154kV 서충주S/S', linked: true, win: true },
+      { text: '25-A-00부대(A406)', linked: true, win: false },
+    ])
   })
 })

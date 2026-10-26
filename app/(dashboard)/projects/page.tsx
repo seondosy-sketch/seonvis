@@ -10,7 +10,10 @@ import { syncProjectCalendar } from '@/lib/googleCalendar/trigger'
 import { WRITTEN_EVALUATION_LABEL } from '@/lib/projectStatus'
 import { buildStaffSummary, type ProjectParticipantRef } from '@/lib/projects/staffSummary'
 import { buildParticipationSheet, type LedgerProject } from '@/lib/projects/export/ledgerRows'
-import { buildArchiveParticipationSheet, liveLedgerYear, type ArchiveProject, type ArchiveStaffRow } from '@/lib/projects/archive'
+import {
+  buildArchiveParticipationSheet, liveLedgerYear, liveParticipationSheet, mergeParticipationYears,
+  type ArchiveProject, type ArchiveStaffRow,
+} from '@/lib/projects/archive'
 import { kstToday } from '@/lib/kstDate'
 import ParticipationPanel from './_components/ParticipationPanel'
 
@@ -48,6 +51,25 @@ interface Project {
   created_at: string
   /** 과거 연도만 — 평가일이 날짜가 아닐 때의 엑셀 원문('추후'·'미정' 등). */
   interview_raw?: string
+  /** 전체 연도 보기에서 이 행이 속한 대장 연도. */
+  ledger_year?: number
+  /** project_archive에서 온 행 — 화면에서 고치지 않는다. */
+  archived?: boolean
+}
+
+type StaffRowWithYear = ArchiveStaffRow & { ledger_year: number }
+
+/**
+ * PostgREST는 한 번에 최대 1000행만 돌려준다(서버 max-rows). 전체 연도 보기는 보관 표 전체를 읽으므로
+ * 1000행씩 끊어 끝까지 읽는다 — 참여 줄은 이미 734개라 곧 한도를 넘는다.
+ */
+async function fetchAllRows<T>(page: (from: number, to: number) => PromiseLike<{ data: unknown[] | null }>): Promise<T[]> {
+  const out: T[] = []
+  for (let from = 0; ; from += 1000) {
+    const { data } = await page(from, from + 999)
+    out.push(...((data ?? []) as T[]))
+    if (!data || data.length < 1000) return out
+  }
 }
 
 interface TooltipData {
@@ -282,6 +304,7 @@ function archiveToProject(a: ArchiveProject): Project {
     participants: a.participants, participation_ratio: '', director: a.director, status_override: a.status_override,
     staff_arch: a.staff_arch, staff_civil: a.staff_civil, staff_mech: a.staff_mech, staff_safety: a.staff_safety,
     note: a.note, created_at: a.created_at, interview_raw: a.interview_raw,
+    ledger_year: a.ledger_year, archived: true,
   }
 }
 
@@ -295,14 +318,18 @@ export default function ProjectsPage() {
   const [archiveYears, setArchiveYears] = useState<number[]>([])
   const [year, setYear] = useState<number | null>(null)
   const [tab, setTab] = useState<PageTab>('목록')
-  const [archiveStaff, setArchiveStaff] = useState<ArchiveStaffRow[]>([])
+  const [archiveStaff, setArchiveStaff] = useState<StaffRowWithYear[]>([])
+  // 전체 연도 — 켜면 올해 + 보관된 모든 연도를 한 목록으로 합쳐 검색한다(목록·참여현황 공통)
+  const [allYears, setAllYears] = useState(false)
   const [listLoading, setListLoading] = useState(true)
   const liveYear = liveLedgerYear(archiveYears, kstToday().getFullYear())
   const isArchive = year !== null && year !== liveYear
   const shownYear = isArchive ? year : liveYear
   /** 과거 연도는 엑셀 원본을 옮긴 기록이라 화면에서 고치지 않는다(수정은 이관 스크립트로). */
-  const canEdit = canWrite && !isArchive
-  const statusLabel = (s: ProjectStatus) => (isArchive && s === '진행중' ? ARCHIVE_PENDING_LABEL : s)
+  const canEdit = canWrite && !isArchive && !allYears
+  /** 수정·삭제 열 — 전체 연도 보기에서는 올해 행에만 버튼이 있다. */
+  const showManage = canWrite && (allYears || !isArchive)
+  const statusLabel = (s: ProjectStatus, archived = isArchive && !allYears) => (archived && s === '진행중' ? ARCHIVE_PENDING_LABEL : s)
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState<ProjectStatus | '전체'>('전체')
   const [filterType, setFilterType] = useState<ProjectType | '전체'>('전체')
@@ -348,6 +375,7 @@ export default function ProjectsPage() {
 
   const openNote = (e: React.MouseEvent, projectNumber: string, field: string) => {
     e.stopPropagation()
+    // 메모는 관리번호 단위라 전체 연도 보기에서는 과거 행이 올해 메모를 고치게 된다 — 이 보기에서는 막는다
     if (!canEdit) return
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
     const draft = notes[projectNumber]?.[field] ?? ''
@@ -383,7 +411,24 @@ export default function ProjectsPage() {
   const load = useCallback(async () => {
     const seq = ++loadSeq.current
     setListLoading(true)
-    if (isArchive) {
+    if (allYears) {
+      const [{ data: live }, archived, staff] = await Promise.all([
+        supabase.from('projects').select('*').order('project_number', { ascending: true }),
+        fetchAllRows<ArchiveProject>((from, to) => supabase.from('project_archive').select('*').order('id').range(from, to)),
+        fetchAllRows<StaffRowWithYear>((from, to) => supabase.from('project_archive_staff')
+          .select('ledger_year, section, person_seq, name, field, line_no, project_text, archive_project_id')
+          .order('id').range(from, to)),
+      ])
+      if (seq !== loadSeq.current) return
+      const rows = [
+        ...((live ?? []) as Project[]).map(p => ({ ...p, ledger_year: liveYear })),
+        ...archived.map(archiveToProject),
+      ]
+      // 최근 연도부터, 같은 해 안에서는 관리번호 순
+      rows.sort((a, b) => (b.ledger_year ?? 0) - (a.ledger_year ?? 0) || a.project_number.localeCompare(b.project_number))
+      setProjects(rows)
+      setArchiveStaff(staff)
+    } else if (isArchive) {
       const [{ data }, { data: staff }] = await Promise.all([
         supabase.from('project_archive').select('*').eq('ledger_year', shownYear).order('project_number', { ascending: true }),
         supabase.from('project_archive_staff')
@@ -392,7 +437,7 @@ export default function ProjectsPage() {
       ])
       if (seq !== loadSeq.current) return
       setProjects(((data ?? []) as ArchiveProject[]).map(archiveToProject))
-      setArchiveStaff((staff ?? []) as ArchiveStaffRow[])
+      setArchiveStaff(((staff ?? []) as ArchiveStaffRow[]).map(r => ({ ...r, ledger_year: shownYear })))
     } else {
       const { data } = await supabase.from('projects').select('*').order('project_number', { ascending: true })
       if (seq !== loadSeq.current) return
@@ -400,7 +445,7 @@ export default function ProjectsPage() {
       setArchiveStaff([])
     }
     setListLoading(false)
-  }, [isArchive, shownYear])
+  }, [allYears, isArchive, shownYear, liveYear])
 
   const loadArchiveYears = useCallback(async () => {
     // 연도 목록만 필요하다 — 보관 표가 아직 없거나(마이그레이션 전) 비어 있으면 올해만 보인다.
@@ -413,8 +458,9 @@ export default function ProjectsPage() {
 
   const yearOptions = [...archiveYears.filter(y => y !== liveYear), liveYear]
   const goYear = (next: number | undefined) => {
-    if (next === undefined || next === shownYear) return
+    if (next === undefined || (next === shownYear && !allYears)) return
     setYear(next === liveYear ? null : next)
+    setAllYears(false)
     // 연도마다 프로젝트가 다르므로 검색·필터는 비운다
     setSearch('')
     setFilterStatus('전체')
@@ -422,9 +468,20 @@ export default function ProjectsPage() {
   }
   const yearIndex = yearOptions.indexOf(shownYear)
 
-  const participationSheet = isArchive
-    ? buildArchiveParticipationSheet(archiveStaff, projects)
-    : buildParticipationSheet(projects as unknown as LedgerProject[])
+  const participationSheet = allYears
+    ? mergeParticipationYears([
+        ...archiveYears.filter(y => y !== liveYear).map(y => ({
+          year: y,
+          sheet: buildArchiveParticipationSheet(archiveStaff.filter(r => r.ledger_year === y), projects.filter(p => p.archived && p.ledger_year === y)),
+        })),
+        (() => {
+          const live = projects.filter(p => !p.archived) as unknown as LedgerProject[]
+          return { year: liveYear, sheet: liveParticipationSheet(buildParticipationSheet(live), live) }
+        })(),
+      ])
+    : isArchive
+      ? buildArchiveParticipationSheet(archiveStaff, projects)
+      : buildParticipationSheet(projects as unknown as LedgerProject[])
 
   const filtered = projects.filter(p => {
     const q = search.toLowerCase()
@@ -670,7 +727,11 @@ export default function ProjectsPage() {
   // 빈 열이 남지 않게 아예 뺀다.
   const visibleKeys = visibleColumnKeys(viewMode)
   const shownColumns = COLUMNS.filter(c => visibleKeys.has(c.key))
-  const headers = canEdit ? [...shownColumns, { key: 'manage', label: '관리' }] : shownColumns
+  // 전체 연도 보기에서는 고정 열(번호·용역명) 바로 뒤에 연도 열을 끼운다
+  const dataColumns: { key: string; label: string }[] = allYears
+    ? [...shownColumns.slice(0, 2), { key: 'year', label: '연도' }, ...shownColumns.slice(2)]
+    : shownColumns
+  const headers = showManage ? [...dataColumns, { key: 'manage', label: '관리' }] : dataColumns
   /** 본문 칸을 그릴지 — 머리글과 같은 키를 본다. */
   const show = (key: string) => visibleKeys.has(key)
 
@@ -710,21 +771,26 @@ export default function ProjectsPage() {
             {!isMobile && <span style={{ fontSize: 14, color: '#555' }}>프로젝트 List</span>}
             {/* 연도 전환 — 왼쪽이 과거. 올해 = projects, 과거 = project_archive(읽기 전용) */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 2, border: '1px solid #e8e8e6', borderRadius: 6, background: '#fff' }}>
-              <button aria-label="이전 연도" onClick={() => goYear(yearOptions[yearIndex - 1])} disabled={yearIndex <= 0} style={{ ...yearArrowBtn, opacity: yearIndex <= 0 ? 0.3 : 1 }}>‹</button>
+              <button aria-label="이전 연도" onClick={() => goYear(yearOptions[yearIndex - 1])} disabled={allYears || yearIndex <= 0} style={{ ...yearArrowBtn, opacity: allYears || yearIndex <= 0 ? 0.3 : 1 }}>‹</button>
               <select
                 aria-label="연도"
                 value={shownYear}
                 onChange={e => goYear(Number(e.target.value))}
-                style={{ height: 30, border: 'none', background: 'transparent', fontSize: 13, fontWeight: 600, color: '#111', cursor: 'pointer' }}
+                style={{ height: 30, border: 'none', background: 'transparent', fontSize: 13, fontWeight: 600, color: allYears ? '#bbb' : '#111', cursor: 'pointer' }}
               >
                 {yearOptions.map(y => <option key={y} value={y}>{y}년</option>)}
               </select>
-              <button aria-label="다음 연도" onClick={() => goYear(yearOptions[yearIndex + 1])} disabled={yearIndex >= yearOptions.length - 1} style={{ ...yearArrowBtn, opacity: yearIndex >= yearOptions.length - 1 ? 0.3 : 1 }}>›</button>
+              <button aria-label="다음 연도" onClick={() => goYear(yearOptions[yearIndex + 1])} disabled={allYears || yearIndex >= yearOptions.length - 1} style={{ ...yearArrowBtn, opacity: allYears || yearIndex >= yearOptions.length - 1 ? 0.3 : 1 }}>›</button>
             </div>
-            {isArchive && <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: '#f4f4f2', color: '#888', whiteSpace: 'nowrap' }}>보관 · 읽기 전용</span>}
+            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: allYears ? '#111' : '#666', fontWeight: allYears ? 600 : 400, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+              <input type="checkbox" checked={allYears} onChange={e => setAllYears(e.target.checked)} />
+              전체 연도
+            </label>
+            {isArchive && !allYears && <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: '#f4f4f2', color: '#888', whiteSpace: 'nowrap' }}>보관 · 읽기 전용</span>}
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={exportExcel} disabled={exporting} style={{ ...outlineBtn, opacity: exporting ? 0.6 : 1 }}>
+            {/* 엑셀은 연도별 대장 서식이라 전체 연도 보기에서는 만들지 않는다 */}
+            <button onClick={exportExcel} disabled={exporting || allYears} title={allYears ? '엑셀은 연도별로 받습니다 — 전체 연도를 끄고 연도를 고르세요' : undefined} style={{ ...outlineBtn, opacity: exporting || allYears ? 0.5 : 1 }}>
               {exporting ? '만드는 중...' : isMobile ? '엑셀' : '엑셀 내보내기'}
             </button>
             {canEdit && <button onClick={openAdd} style={primaryBtn}>+ 추가</button>}
@@ -755,12 +821,12 @@ export default function ProjectsPage() {
                 color: tab === t ? '#111' : '#888', fontWeight: tab === t ? 600 : 400,
                 borderBottom: tab === t ? '2px solid #111' : '2px solid transparent', marginBottom: -1,
               }}
-            >{t === '목록' ? `${shownYear}년 프로젝트` : '기술인 참여현황'}</button>
+            >{t === '목록' ? (allYears ? '전체 연도 프로젝트' : `${shownYear}년 프로젝트`) : '기술인 참여현황'}</button>
           ))}
         </div>
 
         {tab === '참여현황' ? (
-          <ParticipationPanel sheet={participationSheet} loading={listLoading} isMobile={isMobile} isArchive={isArchive} />
+          <ParticipationPanel sheet={participationSheet} loading={listLoading} isMobile={isMobile} isArchive={isArchive || allYears} allYears={allYears} />
         ) : (<>
         <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(3, 1fr)', gap: 10, marginBottom: 16 }}>
           {([['전체', projects], ['진행중', projects.filter(p => computeStatus(p.result_score, p.evaluation, p.participants, p.status_override) === '진행중')], ['수주', projects.filter(p => computeStatus(p.result_score, p.evaluation, p.participants, p.status_override) === '수주')]] as [string, Project[]][]).map(([label, list]) => (
@@ -825,10 +891,11 @@ export default function ProjectsPage() {
                 <div key={p.id} style={{ background: ROW_FILL[status] ?? '#fff', border: '1px solid #e8e8e6', borderRadius: 10, padding: 12 }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                      {allYears && <span style={{ fontSize: 11, fontWeight: 600, color: '#0f766e' }}>{p.ledger_year}년</span>}
                       <span style={{ fontSize: 11, color: '#999' }}>{p.project_number}</span>
                       <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 3, background: 'rgba(0,0,0,0.06)', color: '#555' }}>{p.type}</span>
                     </div>
-                    <span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 4, flexShrink: 0, ...STATUS_STYLE[status] }}>{statusLabel(status)}</span>
+                    <span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 4, flexShrink: 0, ...STATUS_STYLE[status] }}>{statusLabel(status, p.archived)}</span>
                   </div>
                   <div
                     onClick={() => { const d = tooltipAll[p.project_number]; if (d) void openTooltipView(p, d) }}
@@ -848,7 +915,7 @@ export default function ProjectsPage() {
                       ))}
                     </div>
                   )}
-                  {canEdit && (
+                  {canWrite && !p.archived && (allYears || !isArchive) && (
                     <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
                       <button onClick={() => openEdit(p)} style={{ ...editBtn, height: 30, flex: 1 }}>수정</button>
                       <button onClick={() => remove(p.id, p.project_number)} disabled={deleting === p.id} style={{ ...deleteBtn, height: 30, flex: 1 }}>삭제</button>
@@ -910,6 +977,7 @@ export default function ProjectsPage() {
                         onClick={() => { const d = tooltipAll[p.project_number]; if (d) void openTooltipView(p, d) }}
                       >{p.name}</span>
                     </td>
+                    {allYears && <td style={{ ...tdnw, fontWeight: 600, color: '#0f766e' }}>{p.ledger_year}</td>}
                     {show('type') && <td style={tdnw}><span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 3, background: '#f0f0ee', color: '#555' }}>{p.type}</span></td>}
                     {show('client') && <td style={{ ...tdnw, maxWidth: 120 }}><NoteCell value={p.client} note={notes[p.project_number]?.['client']} onNote={e => openNote(e, p.project_number, 'client')} /></td>}
                     {show('fee') && <td style={{ ...tdnw, textAlign: 'right' }}>{p.fee != null ? p.fee : '-'}</td>}
@@ -928,13 +996,15 @@ export default function ProjectsPage() {
                     {show('civil') && <td style={tdnw}>{p.staff_civil}</td>}
                     {show('mech') && <td style={tdnw}>{p.staff_mech}</td>}
                     {show('safety') && <td style={tdnw}>{p.staff_safety}</td>}
-                    {show('status') && <td style={tdnw}><span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 4, ...STATUS_STYLE[status] }}>{statusLabel(status)}</span></td>}
-                    {canEdit && (
+                    {show('status') && <td style={tdnw}><span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 4, ...STATUS_STYLE[status] }}>{statusLabel(status, p.archived)}</span></td>}
+                    {showManage && (
                       <td style={td}>
-                        <div style={{ display: 'flex', gap: 4 }}>
-                          <button onClick={() => openEdit(p)} style={editBtn}>수정</button>
-                          <button onClick={() => remove(p.id, p.project_number)} disabled={deleting === p.id} style={deleteBtn}>삭제</button>
-                        </div>
+                        {!p.archived && (
+                          <div style={{ display: 'flex', gap: 4 }}>
+                            <button onClick={() => openEdit(p)} style={editBtn}>수정</button>
+                            <button onClick={() => remove(p.id, p.project_number)} disabled={deleting === p.id} style={deleteBtn}>삭제</button>
+                          </div>
+                        )}
                       </td>
                     )}
                   </tr>
@@ -978,7 +1048,7 @@ export default function ProjectsPage() {
                 <div style={{ fontSize: 15, fontWeight: 700, color: '#fff', lineHeight: 1.4 }}>{tooltipView.project.name}</div>
               </div>
               <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                {canEdit && <button onClick={() => { openEdit(tooltipView.project); closeTooltipView() }} style={{ border: 'none', background: '#2563eb', color: '#fff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>편집</button>}
+                {canWrite && !tooltipView.project.archived && <button onClick={() => { openEdit(tooltipView.project); closeTooltipView() }} style={{ border: 'none', background: '#2563eb', color: '#fff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>편집</button>}
                 <button onClick={closeTooltipView} style={{ border: 'none', background: 'rgba(255,255,255,0.15)', color: '#fff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13 }}>✕</button>
               </div>
             </div>
@@ -1026,7 +1096,7 @@ export default function ProjectsPage() {
                   <div style={{ marginTop: 10 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: '#f8f8f7', borderRadius: 6, marginBottom: 4 }}>
                       <span style={{ fontSize: 11, fontWeight: 600, color: '#555' }}>평가 결과</span>
-                      <span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 4, ...STATUS_STYLE[status] }}>{statusLabel(status)}</span>
+                      <span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 4, ...STATUS_STYLE[status] }}>{statusLabel(status, p.archived)}</span>
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr' }}>
                       {cells.map((cell, ci) => (

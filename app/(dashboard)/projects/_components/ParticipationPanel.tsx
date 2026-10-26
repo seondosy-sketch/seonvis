@@ -7,6 +7,8 @@
  *
  * 올해는 1시트 인력 칸에서 계산한 값(ledgerRows.ts), 과거 연도는 저장된 2시트 줄(lib/projects/archive.ts)이
  * 들어온다. 과거 연도의 줄 중 1시트 프로젝트와 연결되지 않은 줄은 흐린 글씨로 구분한다.
+ * 전체 연도 보기에서는 사람별로 모든 연도의 줄을 합쳐(lib/projects/archive.ts mergeParticipationYears)
+ * 줄마다 연도를 붙인다.
  */
 
 import { useState } from 'react'
@@ -18,12 +20,13 @@ type Row = ParticipationRow & { lines?: ParticipationLine[] }
 const WIN_FILL = '#fff8c4'
 
 export default function ParticipationPanel({
-  sheet, loading, isMobile, isArchive,
+  sheet, loading, isMobile, isArchive, allYears = false,
 }: {
   sheet: ParticipationSheet & { directors: Row[]; specialists: Row[] }
   loading: boolean
   isMobile: boolean
   isArchive: boolean
+  allYears?: boolean
 }) {
   const [search, setSearch] = useState('')
   const q = search.trim().toLowerCase()
@@ -34,7 +37,7 @@ export default function ParticipationPanel({
   return (
     <div>
       <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="성명, 프로젝트 검색..."
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder={allYears ? '성명 검색 — 모든 연도의 참여 이력...' : '성명, 프로젝트 검색...'}
           style={{ flex: 1, minWidth: 200, maxWidth: 360, height: 34, padding: '0 12px', border: '1px solid #e8e8e6', borderRadius: 6, fontSize: 13, background: '#fff' }} />
         <span style={{ fontSize: 11, color: '#999', display: 'flex', alignItems: 'center', gap: 6 }}>
           <span style={{ display: 'inline-block', width: 12, height: 12, background: WIN_FILL, border: '1px solid #eadf8a', borderRadius: 2 }} />
@@ -84,12 +87,15 @@ function Block({ title, rows, total }: { title: string; rows: Row[]; total: numb
               <td style={{ padding: '7px 10px', fontWeight: 500, color: '#111', whiteSpace: 'nowrap' }}>{r.name}</td>
               <td style={{ padding: '7px 10px', color: '#555', whiteSpace: 'nowrap' }}>{r.field}</td>
               <td style={{ padding: '7px 10px', lineHeight: 1.6 }}>
-                {(r.lines ?? r.projectNames.map(text => ({ text, linked: true, win: false }))).map((l, j) => (
+                {(r.lines ?? r.projectNames.map((text): ParticipationLine => ({ text, linked: true, win: false }))).map((l, j) => (
                   <div
                     key={j}
                     title={l.linked ? undefined : '대장(1시트)의 프로젝트와 연결되지 않은 엑셀 원문'}
-                    style={{ color: l.linked ? '#333' : '#aaa', textDecoration: l.linked ? 'none' : 'underline dotted', fontWeight: l.win ? 600 : 400 }}
-                  >{l.text}</div>
+                    style={{ color: l.linked ? '#333' : '#aaa', fontWeight: l.win ? 600 : 400 }}
+                  >
+                    {l.year !== undefined && <span style={{ display: 'inline-block', minWidth: 38, marginRight: 6, fontSize: 11, fontWeight: 600, color: '#0f766e' }}>{l.year}</span>}
+                    <span style={{ textDecoration: l.linked ? 'none' : 'underline dotted' }}>{l.text}</span>
+                  </div>
                 ))}
               </td>
               <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 600, color: '#111' }}>{r.count}</td>

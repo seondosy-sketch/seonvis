@@ -13,7 +13,7 @@
  */
 
 import { computeProjectStatus } from '@/lib/projectStatus'
-import type { ParticipationRow, ParticipationSheet } from '@/lib/projects/export/ledgerRows'
+import type { LedgerProject, ParticipationRow, ParticipationSheet } from '@/lib/projects/export/ledgerRows'
 
 /** project_archive 한 행에서 화면·출력이 쓰는 칸 — 이름은 projects와 같다. */
 export interface ArchiveProject {
@@ -63,6 +63,8 @@ export interface ParticipationLine {
   linked: boolean
   /** 연결된 프로젝트가 수주했거나 원문에 '수주'가 적혀 있다. */
   win: boolean
+  /** 전체 연도 보기에서만 — 이 줄이 어느 해 대장 것인지. */
+  year?: number
 }
 
 export interface ArchiveParticipationRow extends ParticipationRow {
@@ -124,4 +126,60 @@ export function buildArchiveParticipationSheet(
  */
 export function liveLedgerYear(archiveYears: number[], fallbackYear: number): number {
   return archiveYears.length ? Math.max(...archiveYears) + 1 : fallbackYear
+}
+
+/**
+ * 올해(projects)의 참여현황 — ledgerRows.ts가 계산한 집계에 줄 단위 정보(연결·수주)를 붙인다.
+ * 올해 줄은 1시트 인력 칸에서 나온 것이라 전부 연결돼 있다.
+ */
+export function liveParticipationSheet(
+  sheet: ParticipationSheet,
+  projects: Pick<LedgerProject, 'name' | 'result_score' | 'evaluation' | 'participants' | 'status_override'>[],
+): ArchiveParticipationSheet {
+  const winNames = new Set(projects.filter(p => computeProjectStatus(p) === '수주').map(p => p.name))
+  const withLines = (rows: ParticipationRow[]): ArchiveParticipationRow[] => rows.map(r => ({
+    ...r,
+    lines: r.projectNames.map(text => ({ text, linked: true, win: winNames.has(text) })),
+  }))
+  return { directors: withLines(sheet.directors), specialists: withLines(sheet.specialists) }
+}
+
+/**
+ * 같은 사람인지 판단하는 키 — 연도마다 표기가 조금씩 다르다(2025년 '이상원(57)', 띄어쓰기 차이).
+ * 괄호 안 구분자와 공백을 지운다. 동명이인은 대장에도 구분이 없어 합쳐진다(괄호 구분이 있으면 그 표기를 보여준다).
+ */
+export function participantKey(name: string): string {
+  return name.replace(/[(（][^)）]*[)）]/g, '').replace(/\s/g, '')
+}
+
+/**
+ * 전체 연도 참여현황 — 연도별 집계를 사람 단위로 합친다.
+ * 책임기술인/분야별은 따로 합친다(엑셀 2시트와 같은 구분 — 한 사람이 해마다 다른 쪽에 있을 수 있다).
+ * 줄은 최근 연도부터, 사람은 누적이 많은 순(같으면 이름순). 표기·분야는 가장 최근 연도 것을 쓴다.
+ */
+export function mergeParticipationYears(
+  entries: { year: number; sheet: ArchiveParticipationSheet }[],
+): ArchiveParticipationSheet {
+  const sorted = [...entries].sort((a, b) => b.year - a.year)
+  const merge = (pick: (s: ArchiveParticipationSheet) => ArchiveParticipationRow[]): ArchiveParticipationRow[] => {
+    const people = new Map<string, ArchiveParticipationRow>()
+    for (const { year, sheet } of sorted) {
+      for (const row of pick(sheet)) {
+        const key = participantKey(row.name)
+        const lines = row.lines.map(l => ({ ...l, year }))
+        const found = people.get(key)
+        if (!found) {
+          people.set(key, { ...row, lines, projectNames: lines.map(l => l.text) })
+        } else {
+          found.lines.push(...lines)
+          found.projectNames.push(...lines.map(l => l.text))
+          found.hasWin = found.hasWin || row.hasWin
+        }
+      }
+    }
+    return [...people.values()]
+      .map(r => ({ ...r, count: r.lines.length }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'ko'))
+  }
+  return { directors: merge(s => s.directors), specialists: merge(s => s.specialists) }
 }
