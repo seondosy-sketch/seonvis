@@ -11,7 +11,7 @@
 import ExcelJS from 'exceljs'
 import { applyPrintSetup, createWorkbook, workbookToBuffer } from '@/lib/export/excel'
 import { computeProjectStatus, WRITTEN_EVALUATION_LABEL } from '@/lib/projectStatus'
-import { buildParticipationSheet, toExcelDate, type LedgerProject, type ParticipationRow } from './ledgerRows'
+import { buildParticipationSheet, toExcelDate, type LedgerProject, type ParticipationRow, type ParticipationSheet } from './ledgerRows'
 
 const FONT: Partial<ExcelJS.Font> = { name: '맑은 고딕', size: 11 }
 const THIN_BORDER: Partial<ExcelJS.Borders> = {
@@ -199,11 +199,11 @@ function writeParticipationBlock(
   })
 }
 
-function buildParticipationWorksheet(workbook: ExcelJS.Workbook, year: number, projects: LedgerProject[]): void {
+function buildParticipationWorksheet(workbook: ExcelJS.Workbook, year: number, participation: ParticipationSheet): void {
   const sheet = workbook.addWorksheet(`${String(year).slice(2)}년 참여기술자`, {
     properties: { defaultColWidth: DEFAULT_COL_WIDTH },
   })
-  const { directors, specialists } = buildParticipationSheet(projects)
+  const { directors, specialists } = participation
 
   sheet.getRow(1).height = 30.75
   sheet.getRow(2).height = 23.25
@@ -217,10 +217,16 @@ function buildParticipationWorksheet(workbook: ExcelJS.Workbook, year: number, p
 /**
  * 두 시트를 담은 워크북 버퍼. `year`는 시트명·제목에 쓴다(2026 → "2026년" / "26년 프로젝트 관리 대장").
  * `projects`는 이미 정렬·필터가 끝난 상태로 받는다 — 연번은 받은 순서대로 1부터 매긴다.
+ * `participation`을 주면 2시트를 계산하지 않고 그 값을 쓴다 — 과거 연도는 1시트 인력 칸이 비어 있어
+ * 저장된 2시트 원본(lib/projects/archive.ts)을 넘긴다.
  */
-export async function buildProjectLedgerWorkbook(year: number, projects: LedgerProject[]): Promise<Buffer> {
+export async function buildProjectLedgerWorkbook(
+  year: number,
+  projects: LedgerProject[],
+  participation: ParticipationSheet = buildParticipationSheet(projects),
+): Promise<Buffer> {
   const workbook = createWorkbook()
   buildLedgerSheet(workbook, year, projects)
-  buildParticipationWorksheet(workbook, year, projects)
+  buildParticipationWorksheet(workbook, year, participation)
   return workbookToBuffer(workbook)
 }
