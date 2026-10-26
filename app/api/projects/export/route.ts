@@ -16,6 +16,7 @@ import { computeProjectStatus } from '@/lib/projectStatus'
 import { kstToday } from '@/lib/kstDate'
 import { buildProjectLedgerWorkbook } from '@/lib/projects/export/projectLedgerWorkbook'
 import type { LedgerProject } from '@/lib/projects/export/ledgerRows'
+import { buildArchiveParticipationSheet, type ArchiveStaffRow } from '@/lib/projects/archive'
 
 const LEDGER_COLUMNS =
   'project_number,type,client,name,fee,tp_score,duration_days,submit_date,interview_date,interview_written,' +
@@ -62,14 +63,35 @@ export async function POST(request: Request) {
 
   try {
     const admin = createSupabaseAdminClient()
-    const { data, error } = await admin
-      .from('projects')
-      .select(LEDGER_COLUMNS)
-      .order('project_number', { ascending: true })
-    if (error) throw new Error(error.message)
 
-    const projects = applyFilters((data ?? []) as unknown as LedgerProject[], filters)
-    const buffer = await buildProjectLedgerWorkbook(year, projects)
+    // 과거 연도 — 보관 표(project_archive)에 그 연도가 있으면 거기서 읽는다. 2시트는 계산하지 않고
+    // 저장된 엑셀 2시트 원본을 쓴다(과거 대장은 1시트에 분야 인력 칸이 없다). 필터는 1시트에만 건다 —
+    // 2시트 원본 줄은 사람 단위라 프로젝트 필터와 1:1로 대응하지 않는다.
+    const { data: archived, error: archiveError } = await admin
+      .from('project_archive')
+      .select(`id,${LEDGER_COLUMNS}`)
+      .eq('ledger_year', year)
+      .order('project_number', { ascending: true })
+    if (archiveError && archiveError.code !== '42P01') throw new Error(archiveError.message) // 42P01 = 보관 표 미생성
+
+    let buffer: Buffer
+    if (archived && archived.length > 0) {
+      const { data: staff, error: staffError } = await admin
+        .from('project_archive_staff')
+        .select('section,person_seq,name,field,line_no,project_text,archive_project_id')
+        .eq('ledger_year', year)
+      if (staffError) throw new Error(staffError.message)
+      const all = archived as unknown as (LedgerProject & { id: string })[]
+      const sheet = buildArchiveParticipationSheet((staff ?? []) as ArchiveStaffRow[], all)
+      buffer = await buildProjectLedgerWorkbook(year, applyFilters(all, filters), sheet)
+    } else {
+      const { data, error } = await admin
+        .from('projects')
+        .select(LEDGER_COLUMNS)
+        .order('project_number', { ascending: true })
+      if (error) throw new Error(error.message)
+      buffer = await buildProjectLedgerWorkbook(year, applyFilters((data ?? []) as unknown as LedgerProject[], filters))
+    }
 
     const filename = `${year}년 참여프로젝트 관리_${kstTodayStamp()}.xlsx`
     return buildDownloadResponse(buffer, filename, 'xlsx')

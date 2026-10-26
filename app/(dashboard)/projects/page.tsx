@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 import { useIsMobile } from '@/lib/useIsMobile'
 import AddressMapPreview from '@/app/components/AddressMapPreview'
@@ -9,6 +9,10 @@ import { useMenuPermission } from '@/app/components/PermissionsProvider'
 import { syncProjectCalendar } from '@/lib/googleCalendar/trigger'
 import { WRITTEN_EVALUATION_LABEL } from '@/lib/projectStatus'
 import { buildStaffSummary, type ProjectParticipantRef } from '@/lib/projects/staffSummary'
+import { buildParticipationSheet, type LedgerProject } from '@/lib/projects/export/ledgerRows'
+import { buildArchiveParticipationSheet, liveLedgerYear, type ArchiveProject, type ArchiveStaffRow } from '@/lib/projects/archive'
+import { kstToday } from '@/lib/kstDate'
+import ParticipationPanel from './_components/ParticipationPanel'
 
 type ProjectStatus = '진행중' | '수주' | '탈락' | '취소'
 type ProjectType = '면접' | 'SOQ' | '종심제' | 'TP' | 'PQ' | '기타' | ''
@@ -42,6 +46,8 @@ interface Project {
   staff_safety: string
   note: string
   created_at: string
+  /** 과거 연도만 — 평가일이 날짜가 아닐 때의 엑셀 원문('추후'·'미정' 등). */
+  interview_raw?: string
 }
 
 interface TooltipData {
@@ -251,9 +257,32 @@ function stickyCol(
 }
 
 /** 발표일 칸에 보일 값 — 서면평가 건은 날짜 대신 "서면평가"로 적는다. */
-function interviewText(p: { interview_written?: boolean | null; interview_date: string | null }): string {
+function interviewText(p: { interview_written?: boolean | null; interview_date: string | null; interview_raw?: string }): string {
   if (p.interview_written) return WRITTEN_EVALUATION_LABEL
-  return p.interview_date ?? '-'
+  return p.interview_date ?? (p.interview_raw || '-')
+}
+
+const PAGE_TABS = ['목록', '참여현황'] as const
+type PageTab = (typeof PAGE_TABS)[number]
+
+/**
+ * 과거 연도 대장에서 결과가 비어 있는 건 — 올해처럼 '진행중'이라 부르면 몇 년째 진행 중인 것처럼 보인다.
+ * 판정(computeStatus)은 그대로 두고 글자만 바꾼다.
+ */
+const ARCHIVE_PENDING_LABEL = '결과없음'
+
+/** project_archive 행 → 화면의 Project 모양. 과거 대장에 없는 칸(공고일·개찰일·낙찰액 등)은 비운다. */
+function archiveToProject(a: ArchiveProject): Project {
+  return {
+    id: a.id, project_number: a.project_number, type: a.type as ProjectType, client: a.client, name: a.name,
+    fee: a.fee, tp_score: a.tp_score, duration_days: a.duration_days,
+    announce_date: null, submit_date: a.submit_date, interview_date: a.interview_date,
+    interview_written: a.interview_written, bid_date: null,
+    result_score: a.result_score, status: '진행중', evaluation: a.evaluation, award_fee: null,
+    participants: a.participants, participation_ratio: '', director: a.director, status_override: a.status_override,
+    staff_arch: a.staff_arch, staff_civil: a.staff_civil, staff_mech: a.staff_mech, staff_safety: a.staff_safety,
+    note: a.note, created_at: a.created_at, interview_raw: a.interview_raw,
+  }
 }
 
 export default function ProjectsPage() {
@@ -262,6 +291,18 @@ export default function ProjectsPage() {
   // 읽기 권한 사용자는 조회만 — 추가/수정/삭제/메모 편집 UI를 숨긴다 (관리자 화면에서 설정)
   const canWrite = useMenuPermission('projects') === 'write'
   const [projects, setProjects] = useState<Project[]>([])
+  // 연도 — null = 올해(projects 표). 과거 연도는 project_archive를 읽고 읽기 전용으로 보여준다.
+  const [archiveYears, setArchiveYears] = useState<number[]>([])
+  const [year, setYear] = useState<number | null>(null)
+  const [tab, setTab] = useState<PageTab>('목록')
+  const [archiveStaff, setArchiveStaff] = useState<ArchiveStaffRow[]>([])
+  const [listLoading, setListLoading] = useState(true)
+  const liveYear = liveLedgerYear(archiveYears, kstToday().getFullYear())
+  const isArchive = year !== null && year !== liveYear
+  const shownYear = isArchive ? year : liveYear
+  /** 과거 연도는 엑셀 원본을 옮긴 기록이라 화면에서 고치지 않는다(수정은 이관 스크립트로). */
+  const canEdit = canWrite && !isArchive
+  const statusLabel = (s: ProjectStatus) => (isArchive && s === '진행중' ? ARCHIVE_PENDING_LABEL : s)
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState<ProjectStatus | '전체'>('전체')
   const [filterType, setFilterType] = useState<ProjectType | '전체'>('전체')
@@ -307,7 +348,7 @@ export default function ProjectsPage() {
 
   const openNote = (e: React.MouseEvent, projectNumber: string, field: string) => {
     e.stopPropagation()
-    if (!canWrite) return
+    if (!canEdit) return
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
     const draft = notes[projectNumber]?.[field] ?? ''
     setNotePopup({ projectNumber, field, draft, rect })
@@ -336,12 +377,54 @@ export default function ProjectsPage() {
     }
   }, [])
 
+  // 연도를 빠르게 넘기면 앞선 요청이 늦게 도착해 화면을 덮어쓴다(제목은 2021년, 내용은 2022년).
+  // 요청마다 번호를 매기고, 가장 마지막 요청의 응답만 반영한다.
+  const loadSeq = useRef(0)
   const load = useCallback(async () => {
-    const { data } = await supabase.from('projects').select('*').order('project_number', { ascending: true })
-    if (data) setProjects(data as Project[])
+    const seq = ++loadSeq.current
+    setListLoading(true)
+    if (isArchive) {
+      const [{ data }, { data: staff }] = await Promise.all([
+        supabase.from('project_archive').select('*').eq('ledger_year', shownYear).order('project_number', { ascending: true }),
+        supabase.from('project_archive_staff')
+          .select('section, person_seq, name, field, line_no, project_text, archive_project_id')
+          .eq('ledger_year', shownYear),
+      ])
+      if (seq !== loadSeq.current) return
+      setProjects(((data ?? []) as ArchiveProject[]).map(archiveToProject))
+      setArchiveStaff((staff ?? []) as ArchiveStaffRow[])
+    } else {
+      const { data } = await supabase.from('projects').select('*').order('project_number', { ascending: true })
+      if (seq !== loadSeq.current) return
+      if (data) setProjects(data as Project[])
+      setArchiveStaff([])
+    }
+    setListLoading(false)
+  }, [isArchive, shownYear])
+
+  const loadArchiveYears = useCallback(async () => {
+    // 연도 목록만 필요하다 — 보관 표가 아직 없거나(마이그레이션 전) 비어 있으면 올해만 보인다.
+    const { data } = await supabase.from('project_archive').select('ledger_year')
+    setArchiveYears([...new Set(((data ?? []) as { ledger_year: number }[]).map(r => r.ledger_year))].sort((a, b) => a - b))
   }, [])
 
-  useEffect(() => { load(); loadTooltips(); loadNotes() }, [load, loadTooltips, loadNotes])
+  // 연도를 바꾸면 load가 새로 만들어져 다시 돈다(툴팁·메모·연도 목록은 작은 표라 함께 다시 읽어도 된다)
+  useEffect(() => { load(); loadTooltips(); loadNotes(); loadArchiveYears() }, [load, loadTooltips, loadNotes, loadArchiveYears])
+
+  const yearOptions = [...archiveYears.filter(y => y !== liveYear), liveYear]
+  const goYear = (next: number | undefined) => {
+    if (next === undefined || next === shownYear) return
+    setYear(next === liveYear ? null : next)
+    // 연도마다 프로젝트가 다르므로 검색·필터는 비운다
+    setSearch('')
+    setFilterStatus('전체')
+    setFilterType('전체')
+  }
+  const yearIndex = yearOptions.indexOf(shownYear)
+
+  const participationSheet = isArchive
+    ? buildArchiveParticipationSheet(archiveStaff, projects)
+    : buildParticipationSheet(projects as unknown as LedgerProject[])
 
   const filtered = projects.filter(p => {
     const q = search.toLowerCase()
@@ -559,7 +642,7 @@ export default function ProjectsPage() {
       const res = await fetch('/api/projects/export', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filters: { search, status: filterStatus, type: filterType } }),
+        body: JSON.stringify({ year: shownYear, filters: { search, status: filterStatus, type: filterType } }),
       })
       if (!res.ok) {
         const detail = await res.json().catch(() => ({}))
@@ -587,7 +670,7 @@ export default function ProjectsPage() {
   // 빈 열이 남지 않게 아예 뺀다.
   const visibleKeys = visibleColumnKeys(viewMode)
   const shownColumns = COLUMNS.filter(c => visibleKeys.has(c.key))
-  const headers = canWrite ? [...shownColumns, { key: 'manage', label: '관리' }] : shownColumns
+  const headers = canEdit ? [...shownColumns, { key: 'manage', label: '관리' }] : shownColumns
   /** 본문 칸을 그릴지 — 머리글과 같은 키를 본다. */
   const show = (key: string) => visibleKeys.has(key)
 
@@ -623,12 +706,28 @@ export default function ProjectsPage() {
     <div style={{ minHeight: '100vh', background: '#f8f8f7' }}>
       <header style={{ background: '#fff', borderBottom: '1px solid #e8e8e6' }}>
         <div style={{ maxWidth: 1400, margin: '0 auto', padding: isMobile ? '0 12px' : '0 24px', height: 56, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontSize: 14, color: '#555' }}>프로젝트 List</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 12, minWidth: 0 }}>
+            {!isMobile && <span style={{ fontSize: 14, color: '#555' }}>프로젝트 List</span>}
+            {/* 연도 전환 — 왼쪽이 과거. 올해 = projects, 과거 = project_archive(읽기 전용) */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 2, border: '1px solid #e8e8e6', borderRadius: 6, background: '#fff' }}>
+              <button aria-label="이전 연도" onClick={() => goYear(yearOptions[yearIndex - 1])} disabled={yearIndex <= 0} style={{ ...yearArrowBtn, opacity: yearIndex <= 0 ? 0.3 : 1 }}>‹</button>
+              <select
+                aria-label="연도"
+                value={shownYear}
+                onChange={e => goYear(Number(e.target.value))}
+                style={{ height: 30, border: 'none', background: 'transparent', fontSize: 13, fontWeight: 600, color: '#111', cursor: 'pointer' }}
+              >
+                {yearOptions.map(y => <option key={y} value={y}>{y}년</option>)}
+              </select>
+              <button aria-label="다음 연도" onClick={() => goYear(yearOptions[yearIndex + 1])} disabled={yearIndex >= yearOptions.length - 1} style={{ ...yearArrowBtn, opacity: yearIndex >= yearOptions.length - 1 ? 0.3 : 1 }}>›</button>
+            </div>
+            {isArchive && <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: '#f4f4f2', color: '#888', whiteSpace: 'nowrap' }}>보관 · 읽기 전용</span>}
+          </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={exportExcel} disabled={exporting} style={{ ...outlineBtn, opacity: exporting ? 0.6 : 1 }}>
-              {exporting ? '만드는 중...' : '엑셀 내보내기'}
+              {exporting ? '만드는 중...' : isMobile ? '엑셀' : '엑셀 내보내기'}
             </button>
-            {canWrite && <button onClick={openAdd} style={primaryBtn}>+ 추가</button>}
+            {canEdit && <button onClick={openAdd} style={primaryBtn}>+ 추가</button>}
           </div>
         </div>
       </header>
@@ -644,10 +743,29 @@ export default function ProjectsPage() {
             {deleteError}
           </div>
         )}
+        <div role="tablist" style={{ display: 'flex', gap: 4, marginBottom: 16, borderBottom: '1px solid #e8e8e6' }}>
+          {PAGE_TABS.map(t => (
+            <button
+              key={t}
+              role="tab"
+              aria-selected={tab === t}
+              onClick={() => setTab(t)}
+              style={{
+                height: 36, padding: '0 14px', border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 13,
+                color: tab === t ? '#111' : '#888', fontWeight: tab === t ? 600 : 400,
+                borderBottom: tab === t ? '2px solid #111' : '2px solid transparent', marginBottom: -1,
+              }}
+            >{t === '목록' ? `${shownYear}년 프로젝트` : '기술인 참여현황'}</button>
+          ))}
+        </div>
+
+        {tab === '참여현황' ? (
+          <ParticipationPanel sheet={participationSheet} loading={listLoading} isMobile={isMobile} isArchive={isArchive} />
+        ) : (<>
         <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(3, 1fr)', gap: 10, marginBottom: 16 }}>
           {([['전체', projects], ['진행중', projects.filter(p => computeStatus(p.result_score, p.evaluation, p.participants, p.status_override) === '진행중')], ['수주', projects.filter(p => computeStatus(p.result_score, p.evaluation, p.participants, p.status_override) === '수주')]] as [string, Project[]][]).map(([label, list]) => (
             <div key={label} style={{ background: '#fff', border: '1px solid #e8e8e6', borderRadius: 8, padding: '12px 16px' }}>
-              <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>{label === '전체' ? '전체 프로젝트' : label}</div>
+              <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>{label === '전체' ? '전체 프로젝트' : statusLabel(label as ProjectStatus)}</div>
               <div style={{ fontSize: 20, fontWeight: 600, color: '#111' }}>{list.length}건</div>
             </div>
           ))}
@@ -658,7 +776,7 @@ export default function ProjectsPage() {
             style={{ flex: 1, minWidth: 200, height: 34, padding: '0 12px', border: '1px solid #e8e8e6', borderRadius: 6, fontSize: 13, background: '#fff' }} />
           <div style={{ display: 'flex', gap: 4 }}>
             {(['전체', '진행중', '수주', '탈락', '취소'] as const).map(s => (
-              <button key={s} onClick={() => setFilterStatus(s)} style={{ height: 34, padding: '0 12px', borderRadius: 6, fontSize: 12, cursor: 'pointer', border: filterStatus === s ? 'none' : '1px solid #e8e8e6', background: filterStatus === s ? '#111' : '#fff', color: filterStatus === s ? '#fff' : '#555' }}>{s}</button>
+              <button key={s} onClick={() => setFilterStatus(s)} style={{ height: 34, padding: '0 12px', borderRadius: 6, fontSize: 12, cursor: 'pointer', border: filterStatus === s ? 'none' : '1px solid #e8e8e6', background: filterStatus === s ? '#111' : '#fff', color: filterStatus === s ? '#fff' : '#555' }}>{s === '전체' ? s : statusLabel(s)}</button>
             ))}
           </div>
           <div style={{ display: 'flex', gap: 4 }}>
@@ -710,7 +828,7 @@ export default function ProjectsPage() {
                       <span style={{ fontSize: 11, color: '#999' }}>{p.project_number}</span>
                       <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 3, background: 'rgba(0,0,0,0.06)', color: '#555' }}>{p.type}</span>
                     </div>
-                    <span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 4, flexShrink: 0, ...STATUS_STYLE[status] }}>{status}</span>
+                    <span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 4, flexShrink: 0, ...STATUS_STYLE[status] }}>{statusLabel(status)}</span>
                   </div>
                   <div
                     onClick={() => { const d = tooltipAll[p.project_number]; if (d) void openTooltipView(p, d) }}
@@ -730,7 +848,7 @@ export default function ProjectsPage() {
                       ))}
                     </div>
                   )}
-                  {canWrite && (
+                  {canEdit && (
                     <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
                       <button onClick={() => openEdit(p)} style={{ ...editBtn, height: 30, flex: 1 }}>수정</button>
                       <button onClick={() => remove(p.id, p.project_number)} disabled={deleting === p.id} style={{ ...deleteBtn, height: 30, flex: 1 }}>삭제</button>
@@ -810,8 +928,8 @@ export default function ProjectsPage() {
                     {show('civil') && <td style={tdnw}>{p.staff_civil}</td>}
                     {show('mech') && <td style={tdnw}>{p.staff_mech}</td>}
                     {show('safety') && <td style={tdnw}>{p.staff_safety}</td>}
-                    {show('status') && <td style={tdnw}><span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 4, ...STATUS_STYLE[status] }}>{status}</span></td>}
-                    {canWrite && (
+                    {show('status') && <td style={tdnw}><span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 4, ...STATUS_STYLE[status] }}>{statusLabel(status)}</span></td>}
+                    {canEdit && (
                       <td style={td}>
                         <div style={{ display: 'flex', gap: 4 }}>
                           <button onClick={() => openEdit(p)} style={editBtn}>수정</button>
@@ -847,6 +965,7 @@ export default function ProjectsPage() {
           </div>
         </div>
         )}
+        </>)}
       </div>
 
       {/* 툴팁 보기 모달 */}
@@ -859,7 +978,7 @@ export default function ProjectsPage() {
                 <div style={{ fontSize: 15, fontWeight: 700, color: '#fff', lineHeight: 1.4 }}>{tooltipView.project.name}</div>
               </div>
               <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                {canWrite && <button onClick={() => { openEdit(tooltipView.project); closeTooltipView() }} style={{ border: 'none', background: '#2563eb', color: '#fff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>편집</button>}
+                {canEdit && <button onClick={() => { openEdit(tooltipView.project); closeTooltipView() }} style={{ border: 'none', background: '#2563eb', color: '#fff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>편집</button>}
                 <button onClick={closeTooltipView} style={{ border: 'none', background: 'rgba(255,255,255,0.15)', color: '#fff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13 }}>✕</button>
               </div>
             </div>
@@ -907,7 +1026,7 @@ export default function ProjectsPage() {
                   <div style={{ marginTop: 10 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: '#f8f8f7', borderRadius: 6, marginBottom: 4 }}>
                       <span style={{ fontSize: 11, fontWeight: 600, color: '#555' }}>평가 결과</span>
-                      <span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 4, ...STATUS_STYLE[status] }}>{status}</span>
+                      <span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 4, ...STATUS_STYLE[status] }}>{statusLabel(status)}</span>
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr' }}>
                       {cells.map((cell, ci) => (
@@ -1329,5 +1448,6 @@ const tdnw: React.CSSProperties = { padding: '8px 12px', verticalAlign: 'middle'
 const inp: React.CSSProperties = { width: '100%', height: 34, padding: '0 10px', border: '1px solid #e8e8e6', borderRadius: 6, fontSize: 13, background: '#fff', boxSizing: 'border-box' }
 const primaryBtn: React.CSSProperties = { height: 34, padding: '0 14px', borderRadius: 6, border: 'none', background: '#111', color: '#fff', fontSize: 13, cursor: 'pointer' }
 const outlineBtn: React.CSSProperties = { height: 34, padding: '0 14px', borderRadius: 6, border: '1px solid #ddd', background: '#fff', color: '#333', fontSize: 13, cursor: 'pointer' }
+const yearArrowBtn: React.CSSProperties = { width: 26, height: 30, border: 'none', background: 'transparent', color: '#555', fontSize: 16, cursor: 'pointer' }
 const editBtn: React.CSSProperties = { height: 24, padding: '0 8px', borderRadius: 4, border: '1px solid #e8e8e6', background: '#fff', color: '#333', fontSize: 11, cursor: 'pointer' }
 const deleteBtn: React.CSSProperties = { height: 24, padding: '0 8px', borderRadius: 4, border: 'none', background: '#fee2e2', color: '#b91c1c', fontSize: 11, cursor: 'pointer' }
