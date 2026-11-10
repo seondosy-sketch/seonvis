@@ -132,7 +132,9 @@ function computeStatus(result_score: string, evaluation: string, participants = 
   if (override) return override as ProjectStatus
   if (participants.includes('드랍') || participants.includes('드롭')) return '취소'
   if (evaluation === '선') return '수주'
-  if (!result_score?.trim() || !evaluation?.trim()) return '진행중'
+  // 낙찰사가 정해졌는데 "선"(자사)이 아니면 결과(등급)가 아직 비어 있어도 탈락이다.
+  // (lib/projectStatus.ts computeProjectStatus와 같은 규칙)
+  if (!evaluation?.trim()) return '진행중'
   return '탈락'
 }
 

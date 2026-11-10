@@ -60,7 +60,8 @@ export function computeProjectStatus(p: ProjectStatusInput): string {
   if (p.status_override) return p.status_override
   if (p.participants?.includes('드랍') || p.participants?.includes('드롭')) return '취소'
   if (p.evaluation === '선') return '수주'
-  if (isEmpty(p.result_score) || isEmpty(p.evaluation)) return '진행중'
+  // 낙찰사가 정해졌는데 "선"(자사)이 아니면 결과(등급)가 아직 비어 있어도 탈락이다.
+  if (isEmpty(p.evaluation)) return '진행중'
   return '탈락'
 }
 
