@@ -41,6 +41,7 @@ import ReviewListTable from './_components/ReviewListTable'
 import ReviewFormModal, { type ReviewImportInfo } from './_components/ReviewFormModal'
 import ReviewImportModal, { type ImportedFile } from './_components/ReviewImportModal'
 import ReviewDetailDrawer from './_components/ReviewDetailDrawer'
+import { byProjectNumber } from '@/lib/projectOrder'
 import QuestionSearchPanel from './_components/QuestionSearchPanel'
 
 /**
@@ -296,7 +297,7 @@ export default function InterviewsPage() {
     setEvaluationTypes((typeRes.data ?? []) as EvaluationType[])
     setRoles((roleRes.data ?? []) as EvaluationRole[])
     setCategories((catRes.data ?? []) as EvaluationQuestionCategory[])
-    if (projRes.data) setProjects(projRes.data as InterviewProjectRef[])
+    if (projRes.data) setProjects([...(projRes.data as InterviewProjectRef[])].sort(byProjectNumber(p => p.project_number, p => p.name)))
     if (engRes.data) setEngineers(engRes.data as InterviewEngineerRef[])
 
     // 마스터 3종 중 하나라도 못 읽었으면 그대로 알린다(에러를 삼키지 않는다).

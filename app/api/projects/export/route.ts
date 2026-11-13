@@ -15,6 +15,7 @@ import { buildDownloadResponse } from '@/lib/export/response'
 import { computeProjectStatus } from '@/lib/projectStatus'
 import { kstToday } from '@/lib/kstDate'
 import { buildProjectLedgerWorkbook } from '@/lib/projects/export/projectLedgerWorkbook'
+import { byProjectNumber } from '@/lib/projectOrder'
 import type { LedgerProject } from '@/lib/projects/export/ledgerRows'
 import { buildArchiveParticipationSheet, type ArchiveStaffRow } from '@/lib/projects/archive'
 
@@ -83,14 +84,14 @@ export async function POST(request: Request) {
       if (staffError) throw new Error(staffError.message)
       const all = archived as unknown as (LedgerProject & { id: string })[]
       const sheet = buildArchiveParticipationSheet((staff ?? []) as ArchiveStaffRow[], all)
-      buffer = await buildProjectLedgerWorkbook(year, applyFilters(all, filters), sheet)
+      buffer = await buildProjectLedgerWorkbook(year, applyFilters(all, filters).sort(byProjectNumber(p => p.project_number, p => p.name)), sheet)
     } else {
       const { data, error } = await admin
         .from('projects')
         .select(LEDGER_COLUMNS)
         .order('project_number', { ascending: true })
       if (error) throw new Error(error.message)
-      buffer = await buildProjectLedgerWorkbook(year, applyFilters((data ?? []) as unknown as LedgerProject[], filters))
+      buffer = await buildProjectLedgerWorkbook(year, applyFilters((data ?? []) as unknown as LedgerProject[], filters).sort(byProjectNumber(p => p.project_number, p => p.name)))
     }
 
     const filename = `${year}년 참여프로젝트 관리_${kstTodayStamp()}.xlsx`

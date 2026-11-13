@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   type ProjectRef,
   categorizeProject,
+  computeProjectStatus,
   isWrittenEvaluation,
 } from './projectStatus'
 
@@ -17,6 +18,24 @@ function ref(over: Partial<ProjectRef> = {}): ProjectRef {
     ...over,
   }
 }
+
+describe('computeProjectStatus', () => {
+  it('낙찰사가 비어 있으면 진행중', () => {
+    expect(computeProjectStatus(ref())).toBe('진행중')
+    expect(computeProjectStatus(ref({ result_score: '우' }))).toBe('진행중')
+  })
+  it('낙찰사가 타사면 결과(등급)가 비어 있어도 탈락', () => {
+    expect(computeProjectStatus(ref({ evaluation: '가람' }))).toBe('탈락')
+    expect(computeProjectStatus(ref({ evaluation: '가람', result_score: '우' }))).toBe('탈락')
+  })
+  it('낙찰사가 "선"이면 수주', () => {
+    expect(computeProjectStatus(ref({ evaluation: '선' }))).toBe('수주')
+  })
+  it('드랍과 수동 지정이 낙찰사보다 우선한다', () => {
+    expect(computeProjectStatus(ref({ evaluation: '가람', participants: '3개사(드랍)' }))).toBe('취소')
+    expect(computeProjectStatus(ref({ evaluation: '가람', status_override: '취소' }))).toBe('취소')
+  })
+})
 
 describe('isWrittenEvaluation', () => {
   it('interview_written이 true면 서면평가', () => {

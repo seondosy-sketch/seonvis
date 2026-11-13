@@ -8,6 +8,7 @@ import { openDirectionsFromOffice } from '@/lib/kakaoMap'
 import { useMenuPermission } from '@/app/components/PermissionsProvider'
 import { syncProjectCalendar } from '@/lib/googleCalendar/trigger'
 import { WRITTEN_EVALUATION_LABEL } from '@/lib/projectStatus'
+import { byProjectNumber, compareProjectNumber } from '@/lib/projectOrder'
 import { buildStaffSummary, type ProjectParticipantRef } from '@/lib/projects/staffSummary'
 import { buildParticipationSheet, type LedgerProject } from '@/lib/projects/export/ledgerRows'
 import {
@@ -160,7 +161,9 @@ function computeStatus(result_score: string, evaluation: string, participants = 
   if (override) return override as ProjectStatus
   if (participants.includes('드랍') || participants.includes('드롭')) return '취소'
   if (evaluation === '선') return '수주'
-  if (!result_score?.trim() || !evaluation?.trim()) return '진행중'
+  // 낙찰사가 정해졌는데 "선"(자사)이 아니면 결과(등급)가 아직 비어 있어도 탈락이다.
+  // (lib/projectStatus.ts computeProjectStatus와 같은 규칙)
+  if (!evaluation?.trim()) return '진행중'
   return '탈락'
 }
 
@@ -425,7 +428,7 @@ export default function ProjectsPage() {
         ...archived.map(archiveToProject),
       ]
       // 최근 연도부터, 같은 해 안에서는 관리번호 순
-      rows.sort((a, b) => (b.ledger_year ?? 0) - (a.ledger_year ?? 0) || a.project_number.localeCompare(b.project_number))
+      rows.sort((a, b) => (b.ledger_year ?? 0) - (a.ledger_year ?? 0) || compareProjectNumber(a.project_number, b.project_number))
       setProjects(rows)
       setArchiveStaff(staff)
     } else if (isArchive) {
@@ -436,12 +439,12 @@ export default function ProjectsPage() {
           .eq('ledger_year', shownYear),
       ])
       if (seq !== loadSeq.current) return
-      setProjects(((data ?? []) as ArchiveProject[]).map(archiveToProject))
+      setProjects(((data ?? []) as ArchiveProject[]).map(archiveToProject).sort(byProjectNumber(p => p.project_number, p => p.name)))
       setArchiveStaff(((staff ?? []) as ArchiveStaffRow[]).map(r => ({ ...r, ledger_year: shownYear })))
     } else {
       const { data } = await supabase.from('projects').select('*').order('project_number', { ascending: true })
       if (seq !== loadSeq.current) return
-      if (data) setProjects(data as Project[])
+      if (data) setProjects([...(data as Project[])].sort(byProjectNumber(p => p.project_number, p => p.name)))
       setArchiveStaff([])
     }
     setListLoading(false)
