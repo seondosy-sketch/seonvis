@@ -8,6 +8,7 @@ import { openDirectionsFromOffice } from '@/lib/kakaoMap'
 import { useMenuPermission } from '@/app/components/PermissionsProvider'
 import { syncProjectCalendar } from '@/lib/googleCalendar/trigger'
 import { WRITTEN_EVALUATION_LABEL } from '@/lib/projectStatus'
+import { byProjectNumber } from '@/lib/projectOrder'
 import { buildStaffSummary, type ProjectParticipantRef } from '@/lib/projects/staffSummary'
 
 type ProjectStatus = '진행중' | '수주' | '탈락' | '취소'
@@ -340,7 +341,7 @@ export default function ProjectsPage() {
 
   const load = useCallback(async () => {
     const { data } = await supabase.from('projects').select('*').order('project_number', { ascending: true })
-    if (data) setProjects(data as Project[])
+    if (data) setProjects([...(data as Project[])].sort(byProjectNumber(p => p.project_number, p => p.name)))
   }, [])
 
   useEffect(() => { load(); loadTooltips(); loadNotes() }, [load, loadTooltips, loadNotes])

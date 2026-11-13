@@ -15,6 +15,7 @@ import { buildDownloadResponse } from '@/lib/export/response'
 import { computeProjectStatus } from '@/lib/projectStatus'
 import { kstToday } from '@/lib/kstDate'
 import { buildProjectLedgerWorkbook } from '@/lib/projects/export/projectLedgerWorkbook'
+import { byProjectNumber } from '@/lib/projectOrder'
 import type { LedgerProject } from '@/lib/projects/export/ledgerRows'
 
 const LEDGER_COLUMNS =
@@ -68,7 +69,7 @@ export async function POST(request: Request) {
       .order('project_number', { ascending: true })
     if (error) throw new Error(error.message)
 
-    const projects = applyFilters((data ?? []) as unknown as LedgerProject[], filters)
+    const projects = applyFilters((data ?? []) as unknown as LedgerProject[], filters).sort(byProjectNumber(p => p.project_number, p => p.name))
     const buffer = await buildProjectLedgerWorkbook(year, projects)
 
     const filename = `${year}년 참여프로젝트 관리_${kstTodayStamp()}.xlsx`

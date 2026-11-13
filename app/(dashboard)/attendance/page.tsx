@@ -17,6 +17,7 @@ import { applyAutoSyncCandidates, selectAutoSyncCandidates } from '@/lib/attenda
 import type { EngineerContact, EngineerSpecialty } from '@/lib/engineers/types'
 import type { AttendanceProjectRow } from './types'
 import AttendanceGrid from './_components/AttendanceGrid'
+import { byProjectNumber } from '@/lib/projectOrder'
 import ParticipantManagerModal from './_components/ParticipantManagerModal'
 
 const MONTH_NAMES = ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월']
@@ -87,7 +88,7 @@ export default function AttendancePage() {
           setProjects([])
         } else {
           setProjectsError(null)
-          setProjects((data ?? []) as AttendanceProjectRow[])
+          setProjects([...((data ?? []) as AttendanceProjectRow[])].sort(byProjectNumber(p => p.project_number, p => p.name)))
         }
         setProjectsLoading(false)
       })
