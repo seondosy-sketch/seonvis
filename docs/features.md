@@ -35,8 +35,8 @@
 status_override → 그 값
 participants에 "드랍"/"드롭" → "취소"
 evaluation === "선" → "수주"
-result_score 또는 evaluation 비어있으면 → "진행중"
-나머지 → "탈락"
+evaluation(낙찰사) 비어있으면 → "진행중"  (결과 등급은 판정에 쓰지 않음, 2026-11-10 변경)
+나머지(타사 낙찰) → "탈락"
 ```
 
 ---

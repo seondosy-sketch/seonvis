@@ -86,8 +86,8 @@
 status_override 있으면 → 그 값 사용
 participants에 "드랍"/"드롭" 포함 → "취소"
 evaluation === "선" → "수주"
-result_score 또는 evaluation 비어있으면 → "진행중"
-나머지 → "탈락"
+evaluation(낙찰사) 비어있으면 → "진행중"  (결과 등급은 판정에 쓰지 않음, 2026-11-10 변경)
+나머지(타사 낙찰) → "탈락"
 ```
 `lib/projectStatus.ts`의 `computeProjectStatus`/`categorizeProject`는 이름이 비슷하지만 **다른 용도**(주간보고 `performing_projects` 행 분류)의 별도 함수다 — 아래 참고.
 

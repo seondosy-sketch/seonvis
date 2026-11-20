@@ -18,6 +18,7 @@ import { filterParticipantRows, filterVisibleProjects, projectIdsWithActiveParti
 import { currentClosureStatus, latestVersion } from '@/lib/attendance/closureLifecycle'
 import { buildMonthlyExportBlocks } from '@/lib/attendance/export/monthlyRows'
 import { buildMonthlyAttendanceWorkbook } from '@/lib/attendance/export/monthlyWorkbook'
+import { byProjectNumber } from '@/lib/projectOrder'
 import type {
   AttendanceMonthClosure,
   AttendanceRecord,
@@ -97,7 +98,7 @@ export async function POST(request: Request) {
         admin.from('attendance_month_closures').select('*').eq('period_year', year).eq('period_month', periodMonth),
       ])
 
-    const projects = (projectsRes.data ?? []) as ProjectRow[]
+    const projects = [...((projectsRes.data ?? []) as ProjectRow[])].sort(byProjectNumber(p => p.project_number, p => p.name))
     const participants = (participantsRes.data ?? []) as ProjectParticipant[]
     const records = (recordsRes.data ?? []) as AttendanceRecord[]
     const changeHistory = (historyRes.data ?? []) as ProjectChangeHistory[]

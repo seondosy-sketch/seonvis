@@ -15,6 +15,7 @@ import LodgingListTable from './_components/LodgingListTable'
 import LodgingSummaryPanel from './_components/LodgingSummaryPanel'
 import LodgingFormModal from './_components/LodgingFormModal'
 import HotelMasterModal from './_components/HotelMasterModal'
+import { byProjectNumber } from '@/lib/projectOrder'
 import CurrentlyStayingCard from './_components/CurrentlyStayingCard'
 
 const MONTH_NAMES = ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월']
@@ -78,7 +79,7 @@ export default function LodgingPage() {
       .select('id,name,project_number,announce_date,interview_date,interview_written,submit_date,bid_date,status')
       .order('project_number', { ascending: true })
       .then(({ data }) => {
-        setProjects((data ?? []) as LodgingProjectRef[])
+        setProjects([...((data ?? []) as LodgingProjectRef[])].sort(byProjectNumber(p => p.project_number, p => p.name)))
       })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
